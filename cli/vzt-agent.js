@@ -75,13 +75,17 @@ function readJson(file, fallback) {
 }
 
 /** Non-destructive merge of our hooks into settings.json. */
-function wireSettings(dotClaude) {
+function wireSettings(dotClaude, { portable = false } = {}) {
   const settingsPath = path.join(dotClaude, 'settings.json');
   const settings = readJson(settingsPath, {});
   settings.hooks = settings.hooks || {};
   for (const h of HOOKS) {
     const bucket = (settings.hooks[h.event] = settings.hooks[h.event] || []);
-    const cmd = `node "${path.join(dotClaude, 'hooks', 'vzt-router', h.basename)}"`;
+    // Project installs use $CLAUDE_PROJECT_DIR so the committed settings.json
+    // works on any clone; global installs use the absolute ~/.claude path.
+    const cmd = portable
+      ? `node "$CLAUDE_PROJECT_DIR/.claude/hooks/vzt-router/${h.basename}"`
+      : `node "${path.join(dotClaude, 'hooks', 'vzt-router', h.basename)}"`;
     const already = bucket.some((m) =>
       (m.hooks || []).some((x) => typeof x.command === 'string' && x.command.includes(h.basename))
     );
@@ -125,7 +129,10 @@ function install(args) {
   const agents = copyDirContents(AGENT_FILES_DIR, path.join(dotClaude, 'agents'), { ext: '.md' });
   const skills = copyDirContents(SKILLS_DIR, path.join(dotClaude, 'skills'));
   const hooks = copyDirContents(HOOKS_DIR, path.join(dotClaude, 'hooks', 'vzt-router'));
-  const settingsPath = wireSettings(dotClaude);
+  // Project installs (--target / cwd) get portable $CLAUDE_PROJECT_DIR paths so
+  // a committed settings.json works for anyone who clones the repo; a global
+  // install (~/.claude) uses the absolute path.
+  const settingsPath = wireSettings(dotClaude, { portable: !args.global });
 
   console.log(`  agents:   ${agents.length} installed (fable×2, opus×2, sonnet×1, haiku×2)`);
   console.log(`  skills:   ${skills.length} files installed (/vzt-route /vzt-plan /vzt-fix /vzt-build /vzt-quick)`);
