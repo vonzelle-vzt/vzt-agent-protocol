@@ -50,8 +50,16 @@ node cli/vzt-agent.js install --global
 node cli/vzt-agent.js doctor --global
 ```
 
-Restart Claude Code. Set your chair to Sonnet 5 (`/model sonnet`) — the
-protocol escalates automatically when a task earns it.
+Restart Claude Code. Pick the chair that matches how you work — the protocol
+adapts the routing doctrine to it either way:
+
+- **Opus 4.8 chair** (`/model opus`) — build inline, delegate routine execution
+  *down* to Sonnet and mechanical work to Haiku, escalate *up* to Fable only for
+  hard architecture/debugging. Best when you want strong first-line reasoning on
+  tap and Sonnet as your workhorse below it.
+- **Sonnet 5 chair** (`/model sonnet`) — most work stays inline on the
+  Sonnet-only bucket; escalate *up* to Opus/Fable only when a task earns it.
+  Best for maximum quota efficiency.
 
 ## How it works — four real routing layers
 

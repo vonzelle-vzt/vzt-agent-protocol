@@ -132,8 +132,9 @@ function install(args) {
   console.log(`  hooks:    ${hooks.length} installed (SessionStart chair-profile + UserPromptSubmit classifier)`);
   console.log(`  settings: wired ${settingsPath}`);
   console.log('\nDone. Restart Claude Code to activate.');
-  console.log('Recommended chair: Sonnet 5 (/model sonnet) — the protocol escalates to');
-  console.log('Fable/Opus automatically, only when a task earns it.');
+  console.log('Chair is up to you — the protocol adapts either way:');
+  console.log('  /model opus   → build inline, delegate routine work DOWN to Sonnet/Haiku, Fable for the hard stuff');
+  console.log('  /model sonnet → stay on the Sonnet bucket, escalate UP only when a task earns it');
 }
 
 function uninstall(args) {
