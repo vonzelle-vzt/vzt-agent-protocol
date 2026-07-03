@@ -34,6 +34,12 @@ with zero API cost for the routing itself:
 execution to Sonnet and mechanical work to Haiku means your premium quota is
 spent only where premium reasoning actually changes the outcome.
 
+**Recommended setup — Opus first line:** sit on Opus 4.8 (`/model opus`) so
+strong reasoning is always on tap, and let the protocol delegate routine builds
+*down* to Sonnet and mechanical work *down* to Haiku, reaching *up* to Fable only
+on the ~15% of turns that are genuinely frontier-hard. See
+[Chair Profiles](docs/CHAIR-PROFILES.md) for every chair's behavior.
+
 ## Quick start
 
 ```bash
@@ -108,14 +114,19 @@ The session model returns on your next prompt.
 ## The standard pipeline
 
 ```
-you: "build feature X"
- └─ classifier → PLAN → vzt-planner (Fable 5, effort max)
+you: "build feature X"  (a non-trivial, multi-part feature)
+ └─ PLAN → vzt-planner (Fable 5, effort max)   ·   or /vzt-plan for an in-context turn
      └─ plan with step-routing table + load-bearing seam flagged
          ├─ steps tagged sonnet → vzt-builder        (parallel)
          ├─ steps tagged haiku  → vzt-mechanic/scout (parallel)
          ├─ steps tagged opus   → vzt-heavy-builder
          └─ seam review         → vzt-reviewer (Opus, only the risky seam)
 ```
+
+On an **Opus chair**, a routine one-shot request skips planning entirely — the
+classifier delegates the build straight down to `vzt-builder` (Sonnet) and any
+mechanical part to `vzt-mechanic` (Haiku), while you stay on Opus as coordinator.
+Full walkthroughs per chair: [Chair Profiles](docs/CHAIR-PROFILES.md).
 
 ## Guardrails
 
@@ -173,6 +184,7 @@ is a manually flipped sentinel file. Comparison:
 
 ## Docs
 
+- [Chair profiles — Opus-first, Sonnet-first, Fable, Haiku](docs/CHAIR-PROFILES.md)
 - [Routing matrix + decision procedure](docs/ROUTING-MATRIX.md)
 - [CLAUDE.md snippet for manual installs](templates/CLAUDE-snippet.md)
 
