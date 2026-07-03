@@ -1,0 +1,37 @@
+{
+  "$schema": "https://json.schemastore.org/package.json",
+  "name": "vzt-agent-protocol",
+  "version": "1.0.0",
+  "description": "VZT Agent Protocol - Automatic model routing between Claude Fable 5, Opus 4.8, Sonnet 5, and Haiku 4.5 for Claude Code. Right model, right task, zero manual switching.",
+  "keywords": [
+    "claude-code",
+    "model-routing",
+    "agents",
+    "fable",
+    "opus",
+    "sonnet",
+    "haiku",
+    "orchestration",
+    "vzt"
+  ],
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/vonzelle-vzt/vzt-agent-protocol.git"
+  },
+  "license": "MIT",
+  "author": "VZT Tech Consulting",
+  "type": "module",
+  "main": "cli/vzt-agent.js",
+  "bin": {
+    "vzt-agent": "cli/vzt-agent.js"
+  },
+  "scripts": {
+    "install:project": "node cli/vzt-agent.js install",
+    "install:global": "node cli/vzt-agent.js install --global",
+    "test": "node --test 'test/*.test.mjs'",
+    "doctor": "node cli/vzt-agent.js doctor"
+  },
+  "engines": {
+    "node": ">=18"
+  }
+}

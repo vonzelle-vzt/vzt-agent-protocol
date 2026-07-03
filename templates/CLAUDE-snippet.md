@@ -1,0 +1,24 @@
+# VZT Agent Protocol — CLAUDE.md snippet
+
+Paste this into a project's `CLAUDE.md` if you want the routing doctrine
+active without the hooks (or as reinforcement alongside them).
+
+---
+
+## Model routing (VZT Agent Protocol)
+
+Route every piece of work to the cheapest tier that can do it well:
+
+- **Recon/mechanical** (search, summaries, renames, formatting, bumps) →
+  delegate to `vzt-scout`/`vzt-mechanic` (Haiku). Never do this inline on a
+  premium model.
+- **Standard implementation** (features, fixes, tests, endpoints) →
+  `vzt-builder` (Sonnet) or inline if the chair is Sonnet.
+- **Heavy implementation** (tight coupling, algorithms, migrations, perf) →
+  `vzt-heavy-builder` (Opus). Load-bearing review → `vzt-reviewer` (Opus).
+- **Planning/architecture/impossible bugs** → `vzt-planner`/`vzt-oracle`
+  (Fable), or `/vzt-plan` / `/vzt-fix` when full conversation context matters.
+
+Rules: two failures at a tier → escalate exactly one tier and say so. Fable
+turns ≤15% of the session. Never execute a routine plan on Fable/Opus — plans
+end with a step-routing table and hand off to `vzt-builder`.
