@@ -47,6 +47,9 @@ can do it well. This skill is the canonical decision procedure; the
 - **Turn skill** (`/vzt-plan`, `/vzt-fix`, `/vzt-build`, `/vzt-quick`): work
   that needs the full conversation context. The skill's `model:` frontmatter
   switches THIS turn to the target tier; the session model returns next turn.
+- **Exception — `/vzt-fable-mode`**: no `model:` frontmatter. It switches
+  *discipline*, not model — runs the five gates on whichever tier is already
+  active instead of forcing a tier switch.
 
 ## Standard pipeline for non-trivial features
 

@@ -50,3 +50,9 @@ burns the quota this protocol exists to protect.
   agents or an explicit escalation, not routine routing.
 - Fable-low ≈ Opus-high in quality-per-cost.
 - `xhigh`/`max` on routine work causes overthinking, not quality.
+
+**`/vzt-fable-mode` is a separate dial from tier/effort routing above**: it
+carries no `model:` pin and runs on whichever model the router already picked,
+upgrading that tier's *working discipline* (the five gates) rather than
+switching model or effort. Fleet executors carry it automatically as Rule 1;
+on the chair it's invoked manually via `/vzt-fable-mode <task>`.

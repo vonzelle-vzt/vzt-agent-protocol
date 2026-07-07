@@ -109,7 +109,8 @@ start fresh), these switch the *current turn's* model in place:
 - `/vzt-build <step>` — execute this turn on **Sonnet 5**
 - `/vzt-quick <task>` — mechanical turn on **Haiku 4.5**
 - `/vzt-fable-mode` — run this turn under the five frontier working gates
-  (scope, evidence, attack, verify, report), regardless of model tier
+  (scope, evidence, attack, verify, report) (no model pin — runs on the
+  active model)
 
 The session model returns on your next prompt.
 
@@ -189,6 +190,25 @@ Sonnet/Haiku execute and report back) is what actually delivers the ~8–25×
 lower cost on routine steps at equal quality. The Cost/Intelligence/Taste
 columns in the [routing matrix](docs/ROUTING-MATRIX.md) quantify that
 trade-off tier by tier, so the routing decision is a number, not a vibe.
+
+### How fable-mode activates
+
+- **Automatic in fleet executors** — `vzt-builder`, `vzt-heavy-builder`, and
+  `vzt-mechanic` carry the gate summary as Rule 1, so anything the router
+  delegates to them runs the gates with no user action. `vzt-planner`,
+  `vzt-oracle`, and `vzt-reviewer` don't reference it — they're the source of
+  the doctrine, not a consumer of it.
+- **Manual on the chair** — `/vzt-fable-mode <task>` loads the full skill into
+  the current turn, the "elevate Opus/Sonnet" move for hard inline work. The
+  model may also auto-invoke it when a task obviously calls for the discipline,
+  but the slash command is the guaranteed path. Skip it for routine one-liners
+  — the gates would just add overhead.
+- **No model pin, by design** — unlike `/vzt-plan`/`/vzt-fix` (force Fable),
+  `/vzt-build` (Sonnet), and `/vzt-quick` (Haiku), fable-mode runs on whatever
+  model is already active. It changes *how* the current model works, not
+  *which* model works: the router picks the tier and effort, fable-mode
+  upgrades the discipline of whichever tier got picked. The two dials are
+  independent.
 
 ## Requirements
 
