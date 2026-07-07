@@ -26,6 +26,7 @@ test('install → doctor → uninstall round-trip in a temp target', () => {
     const dotClaude = path.join(target, '.claude');
     assert.ok(fs.existsSync(path.join(dotClaude, 'agents', 'vzt-planner.md')));
     assert.ok(fs.existsSync(path.join(dotClaude, 'skills', 'vzt-route', 'SKILL.md')));
+    assert.ok(fs.existsSync(path.join(dotClaude, 'skills', 'vzt-fable-mode', 'SKILL.md')));
     assert.ok(fs.existsSync(path.join(dotClaude, 'hooks', 'vzt-router', 'vzt-route-classifier.mjs')));
 
     const settings = JSON.parse(fs.readFileSync(path.join(dotClaude, 'settings.json'), 'utf8'));
@@ -88,6 +89,8 @@ test('classifier hook emits a directive for a plan prompt', () => {
   const parsed = JSON.parse(out);
   assert.equal(parsed.hookSpecificOutput.hookEventName, 'UserPromptSubmit');
   assert.match(parsed.hookSpecificOutput.additionalContext, /Fable 5/);
+  const ctx = parsed.hookSpecificOutput.additionalContext;
+  assert.match(ctx, /@ effort (low|medium|high)/);
 });
 
 test('classifier hook stays silent on slash commands and tiny prompts', () => {

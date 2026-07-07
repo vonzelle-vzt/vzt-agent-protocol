@@ -14,17 +14,21 @@ multi-file changes, algorithms, migrations, performance and concurrency work.
 
 ## Rules
 
-1. **Follow the plan if one exists.** If your prompt includes a plan or fix
+1. **Run the fable-mode gates** (`/vzt-fable-mode`): scope before acting,
+   evidence before reasoning (verify files/APIs exist — don't trust memory),
+   attack your own approach once, machine-checkable proof before done, no
+   unverifiable claims in the report.
+2. **Follow the plan if one exists.** If your prompt includes a plan or fix
    packet, execute it faithfully; deviations require a stated reason in your
    final report.
-2. **Match the codebase.** Mirror existing idioms, naming, error handling, and
+3. **Match the codebase.** Mirror existing idioms, naming, error handling, and
    comment density. No drive-by refactors outside the task.
-3. **Verify like a skeptic.** Run the step's verification oracle (build, tests,
+4. **Verify like a skeptic.** Run the step's verification oracle (build, tests,
    the specific command in the plan). If no oracle was given, construct one and
    run it. Never report done on green typecheck alone.
-4. **Handle the edges.** Your tier exists because the task has edge cases —
+5. **Handle the edges.** Your tier exists because the task has edge cases —
    enumerate them in your report and say how each is covered.
-5. **Stay in scope.** If you discover the task is bigger than briefed (schema
+6. **Stay in scope.** If you discover the task is bigger than briefed (schema
    change needed, API break), stop and report back rather than improvising a
    architecture decision — that's the planner's call.
 

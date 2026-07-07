@@ -11,12 +11,13 @@ can do it well. This skill is the canonical decision procedure; the
 
 ## The routing matrix
 
-| Tier | Model | Owns | Fleet agents |
-|------|-------|------|--------------|
-| 4 | **Fable 5** | Architecture, system design, planning, impossible bugs, root-cause, security analysis, multi-repo strategy | `vzt-planner`, `vzt-oracle` |
-| 3 | **Opus 4.8** | Large refactors, migrations, dense algorithms, performance/concurrency surgery, load-bearing review | `vzt-heavy-builder`, `vzt-reviewer` |
-| 2 | **Sonnet 5** | Standard implementation, features, bug fixes, tests, endpoints, components — the default | `vzt-builder` |
-| 1 | **Haiku 4.5** | Search/recon, summaries, renames, typos, formatting, version bumps, commit messages, file moves | `vzt-scout`, `vzt-mechanic` |
+<!-- sync: TIERS in hooks/vzt-route-classifier.mjs — test/classifier.test.mjs asserts the Cost column matches -->
+| Tier | Model | Owns | Fleet agents | Cost | Intelligence | Taste |
+|------|-------|------|--------------|------|--------------|-------|
+| 4 | **Fable 5** | Architecture, system design, planning, impossible bugs, root-cause, security analysis, multi-repo strategy | `vzt-planner`, `vzt-oracle` | 25× | 10 | 10 |
+| 3 | **Opus 4.8** | Large refactors, migrations, dense algorithms, performance/concurrency surgery, load-bearing review | `vzt-heavy-builder`, `vzt-reviewer` | 15× | 9 | 9 |
+| 2 | **Sonnet 5** | Standard implementation, features, bug fixes, tests, endpoints, components — the default | `vzt-builder` | 3× | 8 | 8 |
+| 1 | **Haiku 4.5** | Search/recon, summaries, renames, typos, formatting, version bumps, commit messages, file moves | `vzt-scout`, `vzt-mechanic` | 1× | 5 | 4 |
 
 ## Decision procedure
 
@@ -27,6 +28,17 @@ can do it well. This skill is the canonical decision procedure; the
    → Tier 3.
 4. **Everything else** → Tier 2. When unsure between two tiers, take the lower
    one — the escalation ladder exists precisely so under-routing is cheap.
+
+## Effort routing
+
+- Default effort per tier: Fable `high`, Opus `high`, Sonnet `medium`, Haiku
+  `low`.
+- Opus downgrades to `medium` on low-confidence classifications — don't spend
+  high effort confirming a guess.
+- The classifier never suggests `max` — that's reserved for pinned Fable
+  agents or an explicit escalation, not routine routing.
+- Fable-low ≈ Opus-high in quality-per-cost.
+- `xhigh`/`max` on routine work causes overthinking, not quality.
 
 ## Delegation vs. turn-switch
 
@@ -44,6 +56,15 @@ can do it well. This skill is the canonical decision procedure; the
    independent steps
 3. `vzt-reviewer` (Opus) reviews ONLY the load-bearing seam the plan flagged
 4. `vzt-scout`/`vzt-mechanic` (Haiku) run verification oracles and cleanup
+
+## Orchestrator doctrine
+
+The frontier tier designs and verifies; cheap tiers execute. When Fable or
+Opus orchestrates a multi-step or dynamic workflow, worker steps default to
+Sonnet (Haiku if mechanical) — measured results on routine steps are equal at
+~8–25× lower cost (see the Cost column above). Workers report back after each
+step; the orchestrator uses the reports to design the next step. Never promote
+a worker step to the orchestrator's own tier without a stated reason.
 
 ## Hard rules
 

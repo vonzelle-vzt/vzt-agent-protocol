@@ -54,11 +54,13 @@ const PROFILES = {
   fable: `Chair = Fable 5. Fable tokens are the scarcest resource in this session.
 - Do planning, architecture, and root-cause reasoning INLINE (that is what this chair is for).
 - Delegate ALL execution down: standard builds → "vzt-builder" (Sonnet 5), mechanical edits/recon → "vzt-mechanic"/"vzt-scout" (Haiku 4.5), heavy parallel implementation → "vzt-heavy-builder" (Opus 4.8).
-- Never do file-by-file mechanical work inline. Batch delegations; pass complete context so subagents finish in one shot.`,
+- Never do file-by-file mechanical work inline. Batch delegations; pass complete context so subagents finish in one shot.
+- When orchestrating multi-step work: you design and verify; workers (vzt-builder/vzt-mechanic) execute and report back — equal results at a fraction of the cost. Never promote a worker step to your own tier without a stated reason.`,
   opus: `Chair = Opus 4.8. Wall-clock and Opus quota are the constraints.
 - Handle complex implementation inline. Push mechanical edits and recon down to Haiku agents ("vzt-mechanic", "vzt-scout").
 - Route routine execution to "vzt-builder" (Sonnet 5 — it draws on a separate weekly usage bucket).
-- Escalate to Fable only for genuinely hard architecture or debugging: use the "vzt-planner"/"vzt-oracle" subagents or the /vzt-plan, /vzt-fix turn skills.`,
+- Escalate to Fable only for genuinely hard architecture or debugging: use the "vzt-planner"/"vzt-oracle" subagents or the /vzt-plan, /vzt-fix turn skills.
+- When orchestrating multi-step work: you design and verify; workers (vzt-builder/vzt-mechanic) execute and report back — equal results at a fraction of the cost. Never promote a worker step to your own tier without a stated reason.`,
   sonnet: `Chair = Sonnet 5. Good default: most work stays inline and burns the Sonnet-only bucket.
 - Handle standard execution inline. Push recon/mechanical work down to Haiku agents ("vzt-scout", "vzt-mechanic").
 - Escalate UP only when a task earns it: planning/architecture → "vzt-planner" (Fable), impossible bugs → "vzt-oracle" (Fable), heavy multi-file implementation → "vzt-heavy-builder" (Opus), load-bearing review → "vzt-reviewer" (Opus).

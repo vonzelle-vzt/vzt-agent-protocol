@@ -22,12 +22,23 @@ import os from 'node:os';
 
 const STATE_DIR = process.env.VZT_ROUTER_STATE_DIR || path.join(os.homedir(), '.claude', 'vzt-router');
 
-const TIERS = {
-  fable: { label: 'Fable 5 (frontier reasoning)', agents: { plan: 'vzt-planner', debug: 'vzt-oracle' } },
-  opus: { label: 'Opus 4.8 (heavy implementation/review)', agents: { build: 'vzt-heavy-builder', review: 'vzt-reviewer' } },
-  sonnet: { label: 'Sonnet 5 (standard execution)', agents: { build: 'vzt-builder' } },
-  haiku: { label: 'Haiku 4.5 (mechanical/recon)', agents: { scout: 'vzt-scout', mech: 'vzt-mechanic' } },
+// cost = relative multiplier (not dollars); intelligence/taste on a 10-scale.
+// Mirrored in docs/ROUTING-MATRIX.md and skills/vzt-route/SKILL.md — a sync
+// test enforces the cost values match across all three.
+export const TIERS = {
+  fable: { label: 'Fable 5 (frontier reasoning)', agents: { plan: 'vzt-planner', debug: 'vzt-oracle' }, effort: 'high', cost: 25, intelligence: 10, taste: 10 },
+  opus: { label: 'Opus 4.8 (heavy implementation/review)', agents: { build: 'vzt-heavy-builder', review: 'vzt-reviewer' }, effort: 'high', cost: 15, intelligence: 9, taste: 9 },
+  sonnet: { label: 'Sonnet 5 (standard execution)', agents: { build: 'vzt-builder' }, effort: 'medium', cost: 3, intelligence: 8, taste: 8 },
+  haiku: { label: 'Haiku 4.5 (mechanical/recon)', agents: { scout: 'vzt-scout', mech: 'vzt-mechanic' }, effort: 'low', cost: 1, intelligence: 5, taste: 4 },
 };
+
+// Suggested per-prompt effort: mirrors the tier default, except a low-confidence
+// Opus classification downgrades to medium (don't burn high effort on a guess).
+// Never returns 'max' by construction — that's reserved for pinned fable agents.
+export function suggestEffort(tier, confidence) {
+  if (tier === 'opus' && confidence === 'low') return 'medium';
+  return TIERS[tier].effort;
+}
 
 // Signal groups. Each hit adds its weight to that tier's score.
 const SIGNALS = [
@@ -84,11 +95,12 @@ export function classify(prompt) {
       bestScore = scores[t];
     }
   }
-  if (bestScore === 0) return { tier: 'sonnet', kind: 'build', confidence: 'low', matched, scores, words };
+  if (bestScore === 0)
+    return { tier: 'sonnet', kind: 'build', confidence: 'low', effort: suggestEffort('sonnet', 'low'), matched, scores, words };
 
   const runnerUp = Math.max(...order.filter((t) => t !== best).map((t) => scores[t]));
   const confidence = bestScore >= 4 && bestScore - runnerUp >= 2 ? 'high' : bestScore >= 2 ? 'medium' : 'low';
-  return { tier: best, kind: kinds[best], confidence, matched, scores, words };
+  return { tier: best, kind: kinds[best], confidence, effort: suggestEffort(best, confidence), matched, scores, words };
 }
 
 function chairModel(sessionId) {
@@ -109,7 +121,7 @@ export function directive(result, chair) {
   const agent = t.agents[result.kind] || Object.values(t.agents)[0];
   const lines = [
     '[VZT-ROUTE] Automatic model routing (advisory — override only with a stated reason):',
-    `  task: ${result.kind.toUpperCase()} → target tier: ${t.label}`,
+    `  task: ${result.kind.toUpperCase()} → target tier: ${t.label} @ effort ${result.effort}`,
     `  chair: ${chair}  confidence: ${result.confidence}  signals: ${result.matched.slice(0, 6).join(', ') || 'none (default tier)'}`,
   ];
 
@@ -130,14 +142,16 @@ export function directive(result, chair) {
     }
   } else {
     // Down-tier work from an expensive chair: push it down to save quota.
+    const costCite = chair !== 'unknown' ? ` (~${Math.round(TIERS[chair].cost / t.cost)}× cost saving)` : '';
     lines.push(
-      `  action: this task is below the chair tier. Delegate to the "${agent}" subagent (Agent tool) to conserve ${chair === 'unknown' ? 'premium' : chair} quota. Only handle inline if delegation overhead exceeds the task itself.`
+      `  action: this task is below the chair tier. Delegate to the "${agent}" subagent (Agent tool) to conserve ${chair === 'unknown' ? 'premium' : chair} quota${costCite}. Only handle inline if delegation overhead exceeds the task itself.`
     );
   }
 
   lines.push(
     '  escalation ladder: if the chosen tier fails twice on the same problem, escalate exactly one tier (haiku→sonnet→opus→fable) and say so.',
-    '  budget rules: mechanical/recon work never rises above Haiku; Sonnet burns its own separate weekly bucket — prefer it for all routine execution; keep Fable turns ≤15% of the session.'
+    '  budget rules: mechanical/recon work never rises above Haiku; Sonnet burns its own separate weekly bucket — prefer it for all routine execution; keep Fable turns ≤15% of the session.',
+    '  effort note: use the suggested effort — Fable-low ≈ Opus-high; xhigh/max on routine work causes overthinking, not quality.'
   );
   return lines.join('\n');
 }
@@ -175,7 +189,7 @@ if (import.meta.url === `file://${process.argv[1]}`) {
   }
 
   const result = override
-    ? { tier: override, kind: 'build', confidence: 'high', matched: ['user-override'], scores: {}, words: prompt.split(/\s+/).length }
+    ? { tier: override, kind: 'build', confidence: 'high', effort: TIERS[override].effort, matched: ['user-override'], scores: {}, words: prompt.split(/\s+/).length }
     : classify(prompt);
   const chair = chairModel(payload.session_id);
 
@@ -186,6 +200,7 @@ if (import.meta.url === `file://${process.argv[1]}`) {
     tier: result.tier,
     kind: result.kind,
     confidence: result.confidence,
+    effort: result.effort,
     override: Boolean(override),
     words: result.words,
     signals: result.matched,

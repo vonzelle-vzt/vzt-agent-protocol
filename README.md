@@ -5,7 +5,7 @@
 Part of the [VZT Tech Consulting Protocol](https://github.com/vonzelle-vzt/VZT-Tech-Consulting-Protocol) ecosystem.
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
-[![Version](https://img.shields.io/badge/Version-1.0.0-purple.svg)](#)
+[![Version](https://img.shields.io/badge/Version-1.1.0-purple.svg)](#)
 [![Tiers](https://img.shields.io/badge/Tiers-Fable%205%20%7C%20Opus%204.8%20%7C%20Sonnet%205%20%7C%20Haiku%204.5-green.svg)](docs/ROUTING-MATRIX.md)
 
 ---
@@ -108,6 +108,8 @@ start fresh), these switch the *current turn's* model in place:
 - `/vzt-fix <bug>` — root-cause this turn on **Fable 5**
 - `/vzt-build <step>` — execute this turn on **Sonnet 5**
 - `/vzt-quick <task>` — mechanical turn on **Haiku 4.5**
+- `/vzt-fable-mode` — run this turn under the five frontier working gates
+  (scope, evidence, attack, verify, report), regardless of model tier
 
 The session model returns on your next prompt.
 
@@ -169,11 +171,24 @@ is a manually flipped sentinel file. Comparison:
 | Model switching | ❌ manual sentinel file; user launches the right model | ✅ 4 enforced layers: agent `model:` frontmatter, skill turn overrides, per-prompt classifier, chair profiles |
 | Haiku tier | ❌ absent | ✅ two agents + turn skill |
 | Per-step routing | ❌ whole-queue only | ✅ step-routing table in every plan |
-| Effort routing | ❌ | ✅ `effort:` pinned per tier |
+| Effort routing | ❌ | ✅ `effort:` pinned per tier, plus a per-prompt suggested effort in every [VZT-ROUTE] directive |
 | Escalation | ❌ | ✅ one-tier ladder, both directions |
 | Chair awareness | ❌ | ✅ doctrine inverts with session model |
 | Decision telemetry | ❌ | ✅ JSONL log + `stats` with budget target |
 | Enforcement | prose only | hooks + frontmatter Claude Code enforces |
+
+## The process is the moat
+
+Model choice alone isn't the whole story — the working discipline riding on
+top of it is. `/vzt-fable-mode` extracts the frontier tier's five gates (scope
+before acting, evidence before reasoning, attack your own approach, verify
+before declaring done, report only what you verified) into a portable process
+any tier can run — a cheaper model running these gates beats a frontier model
+running none. The orchestrator doctrine (frontier designs and verifies,
+Sonnet/Haiku execute and report back) is what actually delivers the ~8–25×
+lower cost on routine steps at equal quality. The Cost/Intelligence/Taste
+columns in the [routing matrix](docs/ROUTING-MATRIX.md) quantify that
+trade-off tier by tier, so the routing decision is a number, not a vibe.
 
 ## Requirements
 
@@ -187,6 +202,25 @@ is a manually flipped sentinel file. Comparison:
 - [Chair profiles — Opus-first, Sonnet-first, Fable, Haiku](docs/CHAIR-PROFILES.md)
 - [Routing matrix + decision procedure](docs/ROUTING-MATRIX.md)
 - [CLAUDE.md snippet for manual installs](templates/CLAUDE-snippet.md)
+
+## Release notes
+
+### 1.1.0 — 2026-07-07
+
+- Added the `vzt-fable-mode` skill: the frontier tier's five working gates
+  (scope, evidence, attack, verify, report) extracted into a portable process
+  any tier can run — cited as a new rule 1 in `vzt-builder`, `vzt-heavy-builder`,
+  and `vzt-mechanic`.
+- Effort is now a routing dimension: the classifier computes a suggested
+  effort (`suggestEffort()`) per prompt and surfaces it in every `[VZT-ROUTE]`
+  directive (`@ effort low|medium|high`), alongside an effort note explaining
+  when not to reach for `xhigh`/`max`.
+- Added Cost/Intelligence/Taste columns to `TIERS` in the classifier hook, with
+  matching columns in `docs/ROUTING-MATRIX.md` and `skills/vzt-route/SKILL.md`
+  — a sync test now enforces the cost values match across all three.
+- Added orchestrator doctrine (frontier designs and verifies; Sonnet/Haiku
+  execute and report back) to `vzt-planner`, `skills/vzt-route/SKILL.md`, the
+  `SessionStart` hook's Fable/Opus profiles, and the CLAUDE.md snippet.
 
 ## License
 

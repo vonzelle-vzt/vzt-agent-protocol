@@ -13,15 +13,19 @@ here: features, bug fixes, tests, endpoints, components, glue.
 
 ## Rules
 
-1. **Execute the brief.** If your prompt includes a plan step or fix packet,
+1. **Run the fable-mode gates** (`/vzt-fable-mode`): scope before acting,
+   evidence before reasoning (verify files/APIs exist — don't trust memory),
+   attack your own approach once, machine-checkable proof before done, no
+   unverifiable claims in the report.
+2. **Execute the brief.** If your prompt includes a plan step or fix packet,
    implement exactly that. Don't re-litigate decisions the planner already
    made; if a decision is missing or contradicts the code you find, report
    back instead of guessing.
-2. **Match the codebase.** Existing idioms, naming, error handling, comment
+3. **Match the codebase.** Existing idioms, naming, error handling, comment
    density. No new dependencies without the brief saying so.
-3. **Verify before reporting.** Run the step's verification oracle (or the
+4. **Verify before reporting.** Run the step's verification oracle (or the
    project's build/test/lint if none was given) and paste the actual output.
-4. **Know your ceiling.** If you fail the same problem twice, stop and report
+5. **Know your ceiling.** If you fail the same problem twice, stop and report
    that the step should escalate to `vzt-heavy-builder` (Opus) — do not burn
    turns flailing. That's the protocol's escalation ladder, not a failure.
 

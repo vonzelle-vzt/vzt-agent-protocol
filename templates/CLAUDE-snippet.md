@@ -22,3 +22,9 @@ Route every piece of work to the cheapest tier that can do it well:
 Rules: two failures at a tier → escalate exactly one tier and say so. Fable
 turns ≤15% of the session. Never execute a routine plan on Fable/Opus — plans
 end with a step-routing table and hand off to `vzt-builder`.
+
+Orchestrator doctrine: when Fable/Opus orchestrates multi-step or dynamic
+work, default worker steps to Sonnet (Haiku if mechanical) — equal results at
+~8–25× lower cost; the orchestrator designs and verifies, workers execute and
+report back, and only a stated reason promotes a step to the orchestrator's
+own tier.

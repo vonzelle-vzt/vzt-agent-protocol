@@ -6,12 +6,13 @@ burns the quota this protocol exists to protect.
 
 ## Tiers
 
-| Tier | Model | Alias | Owns | Fleet agents | Turn skill |
-|------|-------|-------|------|--------------|------------|
-| 4 | Claude Fable 5 | `fable` | Architecture, system design, planning, migration strategy, impossible bugs, root-cause analysis, security analysis, multi-repo strategy | `vzt-planner`, `vzt-oracle` | `/vzt-plan`, `/vzt-fix` |
-| 3 | Claude Opus 4.8 | `opus` | Large refactors, migrations, dense algorithms, performance/concurrency surgery, load-bearing review | `vzt-heavy-builder`, `vzt-reviewer` | — |
-| 2 | Claude Sonnet 5 | `sonnet` | Standard implementation: features, bug fixes, tests, endpoints, components, integration — **the default tier** | `vzt-builder` | `/vzt-build` |
-| 1 | Claude Haiku 4.5 | `haiku` | Search/recon, summaries, renames, typo fixes, formatting, lint, version bumps, commit messages, file moves | `vzt-scout`, `vzt-mechanic` | `/vzt-quick` |
+<!-- sync: TIERS in hooks/vzt-route-classifier.mjs — test/classifier.test.mjs asserts the Cost column matches -->
+| Tier | Model | Alias | Owns | Fleet agents | Turn skill | Cost | Intelligence | Taste |
+|------|-------|-------|------|--------------|------------|------|--------------|-------|
+| 4 | Claude Fable 5 | `fable` | Architecture, system design, planning, migration strategy, impossible bugs, root-cause analysis, security analysis, multi-repo strategy | `vzt-planner`, `vzt-oracle` | `/vzt-plan`, `/vzt-fix` | 25× | 10 | 10 |
+| 3 | Claude Opus 4.8 | `opus` | Large refactors, migrations, dense algorithms, performance/concurrency surgery, load-bearing review | `vzt-heavy-builder`, `vzt-reviewer` | — | 15× | 9 | 9 |
+| 2 | Claude Sonnet 5 | `sonnet` | Standard implementation: features, bug fixes, tests, endpoints, components, integration — **the default tier** | `vzt-builder` | `/vzt-build` | 3× | 8 | 8 |
+| 1 | Claude Haiku 4.5 | `haiku` | Search/recon, summaries, renames, typo fixes, formatting, lint, version bumps, commit messages, file moves | `vzt-scout`, `vzt-mechanic` | `/vzt-quick` | 1× | 5 | 4 |
 
 ## Decision procedure
 
@@ -38,6 +39,14 @@ burns the quota this protocol exists to protect.
   Sonnet bucket and preserves the all-models bucket that Fable and Opus burn.
 - Per-turn cost is tiered (Opus is several × Sonnet, Sonnet several × Haiku),
   so pushing recon and mechanical work to Haiku is nearly free.
-- Effort is routed alongside model: fleet agents pin `effort:` per tier
-  (max on Fable planning, low on Haiku mechanics) — the effort dial saves as
-  much as the model choice on the top tiers.
+
+## Effort routing
+
+- Default effort per tier: Fable `high`, Opus `high`, Sonnet `medium`, Haiku
+  `low`.
+- Opus downgrades to `medium` on low-confidence classifications — don't spend
+  high effort confirming a guess.
+- The classifier never suggests `max` — that's reserved for pinned Fable
+  agents or an explicit escalation, not routine routing.
+- Fable-low ≈ Opus-high in quality-per-cost.
+- `xhigh`/`max` on routine work causes overthinking, not quality.
