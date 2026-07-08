@@ -43,7 +43,12 @@ can do it well. This skill is the canonical decision procedure; the
 ## Delegation vs. turn-switch
 
 - **Subagent (Agent tool)**: work that is self-contained once briefed. Pass
-  complete context; the agent's model comes from its frontmatter.
+  complete context; the agent's model comes from its frontmatter. Structure the
+  delegation as a worker brief (templates/worker-brief.md): FILES_IN_SCOPE as a
+  collision boundary, a one-shot operation spec, and MACHINE_CHECK + EXPECT
+  chosen before dispatch. On report-back, verify artifacts on disk — reporting
+  ≠ persistence — and re-run the MACHINE_CHECK yourself on load-bearing steps.
+  For parallel waves, FILES_IN_SCOPE sets must be pairwise disjoint.
 - **Turn skill** (`/vzt-plan`, `/vzt-fix`, `/vzt-build`, `/vzt-quick`): work
   that needs the full conversation context. The skill's `model:` frontmatter
   switches THIS turn to the target tier; the session model returns next turn.

@@ -5,7 +5,7 @@
 Part of the [VZT Tech Consulting Protocol](https://github.com/vonzelle-vzt/VZT-Tech-Consulting-Protocol) ecosystem.
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
-[![Version](https://img.shields.io/badge/Version-1.1.0-purple.svg)](#)
+[![Version](https://img.shields.io/badge/Version-1.2.0-purple.svg)](#)
 [![Tiers](https://img.shields.io/badge/Tiers-Fable%205%20%7C%20Opus%204.8%20%7C%20Sonnet%205%20%7C%20Haiku%204.5-green.svg)](docs/ROUTING-MATRIX.md)
 
 ---
@@ -177,6 +177,7 @@ is a manually flipped sentinel file. Comparison:
 | Chair awareness | ❌ | ✅ doctrine inverts with session model |
 | Decision telemetry | ❌ | ✅ JSONL log + `stats` with budget target |
 | Enforcement | prose only | hooks + frontmatter Claude Code enforces |
+| Worker brief contract | ❌ (sol-prep sibling repo: prose-only lane briefs) | ✅ canonical template + agent-enforced collision-boundary halt + reporting≠persistence verification |
 
 ## The process is the moat
 
@@ -224,6 +225,26 @@ trade-off tier by tier, so the routing decision is a number, not a vibe.
 - [CLAUDE.md snippet for manual installs](templates/CLAUDE-snippet.md)
 
 ## Release notes
+
+### 1.2.0 — 2026-07-08
+
+- Added worker-brief delegation doctrine: `templates/worker-brief.md` is the
+  canonical template (TASK/CONTEXT/FILES_IN_SCOPE/OPERATION/ACCEPTANCE/
+  MACHINE_CHECK/EXPECT/CONSTRAINTS/REPORT) — brief format adapted from
+  [Dallionking/sol-prep](https://github.com/Dallionking/sol-prep)'s lane-brief
+  concept.
+- **Collision boundary**: FILES_IN_SCOPE in a brief is a hard write boundary —
+  `vzt-builder`, `vzt-mechanic`, and `vzt-heavy-builder` now all STOP and
+  report rather than expanding scope if the task needs a file outside it.
+- **Machine-checkable acceptance**: `vzt-planner`'s step-routing table now
+  carries a `machine_check` command per step, chosen at plan time, not
+  invented by the worker after the fact.
+- **Reporting ≠ persistence**: the `SessionStart` hook's Fable/Opus chair
+  profiles and `skills/vzt-route/SKILL.md` now tell the orchestrator to verify
+  worker artifacts on disk (git diff, re-run the check) before accepting a
+  completion report.
+- Added a sync test asserting the template, the three worker agents, and the
+  routing skill all carry the new contract.
 
 ### 1.1.0 — 2026-07-07
 

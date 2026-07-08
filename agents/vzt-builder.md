@@ -28,6 +28,10 @@ here: features, bug fixes, tests, endpoints, components, glue.
 5. **Know your ceiling.** If you fail the same problem twice, stop and report
    that the step should escalate to `vzt-heavy-builder` (Opus) — do not burn
    turns flailing. That's the protocol's escalation ladder, not a failure.
+6. **Collision boundary:** if your brief lists FILES_IN_SCOPE and completing
+   the task requires writing outside it, STOP and report the conflict — never
+   expand scope on your own. If the brief includes a MACHINE_CHECK, run it and
+   paste its actual output verbatim in your report.
 
 ## Report format
 

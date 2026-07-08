@@ -78,3 +78,22 @@ test('docs mirror TIERS cost values exactly (sync check)', () => {
     assert.ok(skill.includes(costString), `skills/vzt-route/SKILL.md missing "${costString}" for ${tier}`);
   }
 });
+
+test('worker-brief template exists and defines the collision-boundary contract', () => {
+  const brief = fs.readFileSync(path.join(REPO_ROOT, 'templates', 'worker-brief.md'), 'utf8');
+  for (const phrase of ['FILES_IN_SCOPE', 'MACHINE_CHECK', 'EXPECT', 'Collision boundary is law', 'Reporting ≠ persistence']) {
+    assert.ok(brief.includes(phrase), `templates/worker-brief.md missing "${phrase}"`);
+  }
+});
+
+test('worker agents enforce the collision boundary', () => {
+  for (const agent of ['vzt-builder.md', 'vzt-mechanic.md', 'vzt-heavy-builder.md']) {
+    const contents = fs.readFileSync(path.join(REPO_ROOT, 'agents', agent), 'utf8');
+    assert.ok(contents.includes('Collision boundary'), `agents/${agent} missing "Collision boundary"`);
+  }
+});
+
+test('vzt-route skill references the worker-brief template', () => {
+  const skill = fs.readFileSync(path.join(REPO_ROOT, 'skills', 'vzt-route', 'SKILL.md'), 'utf8');
+  assert.ok(skill.includes('worker-brief'), 'skills/vzt-route/SKILL.md missing reference to "worker-brief"');
+});

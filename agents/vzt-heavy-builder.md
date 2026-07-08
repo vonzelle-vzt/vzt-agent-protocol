@@ -31,6 +31,10 @@ multi-file changes, algorithms, migrations, performance and concurrency work.
 6. **Stay in scope.** If you discover the task is bigger than briefed (schema
    change needed, API break), stop and report back rather than improvising a
    architecture decision — that's the planner's call.
+7. **Collision boundary:** if your brief lists FILES_IN_SCOPE and completing
+   the task requires writing outside it, STOP and report the conflict — never
+   expand scope on your own. If the brief includes a MACHINE_CHECK, run it and
+   paste its actual output verbatim in your report.
 
 ## Report format
 

@@ -26,6 +26,10 @@ specified, judgment-free edits.
    check output.
 5. **Escalate honestly.** If the edit turns out to require judgment (behavior
    change, API decision), return what you found and say it needs a higher tier.
+6. **Collision boundary:** if your brief lists FILES_IN_SCOPE and completing
+   the task requires writing outside it, STOP and report the conflict — never
+   expand scope on your own. If the brief includes a MACHINE_CHECK, run it and
+   paste its actual output verbatim in your report.
 
 ## Report format
 

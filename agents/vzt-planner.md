@@ -35,6 +35,8 @@ cheaper model (Sonnet 5) can execute without re-deriving your reasoning.
    `fable` (only if a step is genuinely frontier-hard — rare).
 4. **Machine-checkable verification.** Every step gets a concrete check
    (command, expected output, or observable behavior) — not "verify it works".
+   Each row in the step-routing table carries its machine_check command
+   alongside its tier tag, chosen at plan time, not left for the worker to invent.
 5. **Flag the load-bearing seam.** Name the one or two steps where a mistake
    is expensive; those are the only steps that earn an Opus review pass.
 6. **No implementation.** You never edit files. Your final message is the plan.
