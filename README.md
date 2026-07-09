@@ -172,18 +172,68 @@ Get the bare `vzt-agent` command with `npm install -g github:vonzelle-vzt/vzt-ag
 or prefix any of the above with `npx github:vonzelle-vzt/vzt-agent-protocol`
 (from a clone: `node cli/vzt-agent.js`).
 
-## The process is the moat
+## The process is the moat — the five Fable layers
 
 Model choice alone isn't the whole story — the working discipline riding on
-top of it is. `/vzt-fable-mode` extracts the frontier tier's five gates (scope
-before acting, evidence before reasoning, attack your own approach, verify
-before declaring done, report only what you verified) into a portable process
-any tier can run — a cheaper model running these gates beats a frontier model
-running none. The orchestrator doctrine (frontier designs and verifies,
-Sonnet/Haiku execute and report back) is what actually delivers the ~8–25×
-lower cost on routine steps at equal quality. The Cost/Intelligence/Taste
-columns in the [routing matrix](docs/ROUTING-MATRIX.md) quantify that
-trade-off tier by tier, so the routing decision is a number, not a vibe.
+top of it is. `/vzt-fable-mode` extracts the frontier tier's working process
+into **five gates** any tier can run. Each gate is a checkpoint the work must
+pass *before* moving on; skipping one turns the output into a guess, no matter
+which model produced it. A cheaper model running these gates beats a frontier
+model running none. The canonical long form lives in
+[`skills/vzt-fable-mode/SKILL.md`](skills/vzt-fable-mode/SKILL.md).
+
+### Gate 1 — Scope before you act
+
+State the plan before touching anything: what the brief actually asks for, the
+smallest change that satisfies it, and what is explicitly out of scope. Then
+play devil's advocate against your own plan once — list the unknowns and
+assumptions it rests on, and for each one say how you'll resolve it (read the
+file, run the command, ask). A plan whose unknowns are named is a plan; one
+without them is a guess with steps.
+
+### Gate 2 — Evidence before reasoning
+
+Never reason about code you haven't looked at this session. Confirm files,
+symbols, APIs, and flags exist — read/grep them — before building on them.
+What the model remembers from training or an earlier session is a hypothesis,
+not evidence: partial recognition does not mean current knowledge, and a
+prompt implying a file exists does not mean one does. Verify, then reason.
+
+### Gate 3 — Attack your own approach
+
+Before executing, try once to break the plan: what input, state, or ordering
+makes it wrong? What's the strongest argument this is the trigger and not the
+cause? Name the evidence that would refute the approach and go check it. If
+the attack lands, fix the plan now — it is exponentially cheaper than fixing
+the shipped version.
+
+### Gate 4 — Verify before declaring done
+
+Every change gets a machine-checkable oracle — a test, a command, a curl, a
+rendered page — decided *before* the change is made, not invented after.
+Run it and paste the actual output. "Should work," "looks correct," and a
+green typecheck are not verification; behavior observed end-to-end is. If the
+oracle can't be run, say so explicitly instead of implying it was.
+
+### Gate 5 — Report only what you verified
+
+No claim in the report that wasn't checked. Anything unverified is marked
+unverified or dropped — a finding you can't walk through end-to-end is a
+guess. An honest partial report ("3 done, 1 blocked on X") beats a padded
+complete-sounding one every time. Failures are stated plainly, with the
+output that shows them.
+
+### Why gates, not effort
+
+The gates are about *process*, not *effort*: raising the effort dial does not
+compensate for a skipped gate — a skipped gate at max effort is still a guess.
+They also scale down: on Haiku each gate is one line of output; the discipline
+is identical, the prose is shorter. Combined with the orchestrator doctrine
+(frontier designs and verifies, Sonnet/Haiku execute and report back), this is
+what delivers the ~8–25× lower cost on routine steps at equal quality. The
+Cost/Intelligence/Taste columns in the [routing matrix](docs/ROUTING-MATRIX.md)
+quantify that trade-off tier by tier, so the routing decision is a number, not
+a vibe.
 
 ### How fable-mode activates
 
@@ -234,6 +284,9 @@ trade-off tier by tier, so the routing decision is a number, not a vibe.
   runs on Opus 4.8, but always with the frontier tier's working process.
 - New sync test asserting every Opus surface (both agents, the chair profile,
   the classifier directive) carries the gates.
+- README now documents all five gates in full ([The process is the moat —
+  the five Fable layers](#the-process-is-the-moat--the-five-fable-layers))
+  and leads the quick start with the zero-clone `npx github:` install.
 - README cleanup: removed the third-party comparison section.
 
 ### 1.2.0 — 2026-07-08
