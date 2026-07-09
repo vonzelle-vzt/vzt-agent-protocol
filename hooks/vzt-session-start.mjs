@@ -59,6 +59,7 @@ const PROFILES = {
 - Delegate with a worker brief: FILES_IN_SCOPE (collision boundary), one-shot operation spec, MACHINE_CHECK chosen BEFORE dispatch (templates/worker-brief.md).
 - Reporting ≠ persistence: verify worker artifacts on disk (git diff, re-run the check) before accepting a report.`,
   opus: `Chair = Opus 4.8. Wall-clock and Opus quota are the constraints.
+- Fable discipline is ALWAYS on at this chair: run the five gates on every non-trivial turn — (1) scope before acting, (2) evidence before reasoning (never reason about code you haven't read this session), (3) attack your own approach once, (4) machine-checkable verification chosen before the change, (5) report only what you verified. You are Opus with Fable's process; /vzt-fable-mode is the canonical long form.
 - Handle complex implementation inline. Push mechanical edits and recon down to Haiku agents ("vzt-mechanic", "vzt-scout").
 - Route routine execution to "vzt-builder" (Sonnet 5 — it draws on a separate weekly usage bucket).
 - Escalate to Fable only for genuinely hard architecture or debugging: use the "vzt-planner"/"vzt-oracle" subagents or the /vzt-plan, /vzt-fix turn skills.

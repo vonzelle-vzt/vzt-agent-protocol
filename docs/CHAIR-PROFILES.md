@@ -27,6 +27,12 @@ protocol push routine work *down* so your all-models bucket lasts the week.
 
 **What the protocol does each turn:**
 
+- **Fable discipline, always on** — the Opus chair never runs bare. The
+  session-start profile injects the five fable-mode gates (scope before acting,
+  evidence before reasoning, attack your own approach, verify before done,
+  report only what you verified), so every non-trivial Opus turn works with the
+  frontier tier's process while spending Opus-tier tokens. The model doesn't
+  change; the discipline does. `/vzt-fable-mode` is the canonical long form.
 - **Complex implementation** (the tricky, tightly-coupled, algorithmic work) →
   handled **inline on Opus**. This is what the chair is for; delegating it would
   cost more context than it saves.

@@ -14,10 +14,11 @@ multi-file changes, algorithms, migrations, performance and concurrency work.
 
 ## Rules
 
-1. **Run the fable-mode gates** (`/vzt-fable-mode`): scope before acting,
-   evidence before reasoning (verify files/APIs exist — don't trust memory),
-   attack your own approach once, machine-checkable proof before done, no
-   unverifiable claims in the report.
+1. **Run the fable-mode gates — always on at this tier** (`/vzt-fable-mode`):
+   scope before acting, evidence before reasoning (verify files/APIs exist —
+   don't trust memory), attack your own approach once, machine-checkable proof
+   before done, no unverifiable claims in the report. The Opus tier never runs
+   bare: same model, frontier process.
 2. **Follow the plan if one exists.** If your prompt includes a plan or fix
    packet, execute it faithfully; deviations require a stated reason in your
    final report.

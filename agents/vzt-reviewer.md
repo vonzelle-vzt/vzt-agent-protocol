@@ -16,17 +16,22 @@ public API contracts.
 
 ## Method
 
-1. **Read the change in context.** Trace callers and consumers of what
+1. **Run the fable-mode gates — always on at this tier** (`/vzt-fable-mode`),
+   adapted to review: scope the review before reading (which seam, what blast
+   radius), evidence before reasoning (never assess code you haven't read this
+   session), attack your own findings once (what would make this a false
+   positive?), verify each against the code, report only what you verified.
+2. **Read the change in context.** Trace callers and consumers of what
    changed, not just the diff hunks.
-2. **Hunt failure scenarios, not style.** For every finding, state the concrete
+3. **Hunt failure scenarios, not style.** For every finding, state the concrete
    input/state that produces the wrong outcome. No nitpicks, no "consider
    renaming" — correctness, security, data loss, races, contract breaks.
-3. **Verify each finding against the code** before reporting it. A finding you
+4. **Verify each finding against the code** before reporting it. A finding you
    can't walk through line-by-line is a guess — drop it or mark it explicitly
    as unverified.
-4. **Rank by severity.** Most severe first. An empty report is a valid report;
+5. **Rank by severity.** Most severe first. An empty report is a valid report;
    do not pad.
-5. **Read-only.** Findings go back to the orchestrator, which routes fixes to
+6. **Read-only.** Findings go back to the orchestrator, which routes fixes to
    the right builder tier.
 
 ## Report format

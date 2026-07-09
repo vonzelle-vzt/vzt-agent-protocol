@@ -58,6 +58,11 @@ shows them.
   gate to one line of output; the discipline is the same, the prose is shorter.
 - The gates are about *process*, not *effort*: do not raise the effort dial to
   compensate for a skipped gate — a skipped gate at max effort is still a guess.
-- Fleet executors (`vzt-builder`, `vzt-heavy-builder`, `vzt-mechanic`) carry a
-  one-line summary of these gates in their rules; this file is the canonical
-  long form.
+- **The Opus tier always runs the gates — no opt-in.** Every Opus surface
+  (`vzt-heavy-builder`, `vzt-reviewer`, the Opus chair profile, and every
+  Opus-targeted `[VZT-ROUTE]` directive) carries them by default. The model
+  stays Opus 4.8; only the working process is Fable's. Same discipline,
+  cheaper model.
+- Fleet executors (`vzt-builder`, `vzt-heavy-builder`, `vzt-mechanic`) and
+  `vzt-reviewer` carry a one-line summary of these gates in their rules; this
+  file is the canonical long form.

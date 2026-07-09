@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { classify, suggestEffort, TIERS } from '../hooks/vzt-route-classifier.mjs';
+import { classify, suggestEffort, directive, TIERS } from '../hooks/vzt-route-classifier.mjs';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const REPO_ROOT = path.resolve(__dirname, '..');
@@ -91,6 +91,22 @@ test('worker agents enforce the collision boundary', () => {
     const contents = fs.readFileSync(path.join(REPO_ROOT, 'agents', agent), 'utf8');
     assert.ok(contents.includes('Collision boundary'), `agents/${agent} missing "Collision boundary"`);
   }
+});
+
+test('every Opus surface carries the fable-mode gates (always-on discipline)', () => {
+  // Both Opus agents state the gates as a rule.
+  for (const agent of ['vzt-heavy-builder.md', 'vzt-reviewer.md']) {
+    const contents = fs.readFileSync(path.join(REPO_ROOT, 'agents', agent), 'utf8');
+    assert.ok(contents.includes('fable-mode gates — always on'), `agents/${agent} missing always-on fable-mode gates rule`);
+  }
+  // The Opus chair profile injects the gates at session start.
+  const sessionStart = fs.readFileSync(path.join(REPO_ROOT, 'hooks', 'vzt-session-start.mjs'), 'utf8');
+  assert.ok(/opus: `[^`]*five gates/.test(sessionStart), 'opus chair profile missing the five gates');
+  // Opus-targeted directives restate the discipline; other tiers do not.
+  const opusDirective = directive({ tier: 'opus', kind: 'build', confidence: 'high', effort: 'high', matched: [], scores: {}, words: 10 }, 'sonnet');
+  assert.ok(opusDirective.includes('fable-mode gates'), 'opus [VZT-ROUTE] directive missing the gates line');
+  const sonnetDirective = directive({ tier: 'sonnet', kind: 'build', confidence: 'high', effort: 'medium', matched: [], scores: {}, words: 10 }, 'sonnet');
+  assert.ok(!sonnetDirective.includes('fable-mode gates'), 'sonnet directive should not carry the opus gates line');
 });
 
 test('vzt-route skill references the worker-brief template', () => {

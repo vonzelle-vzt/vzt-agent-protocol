@@ -148,6 +148,10 @@ export function directive(result, chair) {
     );
   }
 
+  if (result.tier === 'opus') {
+    lines.push('  discipline: the Opus tier ALWAYS runs the fable-mode gates (scope → evidence → attack → verify → report) — same model, frontier process. The Opus agents carry them as Rule 1; /vzt-fable-mode is the long form.');
+  }
+
   lines.push(
     '  escalation ladder: if the chosen tier fails twice on the same problem, escalate exactly one tier (haiku→sonnet→opus→fable) and say so.',
     '  budget rules: mechanical/recon work never rises above Haiku; Sonnet burns its own separate weekly bucket — prefer it for all routine execution; keep Fable turns ≤15% of the session.',

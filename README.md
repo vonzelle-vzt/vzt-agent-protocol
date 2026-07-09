@@ -5,7 +5,7 @@
 Part of the [VZT Tech Consulting Protocol](https://github.com/vonzelle-vzt/VZT-Tech-Consulting-Protocol) ecosystem.
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
-[![Version](https://img.shields.io/badge/Version-1.2.0-purple.svg)](#)
+[![Version](https://img.shields.io/badge/Version-1.3.0-purple.svg)](#)
 [![Tiers](https://img.shields.io/badge/Tiers-Fable%205%20%7C%20Opus%204.8%20%7C%20Sonnet%205%20%7C%20Haiku%204.5-green.svg)](docs/ROUTING-MATRIX.md)
 
 ---
@@ -69,8 +69,8 @@ adapts the routing doctrine to it either way:
 
 ## How it works — four real routing layers
 
-Unlike prompt-only "routers" (see [comparison](#vs-fable-prep)), every layer
-here uses a mechanism Claude Code actually enforces:
+Every layer here uses a mechanism Claude Code actually enforces — not
+prompt-only suggestions:
 
 ### 1. Per-prompt classifier hook (`UserPromptSubmit`)
 A deterministic, <50ms, zero-API-cost classifier scores every prompt against
@@ -160,25 +160,6 @@ vzt-agent stats                                 # routing decision distribution
 vzt-agent matrix                                # print the routing matrix
 ```
 
-## vs. fable-prep
-
-Inspired by the premise of [Dallionking/fable-prep](https://github.com/Dallionking/fable-prep)
-(prep work on cheap models, frontier executes), but that repo contains **no
-actual model routing** — its model config is unused strings and mode selection
-is a manually flipped sentinel file. Comparison:
-
-| | fable-prep | vzt-agent-protocol |
-|---|---|---|
-| Model switching | ❌ manual sentinel file; user launches the right model | ✅ 4 enforced layers: agent `model:` frontmatter, skill turn overrides, per-prompt classifier, chair profiles |
-| Haiku tier | ❌ absent | ✅ two agents + turn skill |
-| Per-step routing | ❌ whole-queue only | ✅ step-routing table in every plan |
-| Effort routing | ❌ | ✅ `effort:` pinned per tier, plus a per-prompt suggested effort in every [VZT-ROUTE] directive |
-| Escalation | ❌ | ✅ one-tier ladder, both directions |
-| Chair awareness | ❌ | ✅ doctrine inverts with session model |
-| Decision telemetry | ❌ | ✅ JSONL log + `stats` with budget target |
-| Enforcement | prose only | hooks + frontmatter Claude Code enforces |
-| Worker brief contract | ❌ (sol-prep sibling repo: prose-only lane briefs) | ✅ canonical template + agent-enforced collision-boundary halt + reporting≠persistence verification |
-
 ## The process is the moat
 
 Model choice alone isn't the whole story — the working discipline riding on
@@ -194,13 +175,18 @@ trade-off tier by tier, so the routing decision is a number, not a vibe.
 
 ### How fable-mode activates
 
-- **Automatic in fleet executors** — `vzt-builder`, `vzt-heavy-builder`, and
-  `vzt-mechanic` carry the gate summary as Rule 1, so anything the router
-  delegates to them runs the gates with no user action. `vzt-planner`,
-  `vzt-oracle`, and `vzt-reviewer` don't reference it — they're the source of
-  the doctrine, not a consumer of it.
+- **Always on at the Opus tier** — Opus never runs bare. Every Opus surface
+  carries the five gates by default: the `vzt-heavy-builder` and `vzt-reviewer`
+  agents state them as their first rule, the Opus chair profile injects them at
+  session start, and every `[VZT-ROUTE]` directive that targets Opus restates
+  them. Opus stays Opus (no model change) — it just always works with Fable's
+  process. Frontier discipline, cheaper model.
+- **Automatic in fleet executors** — `vzt-builder` and `vzt-mechanic` carry the
+  gate summary as Rule 1, so anything the router delegates to them runs the
+  gates with no user action. `vzt-planner` and `vzt-oracle` (Fable) don't
+  reference it — they're the source of the doctrine, not a consumer of it.
 - **Manual on the chair** — `/vzt-fable-mode <task>` loads the full skill into
-  the current turn, the "elevate Opus/Sonnet" move for hard inline work. The
+  the current turn, the "elevate Sonnet" move for hard inline work. The
   model may also auto-invoke it when a task obviously calls for the discipline,
   but the slash command is the guaranteed path. Skip it for routine one-liners
   — the gates would just add overhead.
@@ -226,13 +212,23 @@ trade-off tier by tier, so the routing decision is a number, not a vibe.
 
 ## Release notes
 
+### 1.3.0 — 2026-07-08
+
+- **Fable discipline is now always on at the Opus tier.** The five fable-mode
+  gates (scope, evidence, attack, verify, report) are wired into every Opus
+  surface: `vzt-reviewer` now carries them (previously only the builders did),
+  the Opus chair profile injects them at session start, and Opus-targeted
+  `[VZT-ROUTE]` directives restate them. Model routing is unchanged — Opus
+  runs on Opus 4.8, but always with the frontier tier's working process.
+- New sync test asserting every Opus surface (both agents, the chair profile,
+  the classifier directive) carries the gates.
+- README cleanup: removed the third-party comparison section.
+
 ### 1.2.0 — 2026-07-08
 
 - Added worker-brief delegation doctrine: `templates/worker-brief.md` is the
   canonical template (TASK/CONTEXT/FILES_IN_SCOPE/OPERATION/ACCEPTANCE/
-  MACHINE_CHECK/EXPECT/CONSTRAINTS/REPORT) — brief format adapted from
-  [Dallionking/sol-prep](https://github.com/Dallionking/sol-prep)'s lane-brief
-  concept.
+  MACHINE_CHECK/EXPECT/CONSTRAINTS/REPORT).
 - **Collision boundary**: FILES_IN_SCOPE in a brief is a hard write boundary —
   `vzt-builder`, `vzt-mechanic`, and `vzt-heavy-builder` now all STOP and
   report rather than expanding scope if the task needs a file outside it.
