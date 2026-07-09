@@ -1,5 +1,7 @@
 # VZT Agent Protocol
 
+![VZT Agent Protocol — automatic model routing for Claude Code](assets/banner.jpg)
+
 **Automatic model routing for Claude Code — Fable 5, Opus 4.8, Sonnet 5, Haiku 4.5. Right model, right task, zero manual switching.**
 
 Part of the [VZT Tech Consulting Protocol](https://github.com/vonzelle-vzt/VZT-Tech-Consulting-Protocol) ecosystem.
