@@ -42,17 +42,25 @@ on the ~15% of turns that are genuinely frontier-hard. See
 
 ## Quick start
 
+No clone needed — run it straight from GitHub with `npx`:
+
+```bash
+# install globally for every project
+npx github:vonzelle-vzt/vzt-agent-protocol install --global
+
+# or install into a single project's .claude/
+npx github:vonzelle-vzt/vzt-agent-protocol install --target /path/to/your/project
+
+# verify
+npx github:vonzelle-vzt/vzt-agent-protocol doctor --global
+```
+
+Or clone first if you prefer:
+
 ```bash
 git clone https://github.com/vonzelle-vzt/vzt-agent-protocol.git
 cd vzt-agent-protocol
-
-# install into the current project's .claude/
-node cli/vzt-agent.js install --target /path/to/your/project
-
-# or install globally for every project
-node cli/vzt-agent.js install --global
-
-# verify
+node cli/vzt-agent.js install --global   # or: install --target /path/to/project
 node cli/vzt-agent.js doctor --global
 ```
 
@@ -159,6 +167,10 @@ vzt-agent doctor [--global]                     # health check
 vzt-agent stats                                 # routing decision distribution
 vzt-agent matrix                                # print the routing matrix
 ```
+
+Get the bare `vzt-agent` command with `npm install -g github:vonzelle-vzt/vzt-agent-protocol`,
+or prefix any of the above with `npx github:vonzelle-vzt/vzt-agent-protocol`
+(from a clone: `node cli/vzt-agent.js`).
 
 ## The process is the moat
 
