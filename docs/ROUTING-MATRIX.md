@@ -20,7 +20,33 @@ burns the quota this protocol exists to protect.
 2. Requires choosing an approach (architecture/schema/strategy/trade-offs), or
    has beaten a lower tier twice? → **Tier 4**.
 3. Implementation with tight coupling, algorithms, or blast radius? → **Tier 3**.
-4. Everything else → **Tier 2**. Unsure between two tiers? Take the lower.
+4. Scope language (entire codebase / from scratch / greenfield / end-to-end /
+   multi-tenant / ...) **plus a build verb** (build/implement/ship/create/
+   scaffold/rewrite/...)? → **Tier 3, kind `HORIZON`** — spec-first via
+   `/vzt-ship`, not routine inline execution. **Scope language alone, with no
+   build verb, is still a planning question and stays on Tier 4** ("design the
+   architecture for the whole system").
+5. Everything else → **Tier 2**. Unsure between two tiers? Take the lower.
+
+## HORIZON — long-horizon work
+
+Long-horizon work doesn't fail because the model isn't smart enough; it fails
+because context compaction eats the plan halfway through the run, and the
+back half gets built against a plan the chair no longer remembers. A slower
+model doesn't fix that — a plan on disk does. **Escalate the PROCESS, not the
+MODEL.**
+
+- **Trigger**: the two-factor gate above — scope language **and** a build
+  verb, both present in the same prompt.
+- **Action**: route to **Opus 4.8**, task kind `HORIZON`, and point at
+  `/vzt-ship` — spec-first: write `.vzt/ship/<slug>/SPEC.md` (contract,
+  out-of-scope, cross-unit interfaces as a barrier unit, file manifest, units
+  with pairwise-disjoint `FILES_IN_SCOPE` and one oracle each) before any
+  code, gate it with `vzt-agent ship-check`, then run it as supervised
+  background workers.
+- **Explicitly not HORIZON**: scope language with no build verb. That stays a
+  planning question on Fable — the work being *asked for* is a plan, not a
+  shipped artifact.
 
 ## Hard rules
 

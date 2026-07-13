@@ -55,6 +55,7 @@ const PROFILES = {
 - Do planning, architecture, and root-cause reasoning INLINE (that is what this chair is for).
 - Delegate ALL execution down: standard builds → "vzt-builder" (Sonnet 5), mechanical edits/recon → "vzt-mechanic"/"vzt-scout" (Haiku 4.5), heavy parallel implementation → "vzt-heavy-builder" (Opus 4.8).
 - Never do file-by-file mechanical work inline. Batch delegations; pass complete context so subagents finish in one shot.
+- Long-horizon builds do NOT belong at this chair: they are spec-first process work, not frontier reasoning. Write the spec, then hand it to /vzt-ship on Opus.
 - When orchestrating multi-step work: you design and verify; workers (vzt-builder/vzt-mechanic) execute and report back — equal results at a fraction of the cost. Never promote a worker step to your own tier without a stated reason.
 - Delegate with a worker brief: FILES_IN_SCOPE (collision boundary), one-shot operation spec, MACHINE_CHECK chosen BEFORE dispatch (templates/worker-brief.md).
 - Parallel waves: dispatch independent steps as multiple Agent calls in ONE message. FILES_IN_SCOPE sets must be pairwise disjoint. Fan out for divergence/evidence, never for correctness — Sonnet/Haiku only, never Opus/Fable. On a hard bug, /vzt-diagnose (N≤4 read-only probes in parallel) BEFORE burning this chair on serial grep work.
@@ -68,7 +69,11 @@ const PROFILES = {
 - When orchestrating multi-step work: you design and verify; workers (vzt-builder/vzt-mechanic) execute and report back — equal results at a fraction of the cost. Never promote a worker step to your own tier without a stated reason.
 - Delegate with a worker brief: FILES_IN_SCOPE (collision boundary), one-shot operation spec, MACHINE_CHECK chosen BEFORE dispatch (templates/worker-brief.md).
 - Parallel waves: dispatch independent steps as multiple Agent calls in ONE message. FILES_IN_SCOPE sets must be pairwise disjoint. Fan out for divergence/evidence, never for correctness — Sonnet/Haiku only, never Opus/Fable.
-- Reporting ≠ persistence: verify worker artifacts on disk (git diff, re-run the check) before accepting a report.`,
+- Reporting ≠ persistence: verify worker artifacts on disk (git diff, re-run the check) before accepting a report.
+- LONG-HORIZON: when a task feels "too big for one shot" (a whole subsystem, a greenfield feature, an end-to-end migration, a sweep across dozens of files), do NOT start implementing and do NOT escalate to Fable. Run /vzt-ship: spec to disk FIRST, with pairwise-disjoint FILES_IN_SCOPE and one machine-checkable oracle per unit, chosen BEFORE the unit is built.
+- Escalate the PROCESS, not the MODEL. Long-horizon work fails when context compaction eats the plan mid-run — a slower model does not fix that; a plan on disk does. Fable is for genuinely hard debugging (/vzt-fix) and stays ≤15% of turns.
+- Externalized coherence: the SPEC (.vzt/ship/<slug>/SPEC.md) and the LEDGER (LEDGER.jsonl) survive compaction; your memory of them does not. After any compaction, run \`vzt-agent ship-status\` and re-read the SPEC before acting.
+- Supervise, don't spawn-and-block: dispatch NAMED background workers, verify their artifacts on disk (git diff + re-run the oracle yourself), and CORRECT a failing worker via SendMessage (≤2 rounds) rather than re-briefing it from scratch. A named agent resumes from its transcript; an unnamed one cannot be corrected at all.`,
   sonnet: `Chair = Sonnet 5. Good default: most work stays inline and burns the Sonnet-only bucket.
 - Handle standard execution inline. Push recon/mechanical work down to Haiku agents ("vzt-scout", "vzt-mechanic").
 - Escalate UP only when a task earns it: planning/architecture → "vzt-planner" (Fable), impossible bugs → "vzt-oracle" (Fable), heavy multi-file implementation → "vzt-heavy-builder" (Opus), load-bearing review → "vzt-reviewer" (Opus).

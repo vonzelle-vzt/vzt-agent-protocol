@@ -7,7 +7,7 @@
 Part of the [VZT Tech Consulting Protocol](https://github.com/vonzelle-vzt/VZT-Tech-Consulting-Protocol) ecosystem.
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
-[![Version](https://img.shields.io/badge/Version-1.3.0-purple.svg)](#)
+[![Version](https://img.shields.io/badge/Version-1.5.0-purple.svg)](#)
 [![Tiers](https://img.shields.io/badge/Tiers-Fable%205%20%7C%20Opus%204.8%20%7C%20Sonnet%205%20%7C%20Haiku%204.5-green.svg)](docs/ROUTING-MATRIX.md)
 
 ---
@@ -126,6 +126,10 @@ start fresh), these switch the *current turn's* model in place:
   return CONFIRMED/REFUTED with the output pasted. Run it *before* escalating
   to `/vzt-fix` — cheap parallel evidence first, frontier reasoning only once
   it is earned. (No model pin — the probes run on Haiku/Sonnet.)
+- `/vzt-ship <the system to build>` — **spec-first long-horizon execution**:
+  writes a SPEC to disk before any code, gates it with a command, then drives
+  it as supervised background workers. See
+  [Long-horizon work](#long-horizon-work--vzt-ship) below.
 
 The session model returns on your next prompt.
 
@@ -145,6 +149,46 @@ On an **Opus chair**, a routine one-shot request skips planning entirely — the
 classifier delegates the build straight down to `vzt-builder` (Sonnet) and any
 mechanical part to `vzt-mechanic` (Haiku), while you stay on Opus as coordinator.
 Full walkthroughs per chair: [Chair Profiles](docs/CHAIR-PROFILES.md).
+
+## Long-horizon work — `/vzt-ship`
+
+Scope language ("entire codebase", "from scratch", "greenfield", "end-to-end",
+"multi-tenant") used to route straight to Fable — the slower, more expensive
+model. That was a bug. Long-horizon work doesn't fail because the model isn't
+smart enough; it fails because **context compaction eats the plan halfway
+through the run**, and the back half gets built against a plan the chair no
+longer remembers. A slower model doesn't fix that. A plan on disk does.
+
+**Escalate the PROCESS, not the MODEL.** Scope language now routes to Opus
+under a new task kind, `HORIZON`, and the gate is **two-factor**: scope
+language *alone* is still a planning question and stays on Fable ("design the
+architecture for the whole system"); scope **+ a build verb**
+(build/implement/ship/create/scaffold/rewrite/...) is a shipping question and
+becomes `HORIZON`. Fable narrows to genuinely hard debugging (`/vzt-fix`) and
+stays ≤15% of turns.
+
+A `HORIZON` classification points at `/vzt-ship`, which runs four phases:
+
+1. **SPEC** — forbidden from editing source. Writes `.vzt/ship/<slug>/SPEC.md`
+   from `templates/spec.md`: contract, out-of-scope, the interfaces that
+   cross unit boundaries (these become a serial "barrier" unit), a file
+   manifest, and units whose `FILES_IN_SCOPE` sets are pairwise disjoint, each
+   with one machine-checkable oracle chosen *before* the unit is built.
+2. **GATE** — `vzt-agent ship-check <SPEC.md>` is a command, not an opinion:
+   it exits non-zero on overlapping scopes, a manifest file no unit owns, a
+   unit with no oracle, or an unknown agentType.
+3. **RUN** — launches `workflows/vzt-ship.js` via the Workflow tool: barrier →
+   parallel units → independent read-only verification of each oracle
+   (builders never grade themselves) → bounded repair (≤2 rounds) →
+   integration gate.
+4. **LAND** — verifies artifacts on disk, not reports, then stops before
+   commit/deploy.
+
+It survives compaction because the coherence lives on disk, not in the
+conversation: `SPEC.md` + `LEDGER.jsonl` on disk, `vzt-agent ship-status`
+reconstructs run state, and the `UserPromptSubmit` classifier hook re-injects
+a `[VZT-SHIP]` block on every prompt — compaction does not re-fire
+`SessionStart`, so the classifier is the only hook that survives it.
 
 ## Guardrails
 
@@ -173,6 +217,10 @@ vzt-agent uninstall [--global] [--target <dir>] # clean removal
 vzt-agent doctor [--global]                     # health check
 vzt-agent stats                                 # routing decision distribution
 vzt-agent matrix                                # print the routing matrix
+vzt-agent ship-check <SPEC.md>                  # gate a /vzt-ship spec — disjoint scopes, an oracle per unit
+vzt-agent ship-start <SPEC.md>                  # open the run ledger for a gated spec
+vzt-agent ship-note  <SPEC.md> '<json>'         # append one ledger line
+vzt-agent ship-status [--target <dir>]          # reconstruct run state from disk (use after a compaction)
 ```
 
 Get the bare `vzt-agent` command with `npm install -g github:vonzelle-vzt/vzt-agent-protocol`,
@@ -280,6 +328,24 @@ a vibe.
 - [CLAUDE.md snippet for manual installs](templates/CLAUDE-snippet.md)
 
 ## Release notes
+
+### 1.5.0 — long-horizon release
+
+- **Doctrine shift — "Escalate the PROCESS, not the MODEL."** Scope language
+  ("entire codebase", "from scratch", "greenfield", "end-to-end",
+  "multi-tenant") no longer routes to Fable. It now routes to Opus under a
+  new `HORIZON` task kind, gated **two-factor**: scope language alone stays a
+  planning question on Fable; scope **+ a build verb** becomes `HORIZON` and
+  points at `/vzt-ship`.
+- New skill `/vzt-ship` — spec-first long-horizon execution. SPEC (no code) →
+  GATE (`vzt-agent ship-check`, a command not an opinion) → RUN (barrier →
+  parallel units → independent oracle verification → bounded repair →
+  integration gate, via the Workflow tool) → LAND (verify artifacts on disk,
+  stop before commit/deploy). Survives compaction: `SPEC.md` + `LEDGER.jsonl`
+  on disk, and the classifier hook re-injects a `[VZT-SHIP]` block on every
+  prompt since compaction doesn't re-fire `SessionStart`.
+- New CLI commands: `ship-check`, `ship-start`, `ship-note`, `ship-status`.
+- See [Long-horizon work](#long-horizon-work--vzt-ship) above.
 
 ### 1.3.0 — 2026-07-08
 

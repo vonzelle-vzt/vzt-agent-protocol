@@ -39,6 +39,63 @@ for (const [prompt, expectedTier, expectedEffort] of cases) {
   });
 }
 
+// ——— HORIZON: long-horizon builds are spec-first Opus work, not Fable work ———
+
+const horizonCases = [
+  'Build the entire notification system from scratch, end-to-end',
+  'Implement the whole admin dashboard greenfield across every route',
+  'Ship a multi-tenant billing subsystem from the ground up',
+];
+
+for (const prompt of horizonCases) {
+  test(`HORIZON: "${prompt.slice(0, 50)}..." → opus/horizon/high`, () => {
+    const r = classify(prompt);
+    assert.equal(r.tier, 'opus', `got ${r.tier} (scores: ${JSON.stringify(r.scores)})`);
+    assert.equal(r.kind, 'horizon', `got kind ${r.kind}`);
+    assert.equal(r.effort, 'high');
+  });
+}
+
+// THE REGRESSION GUARD. Scope language used to route to Fable — i.e. to the
+// SLOWER model — on exactly the prompts where a slower model buys nothing,
+// because long-horizon work fails on lost coherence, not on model IQ.
+test('no long-horizon BUILD ever routes to fable (the bug this release fixes)', () => {
+  for (const prompt of horizonCases) {
+    assert.notEqual(classify(prompt).tier, 'fable', `"${prompt}" escalated the MODEL instead of the PROCESS`);
+  }
+});
+
+// The gate is two-factor on purpose: scope alone is a planning question.
+test('two-factor gate: SCOPE without a BUILD verb is NOT horizon (stays planning)', () => {
+  const r = classify('Design the architecture for the whole system from scratch');
+  assert.equal(r.tier, 'fable', 'a pure design question must still reach the planning tier');
+  assert.notEqual(r.kind, 'horizon');
+});
+
+test('two-factor gate: a BUILD verb without SCOPE is NOT horizon (stays routine)', () => {
+  const r = classify('Build a settings page with a form');
+  assert.equal(r.tier, 'sonnet');
+  assert.notEqual(r.kind, 'horizon');
+});
+
+test('no legacy case is misclassified as horizon', () => {
+  for (const [prompt] of cases) {
+    assert.notEqual(classify(prompt).kind, 'horizon', `"${prompt}" wrongly became a horizon task`);
+  }
+});
+
+test('the horizon directive forbids implementing and routes to /vzt-ship', () => {
+  const r = classify(horizonCases[0]);
+  const d = directive(r, 'opus');
+  for (const phrase of ['/vzt-ship', 'do NOT start implementing', 'ship-check', 'Escalate the PROCESS, not the MODEL', 'ship-status']) {
+    assert.ok(d.includes(phrase), `horizon directive missing "${phrase}"`);
+  }
+  // Never fan a subagent at a spec — the chair writes it, then supervises.
+  assert.ok(!d.includes('Delegate to the "'), 'horizon directive must not delegate the spec to a subagent');
+  // It is still the Opus tier, so the gates still apply.
+  assert.ok(d.includes('fable-mode gates'), 'horizon is an Opus surface — it must carry the gates');
+});
+
 test('classifier returns confidence and signals', () => {
   const r = classify('Design the architecture for the new system from scratch');
   assert.ok(['low', 'medium', 'high'].includes(r.confidence));
@@ -101,17 +158,48 @@ test('every file path the doctrine references is actually installed', () => {
   ];
   for (const file of scan) {
     const contents = fs.readFileSync(file, 'utf8');
-    for (const m of contents.matchAll(/templates\/[A-Za-z0-9._-]+\.md/g)) referenced.add(m[0]);
+    // Generalized past the v1.4.0 bug: ANY shipped directory the doctrine points
+    // at must be copied by install(), not just templates/.
+    for (const m of contents.matchAll(/(templates|workflows)\/[A-Za-z0-9._-]+\.(md|js)/g)) referenced.add(m[0]);
   }
-  // Anything the doctrine tells an agent to open must be shipped by install().
   const cli = fs.readFileSync(path.join(REPO_ROOT, 'cli', 'vzt-agent.js'), 'utf8');
-  assert.ok(referenced.size > 0, 'expected the doctrine to reference at least one template');
-  assert.ok(
-    /TEMPLATES_DIR/.test(cli) && /copyDirContents\(TEMPLATES_DIR/.test(cli),
-    `doctrine references ${[...referenced].join(', ')} but cli/vzt-agent.js never installs templates/`
-  );
+  assert.ok(referenced.size > 0, 'expected the doctrine to reference at least one shipped file');
+
+  const DIR_VARS = { templates: 'TEMPLATES_DIR', workflows: 'WORKFLOWS_DIR' };
   for (const ref of referenced) {
+    // (a) the file exists in the repo …
     assert.ok(fs.existsSync(path.join(REPO_ROOT, ref)), `doctrine references ${ref}, which does not exist in the repo`);
+    // (b) … and install() actually copies the directory it lives in, and
+    //     uninstall() actually removes it. A doctrine pointing at a file the
+    //     installer never copied is exactly the v1.4.0 bug.
+    const dir = ref.split('/')[0];
+    const v = DIR_VARS[dir];
+    assert.ok(
+      new RegExp(`copyDirContents\\(${v}`).test(cli),
+      `doctrine references ${ref} but cli/vzt-agent.js never installs ${dir}/ (no copyDirContents(${v}...))`
+    );
+    assert.ok(new RegExp(`\\[${v},`).test(cli), `cli/vzt-agent.js install()s ${dir}/ but uninstall() never removes it`);
+  }
+});
+
+test('the ship spec template encodes the machine-readable contract', () => {
+  const spec = fs.readFileSync(path.join(REPO_ROOT, 'templates', 'spec.md'), 'utf8');
+  for (const phrase of ['<!-- vzt-spec', 'FILES_IN_SCOPE', 'machineCheck', 'expect', 'barrier', 'pairwise disjoint']) {
+    assert.ok(spec.includes(phrase), `templates/spec.md missing "${phrase}"`);
+  }
+});
+
+test('worker-brief encodes the supervision + correction protocol', () => {
+  const brief = fs.readFileSync(path.join(REPO_ROOT, 'templates', 'worker-brief.md'), 'utf8');
+  for (const phrase of ['CORRECTION', 'SCOPE_BREACH', 'SendMessage', 'Two rounds is the ceiling', 'Name every worker']) {
+    assert.ok(brief.includes(phrase), `templates/worker-brief.md missing "${phrase}"`);
+  }
+});
+
+test('/vzt-ship ships, authorizes Workflow, and carries its own kill-switch', () => {
+  const skill = fs.readFileSync(path.join(REPO_ROOT, 'skills', 'vzt-ship', 'SKILL.md'), 'utf8');
+  for (const phrase of ['Workflow', 'ship-check', 'pairwise disjoint', 'no filesystem access', 'Falsification rule', 'templates/worker-brief.md']) {
+    assert.ok(skill.includes(phrase), `skills/vzt-ship/SKILL.md missing "${phrase}"`);
   }
 });
 

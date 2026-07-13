@@ -26,8 +26,36 @@ can do it well. This skill is the canonical decision procedure; the
    trade-offs) or **has it beaten a lower tier twice**? → Tier 4.
 3. **Is it implementation with tight coupling, algorithms, or blast radius?**
    → Tier 3.
-4. **Everything else** → Tier 2. When unsure between two tiers, take the lower
+4. **Does it name scope language** (entire codebase / from scratch /
+   greenfield / end-to-end / multi-tenant / ...) **AND a build verb**
+   (build/implement/ship/create/scaffold/rewrite/...)? → Tier 3, kind
+   `HORIZON` — spec-first via `/vzt-ship`, never routine inline execution.
+   Scope language *without* a build verb is still a planning question and
+   stays on Tier 4.
+5. **Everything else** → Tier 2. When unsure between two tiers, take the lower
    one — the escalation ladder exists precisely so under-routing is cheap.
+
+## Escalate the process, not the model
+
+Scope language used to route straight to Fable, on the assumption that
+long-horizon work needs the smartest model. It doesn't — it fails because
+**context compaction eats the plan halfway through the run**, and the back
+half gets built against a plan the chair no longer remembers. A slower model
+does not fix a coherence problem; a plan on disk does.
+
+So a `HORIZON` classification (the two-factor gate above) routes to **Opus**,
+not Fable, and points at `/vzt-ship`: write a SPEC to
+`.vzt/ship/<slug>/SPEC.md` before any code (contract, out-of-scope, the
+interfaces that cross unit boundaries as a serial barrier unit, a file
+manifest, units with pairwise-disjoint `FILES_IN_SCOPE` and one
+machine-checkable oracle each, chosen before the unit is built), gate it with
+`vzt-agent ship-check` (a command, not an opinion), then drive it as
+supervised background workers — barrier → parallel units → independent oracle
+verification → bounded repair (≤2 rounds) → integration gate. The SPEC and
+the run ledger live on disk specifically so a compaction mid-run loses
+nothing: `vzt-agent ship-status` reconstructs state, and the classifier hook
+re-injects a `[VZT-SHIP]` block on every prompt because compaction does not
+re-fire `SessionStart`.
 
 ## Effort routing
 

@@ -18,6 +18,13 @@ Route every piece of work to the cheapest tier that can do it well:
   `vzt-heavy-builder` (Opus). Load-bearing review → `vzt-reviewer` (Opus).
 - **Planning/architecture/impossible bugs** → `vzt-planner`/`vzt-oracle`
   (Fable), or `/vzt-plan` / `/vzt-fix` when full conversation context matters.
+- **Long-horizon work** (scope language — entire codebase, from scratch,
+  greenfield, end-to-end, multi-tenant — combined with a build verb) →
+  `/vzt-ship` (Opus, spec-first). It writes a SPEC to
+  `.vzt/ship/<slug>/SPEC.md` before any code, gates it with
+  `vzt-agent ship-check`, then runs it as supervised background workers.
+  Escalate the PROCESS, not the model — scope language alone with no build
+  verb is still a planning question and stays on Fable.
 
 Rules: two failures at a tier → escalate exactly one tier and say so. Fable
 turns ≤15% of the session. Never execute a routine plan on Fable/Opus — plans
