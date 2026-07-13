@@ -121,6 +121,11 @@ start fresh), these switch the *current turn's* model in place:
 - `/vzt-fable-mode` — run this turn under the five frontier working gates
   (scope, evidence, attack, verify, report) (no model pin — runs on the
   active model)
+- `/vzt-diagnose <symptom>` — **parallel hypothesis fan-out** for a hard bug:
+  N≤4 read-only agents each test one root cause with one real command and
+  return CONFIRMED/REFUTED with the output pasted. Run it *before* escalating
+  to `/vzt-fix` — cheap parallel evidence first, frontier reasoning only once
+  it is earned. (No model pin — the probes run on Haiku/Sonnet.)
 
 The session model returns on your next prompt.
 

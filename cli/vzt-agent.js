@@ -23,6 +23,10 @@ const PKG_ROOT = path.resolve(__dirname, '..');
 const AGENT_FILES_DIR = path.join(PKG_ROOT, 'agents');
 const SKILLS_DIR = path.join(PKG_ROOT, 'skills');
 const HOOKS_DIR = path.join(PKG_ROOT, 'hooks');
+// The doctrine tells every session to delegate using templates/worker-brief.md.
+// If we don't install it, that instruction points at nothing — the brief gets
+// improvised, and MACHINE_CHECK drifts to being chosen AFTER the diff exists.
+const TEMPLATES_DIR = path.join(PKG_ROOT, 'templates');
 
 const HOOKS = [
   { event: 'UserPromptSubmit', basename: 'vzt-route-classifier.mjs', timeout: 10 },
@@ -129,6 +133,7 @@ function install(args) {
   const agents = copyDirContents(AGENT_FILES_DIR, path.join(dotClaude, 'agents'), { ext: '.md' });
   const skills = copyDirContents(SKILLS_DIR, path.join(dotClaude, 'skills'));
   const hooks = copyDirContents(HOOKS_DIR, path.join(dotClaude, 'hooks', 'vzt-router'));
+  const templates = copyDirContents(TEMPLATES_DIR, path.join(dotClaude, 'templates'), { ext: '.md' });
   // Project installs (--target / cwd) get portable $CLAUDE_PROJECT_DIR paths so
   // a committed settings.json works for anyone who clones the repo; a global
   // install (~/.claude) uses the absolute path.
@@ -137,6 +142,7 @@ function install(args) {
   console.log(`  agents:   ${agents.length} installed (fable×2, opus×2, sonnet×1, haiku×2)`);
   console.log(`  skills:   ${skills.length} files installed (/vzt-route /vzt-plan /vzt-fix /vzt-build /vzt-quick /vzt-fable-mode)`);
   console.log(`  hooks:    ${hooks.length} installed (SessionStart chair-profile + UserPromptSubmit classifier)`);
+  console.log(`  templates: ${templates.length} installed (worker-brief delegation contract)`);
   console.log(`  settings: wired ${settingsPath}`);
   console.log('\nDone. Restart Claude Code to activate.');
   console.log('Chair is up to you — the protocol adapts either way:');
@@ -151,6 +157,17 @@ function uninstall(args) {
   if (fs.existsSync(AGENT_FILES_DIR)) {
     for (const f of fs.readdirSync(AGENT_FILES_DIR)) {
       const target = path.join(dotClaude, 'agents', f);
+      if (fs.existsSync(target)) {
+        fs.rmSync(target);
+        removed++;
+      }
+    }
+  }
+  // Remove only the template files we ship — never the templates/ dir itself,
+  // which the user may share with other tooling.
+  if (fs.existsSync(TEMPLATES_DIR)) {
+    for (const f of fs.readdirSync(TEMPLATES_DIR)) {
+      const target = path.join(dotClaude, 'templates', f);
       if (fs.existsSync(target)) {
         fs.rmSync(target);
         removed++;

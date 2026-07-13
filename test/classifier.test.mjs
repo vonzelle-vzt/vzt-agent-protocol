@@ -86,6 +86,45 @@ test('worker-brief template exists and defines the collision-boundary contract',
   }
 });
 
+// The doctrine referenced templates/worker-brief.md in every session, but the
+// installer never copied templates/ — so at runtime the brief pointed at
+// nothing. The file existed; the install did not. Guard the reference, not just
+// the file.
+test('every file path the doctrine references is actually installed', () => {
+  const referenced = new Set();
+  const scan = [
+    ...fs.readdirSync(path.join(REPO_ROOT, 'hooks')).map((f) => path.join(REPO_ROOT, 'hooks', f)),
+    ...fs
+      .readdirSync(path.join(REPO_ROOT, 'skills'))
+      .map((d) => path.join(REPO_ROOT, 'skills', d, 'SKILL.md'))
+      .filter((f) => fs.existsSync(f)),
+  ];
+  for (const file of scan) {
+    const contents = fs.readFileSync(file, 'utf8');
+    for (const m of contents.matchAll(/templates\/[A-Za-z0-9._-]+\.md/g)) referenced.add(m[0]);
+  }
+  // Anything the doctrine tells an agent to open must be shipped by install().
+  const cli = fs.readFileSync(path.join(REPO_ROOT, 'cli', 'vzt-agent.js'), 'utf8');
+  assert.ok(referenced.size > 0, 'expected the doctrine to reference at least one template');
+  assert.ok(
+    /TEMPLATES_DIR/.test(cli) && /copyDirContents\(TEMPLATES_DIR/.test(cli),
+    `doctrine references ${[...referenced].join(', ')} but cli/vzt-agent.js never installs templates/`
+  );
+  for (const ref of referenced) {
+    assert.ok(fs.existsSync(path.join(REPO_ROOT, ref)), `doctrine references ${ref}, which does not exist in the repo`);
+  }
+});
+
+test('vzt-diagnose ships and encodes the fan-out limits', () => {
+  const skill = fs.readFileSync(path.join(REPO_ROOT, 'skills', 'vzt-diagnose', 'SKILL.md'), 'utf8');
+  for (const phrase of ['CONFIRMED', 'REFUTED', 'INCONCLUSIVE', 'read-only', 'confirmed_idx']) {
+    assert.ok(skill.includes(phrase), `skills/vzt-diagnose/SKILL.md missing "${phrase}"`);
+  }
+  const route = fs.readFileSync(path.join(REPO_ROOT, 'skills', 'vzt-route', 'SKILL.md'), 'utf8');
+  assert.ok(route.includes('never for CORRECTNESS'), 'vzt-route missing the fan-out purpose rule');
+  assert.ok(route.includes('Rejected — do not re-propose'), 'vzt-route missing the recorded worktree/judge rejection');
+});
+
 test('worker agents enforce the collision boundary', () => {
   for (const agent of ['vzt-builder.md', 'vzt-mechanic.md', 'vzt-heavy-builder.md']) {
     const contents = fs.readFileSync(path.join(REPO_ROOT, 'agents', agent), 'utf8');
