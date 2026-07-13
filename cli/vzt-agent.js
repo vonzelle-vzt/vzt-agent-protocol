@@ -140,7 +140,7 @@ function install(args) {
   const settingsPath = wireSettings(dotClaude, { portable: !args.global });
 
   console.log(`  agents:   ${agents.length} installed (fable×2, opus×2, sonnet×1, haiku×2)`);
-  console.log(`  skills:   ${skills.length} files installed (/vzt-route /vzt-plan /vzt-fix /vzt-build /vzt-quick /vzt-fable-mode)`);
+  console.log(`  skills:   ${skills.length} files installed (/vzt-route /vzt-plan /vzt-fix /vzt-build /vzt-quick /vzt-fable-mode /vzt-diagnose)`);
   console.log(`  hooks:    ${hooks.length} installed (SessionStart chair-profile + UserPromptSubmit classifier)`);
   console.log(`  templates: ${templates.length} installed (worker-brief delegation contract)`);
   console.log(`  settings: wired ${settingsPath}`);
