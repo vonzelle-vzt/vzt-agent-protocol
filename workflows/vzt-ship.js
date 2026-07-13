@@ -16,7 +16,11 @@ export const meta = {
 // (Anthropic: "workflow scripts have no filesystem access.") Every disk read and
 // every shell command happens inside an agent(). The spec arrives via args; the
 // ledger lines are RETURNED, not written — the chair is the single writer.
-const spec = args && args.spec
+// `args` can arrive as a STRING rather than an object — the harness serializes it
+// on the way in. A script that assumes an object dies on line 1, before a single
+// agent is spawned, and the failure looks like a bad spec when it is a bad decode.
+const input = typeof args === 'string' ? JSON.parse(args) : args
+const spec = input && input.spec
 if (!spec || !Array.isArray(spec.units) || spec.units.length === 0) {
   throw new Error('vzt-ship requires args:{spec} — the parsed <!-- vzt-spec --> block from SPEC.md')
 }
@@ -36,6 +40,19 @@ for (const u of [spec.barrier, ...spec.units].filter(Boolean)) {
 const ROOT = spec.root
 const SPEC_PATH = `${spec.root}/.vzt/ship/${spec.slug}/SPEC.md`
 const MAX_ROUNDS = 2
+
+// Paths that were ALREADY dirty before this run started — the chair snapshots
+// `git status --porcelain` and passes them in. Without this, the verifier reads
+// every dirty path as something the worker wrote, and a repo with any
+// pre-existing untracked file produces a FALSE SCOPE_BREACH: it burns both
+// correction rounds punishing a worker that did nothing wrong, then BLOCKS a run
+// that was fine. A verifier that manufactures failures is worse than no verifier.
+const PREEXISTING = Array.isArray(spec.preexisting) ? spec.preexisting : []
+const ignoreLine = PREEXISTING.length
+  ? `\nPRE-EXISTING DIRT — these paths were already modified/untracked BEFORE this run began.
+You did NOT write them. They are NOT a scope breach. IGNORE them entirely:
+${PREEXISTING.map((p) => `  - ${p}`).join('\n')}`
+  : ''
 
 const GATES = `Run the five gates: scope before acting; EVIDENCE before reasoning (read the files —
 never reason about code you have not opened this session); attack your own approach once;
@@ -104,14 +121,18 @@ const verifyPrompt = (u) => `You are a VERIFIER. Write NOTHING. Do not fix anyth
 
 UNIT: ${u.id}
 
-1. cd ${ROOT} && git status --porcelain     → every path actually modified
+1. cd ${ROOT} && git status --porcelain     → every path currently dirty
 2. cd ${ROOT} && ${u.machineCheck}          → paste the output VERBATIM
 EXPECT: ${u.expect}
+${ignoreLine}
 
 Set verdict:
-  PASS          — the oracle met EXPECT *and* every modified path is inside FILES_IN_SCOPE:
+  PASS          — the oracle met EXPECT *and* every path this unit wrote is inside FILES_IN_SCOPE:
                   ${(u.filesInScope || []).join(', ')}
-  SCOPE_BREACH  — a modified path lies outside FILES_IN_SCOPE (list them in filesWritten)
+  SCOPE_BREACH  — a path THIS UNIT WROTE lies outside FILES_IN_SCOPE (list them in filesWritten).
+                  Do NOT report a breach for pre-existing dirt listed above, and do not report one
+                  for a path the oracle itself passed. If the oracle PASSED and the only extra dirty
+                  paths are pre-existing, the verdict is PASS.
   ORACLE_FAIL   — the check ran and did not meet EXPECT
   CANNOT_RUN    — the command could not execute (missing dep, no such script). Say so.
 

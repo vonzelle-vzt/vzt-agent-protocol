@@ -200,3 +200,32 @@ test('the hook-inlined reducer and ship-lib agree (drift guard)', () => {
     }
   }
 });
+
+// The harness can hand `args` to a workflow script as a STRING, not an object.
+// A script that assumes an object throws on line 1 — before a single agent is
+// spawned — and the error ("requires args:{spec}") blames the spec when the real
+// fault is the decode. Cost us two dead launches on the first real run.
+test('the workflow decodes args whether it arrives as an object OR a JSON string', () => {
+  const src = fs.readFileSync(WORKFLOW, 'utf8');
+  assert.match(src, /typeof args === 'string'/, 'vzt-ship.js must tolerate args arriving as a JSON string');
+  assert.match(src, /JSON\.parse\(args\)/, 'vzt-ship.js must JSON.parse a stringified args');
+  // And the decode must happen BEFORE the spec is read off it.
+  const decodeAt = src.indexOf('typeof args');
+  const specAt = src.indexOf('input && input.spec');
+  assert.ok(decodeAt > 0 && specAt > decodeAt, 'args must be decoded before spec is read');
+});
+
+// The first real /vzt-ship run BLOCKED its own barrier on a FALSE scope breach.
+// The verifier read `git status --porcelain` and treated every dirty path as
+// something the worker wrote — but the repo already had 3 untracked one-off
+// scripts, plus the .vzt/ spec dir the chair itself had just created. A correct
+// worker got punished through both correction rounds and the run aborted.
+// A verifier that manufactures failures is worse than no verifier.
+test('the verifier ignores pre-existing dirt (no false SCOPE_BREACH)', () => {
+  const src = fs.readFileSync(WORKFLOW, 'utf8');
+  assert.match(src, /spec\.preexisting/, 'workflow must accept a pre-existing-dirt baseline');
+  assert.match(src, /PRE-EXISTING DIRT/, 'the verifier prompt must tell the agent which paths it did NOT write');
+  assert.match(src, /NOT a scope breach/i, 'the verifier must be told pre-existing dirt is not a breach');
+  // and the ignore list must actually reach the verify prompt
+  assert.match(src, /\$\{ignoreLine\}/, 'ignoreLine must be interpolated into verifyPrompt');
+});
