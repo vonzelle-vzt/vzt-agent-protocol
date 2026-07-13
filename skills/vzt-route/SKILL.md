@@ -56,6 +56,69 @@ can do it well. This skill is the canonical decision procedure; the
   *discipline*, not model — runs the five gates on whichever tier is already
   active instead of forcing a tier switch.
 
+## Fan-out doctrine — the horizontal axis
+
+Everything above routes work *vertically* (which tier). This routes it
+*horizontally* (how many agents at once).
+
+**Fan-out is for DIVERGENCE and EVIDENCE — never for CORRECTNESS.** If the task
+has one right answer, build it once on Sonnet and review the seam on Opus. That
+is a sequential search with a *better* selection signal, because the reviewer
+reads the code in the real repo and can run it.
+
+Rules:
+
+- **N ≤ 4. Fan out on Sonnet/Haiku only — never Opus or Fable.** Fanning the
+  premium tiers multiplies the one budget that actually binds.
+- **Every fanned agent must carry a MACHINE_CHECK it can actually run in its own
+  environment.** If it can't run the check, don't fan out — you are
+  manufacturing unverifiable work at N× the cost.
+- **FILES_IN_SCOPE sets stay pairwise disjoint** (see above). No exceptions.
+- **Never fan out anything that mutates shared remote state** — databases,
+  deploys, migrations. Isolation of *files* is not isolation of *state*.
+- **No model judge over unrun diffs.** If an objective oracle exists, the judge
+  is a **command**, not a model. If none exists, don't fan out.
+
+The sanctioned pattern is **`/vzt-diagnose`**: read-only hypothesis fan-out for
+a hard bug. Read-only ⇒ empty FILES_IN_SCOPE ⇒ nothing collides ⇒ every agent
+runs in the real working tree and can actually execute its probe. Use it
+*before* escalating a bug to `/vzt-fix` (Fable).
+
+### Rejected — do not re-propose
+
+Evaluated **Orca** (`stablyai/orca`), whose headline is *"fan one prompt across
+five agents, each in its own isolated git worktree — compare the results and
+merge the winner."* We took the idea (run in parallel, gather evidence) and
+rejected the implementation:
+
+- **Git-worktree isolation for implementation fan-out.** A fresh worktree has no
+  `node_modules` and no `.env*` — both are gitignored in every real project. A
+  candidate in one **cannot typecheck, build, or run the app**; it can only
+  *claim* success. That kills the verification gate for every candidate.
+  Worktrees isolate files, **not** the shared database/deploy state where the
+  actual risk lives.
+- **Overlapping-scope fan-out** (N agents editing the same file). Requires
+  worktrees. Same blocker.
+- **Judge panels over candidate diffs.** Multiplies the binding constraint (the
+  premium-tier bucket) to buy taste-based selection on code nobody executed, in
+  order to save Sonnet — the bucket that is already separate and effectively
+  free on Max plans.
+- **Why it works for Orca and not for us:** Orca fans across *different vendors'*
+  agents (Codex / Claude / Cursor) — genuinely **uncorrelated** failure modes,
+  which is what makes "pick the winner" pay. Fanning N `vzt-builder`s is N draws
+  from **one model with one prior**: diversity of phrasing, not of understanding.
+
+## Parallel waves — the mechanism
+
+The pipeline below says "parallelize independent steps." Concretely: dispatch
+them as **multiple Agent calls in a single message** — they run concurrently.
+Serial dispatch is the default failure mode; it costs wall-clock, which is
+exactly what the Opus chair is protecting.
+
+A wave is legal when the steps' FILES_IN_SCOPE sets are pairwise disjoint.
+Verify they don't intersect before dispatching — two agents writing one file
+silently clobber each other and **neither reports a problem**.
+
 ## Standard pipeline for non-trivial features
 
 1. `vzt-planner` (Fable) → plan with step-routing table
@@ -77,6 +140,9 @@ a worker step to the orchestrator's own tier without a stated reason.
 ## Hard rules
 
 - Escalation ladder: two failures at a tier → up exactly one tier, stated aloud.
+  On a *bug*, run `/vzt-diagnose` before the rung that lands on Fable — cheap
+  parallel evidence first, frontier reasoning only once it is earned.
+- Fan out for divergence and evidence, never for correctness. Sonnet/Haiku only.
 - Fable turns ≤15% of the session. Never execute a routine plan on Fable/Opus.
 - Sonnet draws on its own separate weekly usage bucket on Max plans — routing
   execution there directly preserves the all-models bucket Fable/Opus burn.
