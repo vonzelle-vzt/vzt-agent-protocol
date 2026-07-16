@@ -136,6 +136,30 @@ rejected the implementation:
   which is what makes "pick the winner" pay. Fanning N `vzt-builder`s is N draws
   from **one model with one prior**: diversity of phrasing, not of understanding.
 
+### Accepted — Orca as the ship SUPERVISION layer (not fan-out)
+
+The rejection above is narrow: it kills Orca as a *fan-out/racing* mechanism. It
+does **not** reject Orca as a place to *watch* a `/vzt-ship` run whose units are
+already pairwise-disjoint (not a race — each unit owns different files and is graded
+by its own oracle). That use is accepted and wired via `orca/` in this package:
+
+- **Terminal stays the substrate; routing is untouched.** Orca runs `claude`, so the
+  `[VZT-ROUTE]` hooks, subagents, and skills inherit unchanged. Reserve Orca for
+  *parallel* ship runs; single-thread work stays in the plain terminal.
+- **Two execution paths, never both on one SPEC:** the headless `vzt-ship.js`
+  Workflow (background subagents), OR `vzt-agent ship-dispatch <SPEC>` → one
+  `orca worktree create --agent claude` per unit (Orca panes you supervise).
+- **The worktree objection is closed here** (it still stands for fan-out): each unit
+  pane runs `orca/worktree-bootstrap.sh` first, symlinking `node_modules`/`.env*`
+  from the primary checkout — so a supervised unit *can* build and run its oracle.
+- **`vzt-agent ship-supervise <SPEC>`** runs each unit's MACHINE_CHECK in its worktree
+  and records PASS/FAIL to the shared LEDGER (which resolves to the **primary
+  checkout**, so worktree writes are never lost or conflicted).
+- **Chair pane in the primary checkout; worker panes in worktrees.** Pick the model
+  each worker pane launches with — every pane is its own routed session.
+
+See `orca/README.md` for the full loop and the `orca` CLI verbs.
+
 ## Parallel waves — the mechanism
 
 The pipeline below says "parallelize independent steps." Concretely: dispatch

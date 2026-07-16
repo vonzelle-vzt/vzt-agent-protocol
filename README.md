@@ -190,6 +190,25 @@ reconstructs run state, and the `UserPromptSubmit` classifier hook re-injects
 a `[VZT-SHIP]` block on every prompt — compaction does not re-fire
 `SessionStart`, so the classifier is the only hook that survives it.
 
+### Optional: watch a run in Orca (`orca/`)
+
+`workflows/vzt-ship.js` is the headless path. When you'd rather **watch** the units
+work in parallel — live diffs, cards, PR checks — the same gated `SPEC` drives an
+Orca ([`stablyai/orca`](https://github.com/stablyai/orca)) supervised run instead:
+
+```
+vzt-agent ship-watch .vzt/ship/<slug>/SPEC.md
+```
+
+One command: dispatch every unit as an Orca `claude` worktree pane → wait for each to
+finish → auto-run its oracle, stamp its card, record the ledger → integration gate →
+stop at "ready to review + merge". Each pane is auto-bootstrapped
+(`orca/worktree-bootstrap.sh` symlinks `node_modules`/`.env*` from the primary
+checkout, so a worktree can actually build), and the ledger resolves to the **primary
+checkout** so parallel worker writes are never lost or conflicted. This is *not* the
+fan-out that `vzt-route` rejects — the units are pairwise-disjoint, not a race. Full
+guide: [`orca/README.md`](orca/README.md).
+
 ## Guardrails
 
 - **Escalation ladder** — two failures at a tier escalates exactly one tier
@@ -221,6 +240,11 @@ vzt-agent ship-check <SPEC.md>                  # gate a /vzt-ship spec — disj
 vzt-agent ship-start <SPEC.md>                  # open the run ledger for a gated spec
 vzt-agent ship-note  <SPEC.md> '<json>'         # append one ledger line
 vzt-agent ship-status [--target <dir>]          # reconstruct run state from disk (use after a compaction)
+
+# Orca supervision layer (optional — parallel /vzt-ship runs in Orca worktree panes)
+vzt-agent ship-watch    <SPEC.md> [--timeout-ms <n>]  # kick once: dispatch → wait → verify → gate
+vzt-agent ship-dispatch <SPEC.md> [--execute]         # one `orca worktree create --agent claude` per unit
+vzt-agent ship-supervise <SPEC.md>                    # verify each unit's oracle → shared ledger + Orca card
 ```
 
 Get the bare `vzt-agent` command with `npm install -g github:vonzelle-vzt/vzt-agent-protocol`,
@@ -325,9 +349,31 @@ a vibe.
 
 - [Chair profiles — Opus-first, Sonnet-first, Fable, Haiku](docs/CHAIR-PROFILES.md)
 - [Routing matrix + decision procedure](docs/ROUTING-MATRIX.md)
+- [Orca supervision layer — watch a /vzt-ship run in Orca](orca/README.md)
 - [CLAUDE.md snippet for manual installs](templates/CLAUDE-snippet.md)
 
 ## Release notes
+
+### 1.6.0 — Orca supervision layer
+
+- **Orca accepted as a `/vzt-ship` *supervision* layer** (not fan-out — that stays
+  rejected; these units are pairwise-disjoint, not a race). The terminal-native
+  protocol is unchanged; Orca just runs `claude`, so routing/hooks/subagents/skills
+  inherit as-is. Reserve Orca for parallel ship runs.
+- New CLI: **`ship-watch`** (kick once — dispatch every unit as an Orca `claude`
+  pane → wait for each → auto oracle + card + ledger → integration gate → stop at
+  "ready to review + merge"; never auto-merges), **`ship-dispatch`** (the commands,
+  dry-run or `--execute`), **`ship-supervise`** (verify each oracle → shared ledger
+  + Orca card). Installed to `~/.orca/vzt/` alongside `orca/worktree-bootstrap.sh`.
+- **`worktree-bootstrap.sh`** symlinks `node_modules`/`.env*` from the primary
+  checkout into each worktree — closing the "a worktree can't build" objection *for
+  the supervised case*.
+- **Ledger coherence fix:** `ship-note`/`ship-status` now resolve `LEDGER.jsonl` to
+  the **primary checkout** (`git worktree list` first entry). `.vzt/ship/` is
+  git-tracked, so worktrees used to fork their own ledger — worker writes were lost
+  and branches conflicted. Byte-identical in a plain checkout.
+- See [`orca/README.md`](orca/README.md) and `skills/vzt-route/SKILL.md` →
+  "Accepted — Orca as the ship SUPERVISION layer".
 
 ### 1.5.0 — long-horizon release
 

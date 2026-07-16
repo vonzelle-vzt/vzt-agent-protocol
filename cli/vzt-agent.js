@@ -15,6 +15,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import os from 'node:os';
+import { execFileSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { parseSpec, validateSpec, reduceLedger, nextAction, unitLine } from './ship-lib.mjs';
 
@@ -33,6 +34,7 @@ const TEMPLATES_DIR = path.join(PKG_ROOT, 'templates');
 // scriptPath that does not exist — and it fails AFTER the spec has been paid
 // for. The script and its install wiring ship together or not at all.
 const WORKFLOWS_DIR = path.join(PKG_ROOT, 'workflows');
+const ORCA_SRC_DIR = path.join(PKG_ROOT, 'orca');
 
 const HOOKS = [
   { event: 'UserPromptSubmit', basename: 'vzt-route-classifier.mjs', timeout: 10 },
@@ -49,6 +51,9 @@ function parseArgs(argv) {
     const a = argv[i];
     if (a === '--global' || a === '-g') args.global = true;
     else if (a === '--target') args.target = argv[++i];
+    else if (a === '--execute') args.execute = true;
+    else if (a === '--orca') args.orca = argv[++i];
+    else if (a === '--timeout-ms') args.timeoutMs = argv[++i];
     else args._.push(a);
   }
   return args;
@@ -134,6 +139,22 @@ function unwireSettings(dotClaude) {
   return changed;
 }
 
+/** Copy orca/ helper scripts to the fixed ~/.orca/vzt/ home, making .sh executable. */
+function installOrcaHelpers() {
+  if (!fs.existsSync(ORCA_SRC_DIR)) return [];
+  fs.mkdirSync(ORCA_VZT_DIR, { recursive: true });
+  const out = [];
+  for (const name of fs.readdirSync(ORCA_SRC_DIR)) {
+    const src = path.join(ORCA_SRC_DIR, name);
+    if (!fs.statSync(src).isFile()) continue;
+    const dest = path.join(ORCA_VZT_DIR, name);
+    fs.copyFileSync(src, dest);
+    if (name.endsWith('.sh')) fs.chmodSync(dest, 0o755);
+    out.push(name);
+  }
+  return out;
+}
+
 function install(args) {
   const dotClaude = claudeDir(args);
   console.log(`Installing VZT Agent Protocol → ${dotClaude}`);
@@ -143,6 +164,10 @@ function install(args) {
   const hooks = copyDirContents(HOOKS_DIR, path.join(dotClaude, 'hooks', 'vzt-router'));
   const templates = copyDirContents(TEMPLATES_DIR, path.join(dotClaude, 'templates'), { ext: '.md' });
   const workflows = copyDirContents(WORKFLOWS_DIR, path.join(dotClaude, 'workflows'), { ext: '.js' });
+  // Orca supervision helpers go to a FIXED home (~/.orca/vzt/), not .claude —
+  // ship-dispatch/ship-watch point each unit's prompt at this absolute path, and
+  // Orca worktree panes need it regardless of which project's .claude they inherit.
+  const orca = installOrcaHelpers();
   // Project installs (--target / cwd) get portable $CLAUDE_PROJECT_DIR paths so
   // a committed settings.json works for anyone who clones the repo; a global
   // install (~/.claude) uses the absolute path.
@@ -153,6 +178,7 @@ function install(args) {
   console.log(`  hooks:    ${hooks.length} installed (SessionStart chair-profile + UserPromptSubmit classifier)`);
   console.log(`  templates: ${templates.length} installed (worker-brief delegation contract, ship spec)`);
   console.log(`  workflows: ${workflows.length} installed (vzt-ship long-horizon orchestration)`);
+  console.log(`  orca:     ${orca.length} helper(s) → ${ORCA_VZT_DIR} (worktree-bootstrap for ship-dispatch/ship-watch)`);
   console.log(`  settings: wired ${settingsPath}`);
   console.log('\nDone. Restart Claude Code to activate.');
   console.log('Chair is up to you — the protocol adapts either way:');
@@ -301,9 +327,42 @@ function stats() {
 //
 // The ledger lives next to the spec, in-repo, so it shows up in git and cannot
 // be orphaned from the code it describes.
+//
+// WORKTREE COHERENCE (Orca supervision layer): when ship units run in isolated
+// git worktrees (one Orca pane per unit), `.vzt/ship/` is git-tracked, so every
+// worktree gets its OWN forked LEDGER on its own branch. A worker writing there is
+// invisible to the chair and branches merge-conflict on LEDGER.jsonl. So the ledger
+// ALWAYS resolves to the PRIMARY checkout — the single shared writer target — no
+// matter which worktree ship-note runs from. In a plain (non-worktree) checkout the
+// primary root IS the repo root, so this is byte-identical to the old behaviour.
+
+/** First entry of `git worktree list` is always the main checkout. null if not a repo. */
+function primaryCheckoutRoot(fromDir) {
+  try {
+    const out = execFileSync('git', ['worktree', 'list', '--porcelain'], {
+      cwd: fromDir,
+      encoding: 'utf8',
+      stdio: ['ignore', 'pipe', 'ignore'],
+    });
+    const first = out.split('\n').find((l) => l.startsWith('worktree '));
+    return first ? first.slice('worktree '.length).trim() : null;
+  } catch {
+    return null; // git missing or not a repo — caller falls back to spec-local
+  }
+}
 
 function ledgerPathFor(specPath) {
-  return path.join(path.dirname(path.resolve(specPath)), 'LEDGER.jsonl');
+  const specDir = path.dirname(path.resolve(specPath));
+  // If the spec sits under <root>/.vzt/ship/<slug>/, redirect the ledger to the
+  // PRIMARY checkout's copy of that same relative path. Otherwise (unusual layout,
+  // or no git) keep it next to the spec — backward compatible.
+  const m = /(^|[/\\])\.vzt[/\\]ship[/\\][^/\\]+$/.exec(specDir);
+  const primary = primaryCheckoutRoot(specDir);
+  if (m && primary) {
+    const slug = path.basename(specDir);
+    return path.join(primary, '.vzt', 'ship', slug, 'LEDGER.jsonl');
+  }
+  return path.join(specDir, 'LEDGER.jsonl');
 }
 
 function loadSpec(specPath) {
@@ -386,9 +445,12 @@ function shipNote(args) {
   console.log(`✅ appended ${entry.kind || 'entry'} → ${ledger}`);
 }
 
-/** Find the newest ledger under <cwd>/.vzt/ship/ * /LEDGER.jsonl */
+/** Find the newest ledger under <cwd>/.vzt/ship/ * /LEDGER.jsonl.
+ *  Resolves to the PRIMARY checkout first, so `ship-status` from inside an Orca
+ *  worktree pane sees the one shared run, not that worktree's forked copy. */
 function findLedgers(cwd) {
-  const base = path.join(cwd, '.vzt', 'ship');
+  const root = primaryCheckoutRoot(cwd) || cwd;
+  const base = path.join(root, '.vzt', 'ship');
   if (!fs.existsSync(base)) return [];
   const out = [];
   for (const slug of fs.readdirSync(base)) {
@@ -427,6 +489,268 @@ function matrix() {
   else console.log('docs/ROUTING-MATRIX.md not found');
 }
 
+// ——— /vzt-ship: Orca supervision — dispatch units as worktree panes ————————
+//
+// Turns a gated SPEC into one `orca worktree create --agent claude` per unit, each
+// carrying the unit's worker brief, its FILES_IN_SCOPE collision boundary, and its
+// MACHINE_CHECK. --setup run fires the repo's worktree-bootstrap so node_modules/.env
+// are linked before the agent starts. This is the SUPERVISED path (Orca panes you
+// watch); the headless path stays the vzt-ship.js Workflow. Never run BOTH on one SPEC.
+//
+// Default prints the commands (review before spending). --execute runs them via the
+// orca CLI. The barrier runs FIRST and alone — its oracle grades every unit — so we
+// separate it into phase 1 and gate phase 2 behind it.
+
+const DEFAULT_ORCA = '/Applications/Orca.app/Contents/Resources/bin/orca';
+// Where `vzt-agent install` places the Orca helper scripts (see install()).
+const ORCA_VZT_DIR = path.join(os.homedir(), '.orca', 'vzt');
+const BOOTSTRAP = path.join(ORCA_VZT_DIR, 'worktree-bootstrap.sh');
+
+function unitPrompt(spec, u) {
+  const files = (u.filesInScope || []).map((f) => `    - ${f}`).join('\n');
+  return [
+    `[VZT ship unit ${u.id}] ${u.title || ''}`.trim(),
+    '',
+    `STEP 0 (run this FIRST, before anything else): \`sh ${BOOTSTRAP}\``,
+    'It symlinks node_modules and .env* from the primary checkout into this worktree so',
+    'your build and MACHINE_CHECK work. A fresh worktree has neither. Skip nothing.',
+    '',
+    u.brief,
+    '',
+    'FILES_IN_SCOPE — touch ONLY these; they are your collision boundary:',
+    files,
+    '',
+    `This unit is DONE only when this command passes:  ${u.machineCheck}`,
+    `Expected:  ${u.expect}`,
+    '',
+    'Work under VZT fable-mode discipline (scope → evidence → attack → verify → report).',
+    'Do not edit, create, or delete any file outside FILES_IN_SCOPE. When finished, run the',
+    'MACHINE_CHECK yourself and report its exact output.',
+  ].join('\n');
+}
+
+function orcaArgvFor(spec, u) {
+  return [
+    'worktree', 'create',
+    '--repo', `path:${spec.root}`,
+    '--name', `${spec.slug}-${u.id}`,
+    '--no-parent',
+    '--agent', 'claude',
+    '--setup', 'run',
+    '--prompt', unitPrompt(spec, u),
+    '--json',
+  ];
+}
+
+/** POSIX single-quote an argument for safe copy-paste of the printed command. */
+function shq(s) {
+  return `'${String(s).replace(/'/g, `'\\''`)}'`;
+}
+
+function shipDispatch(args) {
+  const specPath = args._[1];
+  const spec = loadSpec(specPath);
+  const errs = validateSpec(spec);
+  if (errs.length) {
+    console.error('❌ refusing to dispatch: SPEC does not pass ship-check. Run `vzt-agent ship-check` first.');
+    process.exit(1);
+  }
+  const ORCA = args.orca || process.env.ORCA_CLI || DEFAULT_ORCA;
+  const phases = [];
+  if (spec.barrier) phases.push({ label: 'PHASE 1 — barrier (run FIRST, alone; its oracle grades every unit)', units: [spec.barrier] });
+  phases.push({ label: `PHASE ${spec.barrier ? 2 : 1} — units (parallel; pairwise-disjoint scopes)`, units: spec.units });
+
+  console.log(`# ship-dispatch: ${spec.slug} — ${spec.title}`);
+  console.log(`# root: ${spec.root}`);
+  console.log(`# ${args.execute ? 'EXECUTING via' : 'DRY RUN (add --execute to run) via'} ${ORCA}`);
+  if (spec.barrier) console.log('# NOTE: wait for the barrier oracle to pass before dispatching the units.');
+
+  for (const phase of phases) {
+    console.log(`\n## ${phase.label}`);
+    for (const u of phase.units) {
+      const argv = orcaArgvFor(spec, u);
+      if (args.execute) {
+        console.log(`\n→ creating worktree for ${u.id} …`);
+        try {
+          const out = execFileSync(ORCA, argv, { encoding: 'utf8' });
+          console.log(out.trim());
+        } catch (e) {
+          console.error(`❌ ${u.id}: orca worktree create failed — ${e.message}`);
+        }
+      } else {
+        console.log(`\n# ${u.id}: verified by  ${u.machineCheck}`);
+        console.log(`${shq(ORCA)} ${argv.map(shq).join(' ')}`);
+      }
+    }
+  }
+  console.log(`\n## after workers finish — verify each unit's oracle (Workflow C):`);
+  console.log(`#   vzt-agent ship-supervise ${specPath}   (or run each unit's MACHINE_CHECK in its worktree)`);
+  console.log(`# integration gate: ${spec.integration && spec.integration.machineCheck ? spec.integration.machineCheck : '(none declared)'}`);
+}
+
+// ——— /vzt-ship: Orca supervision — verify each unit's oracle on finish ————————
+//
+// The automated "verify worker artifacts before accepting the report" reaction. For
+// each unit it resolves the unit's Orca worktree (by name), runs that unit's
+// MACHINE_CHECK inside it, records PASS/FAIL to the SHARED ledger (ship-note, which
+// resolves to the primary checkout), and — when Orca is live — stamps the worktree
+// card. Oracles are self-contained (`cd <root> && …`), so this also works without a
+// live Orca: it falls back to running the check as written and recording the verdict.
+
+/** Resolve an Orca-managed worktree path by its --name. null when Orca is not live. */
+function resolveWorktreePath(ORCA, name) {
+  try {
+    const out = execFileSync(ORCA, ['worktree', 'list', '--json'], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] });
+    const data = JSON.parse(out);
+    // The orca CLI wraps every response in a {id, ok, result} envelope.
+    const root = data && data.result ? data.result : data;
+    const list = Array.isArray(root) ? root : root.worktrees || [];
+    const hit = list.find((w) => w.name === name || w.displayName === name);
+    return hit ? hit.path || (hit.id && hit.id.split('::')[1]) || null : null;
+  } catch {
+    return null; // Orca not running / older CLI — fall back to the primary checkout
+  }
+}
+
+/** Run a self-contained oracle command; return {pass, code, output}. */
+function runOracle(machineCheck, cwd) {
+  try {
+    const output = execFileSync('sh', ['-c', machineCheck], { cwd, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] });
+    return { pass: true, code: 0, output: output.trim().slice(-500) };
+  } catch (e) {
+    return { pass: false, code: e.status ?? 1, output: `${e.stdout || ''}${e.stderr || ''}`.trim().slice(-500) };
+  }
+}
+
+/**
+ * Verify ONE unit and record everywhere: run its oracle in its worktree, append the
+ * verdict to the SHARED ledger, and stamp the Orca card. Shared by ship-supervise
+ * (batch) and ship-watch (as each worker finishes). `wtPath` may be pre-resolved by
+ * the caller; otherwise it's looked up. Returns true on PASS.
+ */
+function verifyAndRecord(ORCA, spec, u, specPath, wtPath, via) {
+  const wt = wtPath || resolveWorktreePath(ORCA, `${spec.slug}-${u.id}`);
+  const r = runOracle(u.machineCheck, wt || spec.root);
+  const status = r.pass ? 'PASS' : 'FAIL';
+  console.log(`  ${u.id} … ${status}${wt ? '' : '  (no live worktree — ran against primary)'}`);
+  try {
+    execFileSync(process.execPath, [fileURLToPath(import.meta.url), 'ship-note', specPath,
+      JSON.stringify({ kind: 'unit_result', unit: u.id, status, via, code: r.code })],
+      { stdio: ['ignore', 'ignore', 'ignore'] });
+  } catch { /* best-effort */ }
+  if (wt) {
+    try {
+      execFileSync(ORCA, ['worktree', 'set', '--worktree', `name:${spec.slug}-${u.id}`,
+        '--comment', `oracle: ${status}`, '--workspace-status', r.pass ? 'in-review' : 'in-progress', '--json'],
+        { stdio: ['ignore', 'ignore', 'ignore'] });
+    } catch { /* Orca not live / older CLI */ }
+  }
+  return r.pass;
+}
+
+function runIntegrationGate(spec) {
+  const check = spec.integration && spec.integration.machineCheck;
+  if (!check) { console.log('\nintegration gate: (none declared)'); return true; }
+  process.stdout.write('\nintegration gate … ');
+  const r = runOracle(check, spec.root);
+  console.log(r.pass ? 'PASS ✅ — units verified and integrated; ready for your review + merge.' : 'FAIL ❌');
+  if (!r.pass && r.output) console.log(r.output.split('\n').map((l) => `    ${l}`).join('\n'));
+  return r.pass;
+}
+
+function shipSupervise(args) {
+  const specPath = args._[1];
+  const spec = loadSpec(specPath);
+  const errs = validateSpec(spec);
+  if (errs.length) {
+    console.error('❌ refusing to supervise: SPEC does not pass ship-check.');
+    process.exit(1);
+  }
+  const ORCA = args.orca || process.env.ORCA_CLI || DEFAULT_ORCA;
+  const units = [spec.barrier, ...spec.units].filter(Boolean);
+  let passed = 0;
+  for (const u of units) if (verifyAndRecord(ORCA, spec, u, specPath, null, 'ship-supervise')) passed++;
+  console.log(`\n${passed}/${units.length} unit oracle(s) PASS. Verdicts appended to the shared LEDGER.`);
+  console.log(`next: run the integration gate → ${spec.integration && spec.integration.machineCheck ? spec.integration.machineCheck : '(none declared)'}`);
+  if (passed < units.length) process.exitCode = 1;
+}
+
+// ——— /vzt-ship: Orca ship-watch — ONE command, kick once and walk away ————————
+//
+// The full automatic loop: dispatch every unit as an Orca claude pane, wait for each
+// to finish (tui-idle), auto-run its oracle + stamp its card + record the ledger the
+// instant it's done, then run the integration gate. The barrier (if any) runs FIRST
+// and gates the units. Stops at the green gate with a "ready to review + merge"
+// verdict — it never auto-merges (verify-before-accept stays a human call).
+
+/** Run an orca command with --json and return the unwrapped `result`. Throws on failure. */
+function orcaJson(ORCA, argv) {
+  const out = execFileSync(ORCA, [...argv, '--json'], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] });
+  const d = JSON.parse(out);
+  return d && d.result ? d.result : d;
+}
+
+function dispatchOne(ORCA, spec, u) {
+  const res = orcaJson(ORCA, ['worktree', 'create', '--repo', `path:${spec.root}`,
+    '--name', `${spec.slug}-${u.id}`, '--no-parent', '--agent', 'claude', '--setup', 'run',
+    '--prompt', unitPrompt(spec, u)]);
+  const wt = res.worktree || res;
+  const handle = res.agentTerminalHandle || (res.startupTerminal && res.startupTerminal.handle)
+    || (wt.startupTerminal && wt.startupTerminal.handle) || null;
+  const wtPath = wt.path || (wt.id && String(wt.id).split('::')[1]) || null;
+  console.log(`  dispatched ${u.id} → ${wtPath || '(worktree)'}${handle ? '' : '  (no agent handle — will resolve on verify)'}`);
+  return { u, wtPath, handle };
+}
+
+function waitIdle(ORCA, handle, timeoutMs) {
+  if (!handle) return;
+  try {
+    execFileSync(ORCA, ['terminal', 'wait', '--terminal', handle, '--for', 'tui-idle',
+      '--timeout-ms', String(timeoutMs), '--json'], { stdio: ['ignore', 'ignore', 'ignore'] });
+  } catch { /* timed out or handle stale — verify anyway */ }
+}
+
+function shipWatch(args) {
+  const specPath = args._[1];
+  const spec = loadSpec(specPath);
+  const errs = validateSpec(spec);
+  if (errs.length) {
+    console.error('❌ refusing to watch: SPEC does not pass ship-check. Run `vzt-agent ship-check` first.');
+    process.exit(1);
+  }
+  const ORCA = args.orca || process.env.ORCA_CLI || DEFAULT_ORCA;
+  const timeoutMs = args.timeoutMs ? Number(args.timeoutMs) : 30 * 60 * 1000;
+  console.log(`ship-watch: ${spec.slug} — dispatch → wait → verify → integration gate (timeout ${Math.round(timeoutMs / 60000)}m/unit)`);
+
+  // Open the ledger.
+  try { execFileSync(process.execPath, [fileURLToPath(import.meta.url), 'ship-start', specPath], { stdio: ['ignore', 'ignore', 'ignore'] }); } catch {}
+
+  // Phase 1 — barrier gates everything.
+  if (spec.barrier) {
+    console.log('\n## barrier (runs first; its oracle grades every unit)');
+    const b = dispatchOne(ORCA, spec, spec.barrier);
+    waitIdle(ORCA, b.handle, timeoutMs);
+    if (!verifyAndRecord(ORCA, spec, spec.barrier, specPath, b.wtPath, 'ship-watch')) {
+      console.error('\n❌ barrier oracle FAILED — aborting before dispatching units. Fix the barrier worktree, then re-run.');
+      process.exit(1);
+    }
+  }
+
+  // Phase 2 — units in parallel; verify each as it idles.
+  console.log('\n## units (parallel)');
+  const workers = spec.units.map((u) => dispatchOne(ORCA, spec, u));
+  console.log('\n## verifying as each finishes …');
+  let passed = 0;
+  for (const w of workers) {
+    waitIdle(ORCA, w.handle, timeoutMs); // by the time earlier ones idle, later ones often already have
+    if (verifyAndRecord(ORCA, spec, w.u, specPath, w.wtPath, 'ship-watch')) passed++;
+  }
+
+  console.log(`\n${passed}/${workers.length} unit oracle(s) PASS.`);
+  const gateOk = passed === workers.length ? runIntegrationGate(spec) : (console.log('\nintegration gate skipped — not all units passed.'), false);
+  if (!gateOk) process.exitCode = 1;
+}
+
 const args = parseArgs(process.argv.slice(2));
 const cmd = args._[0] || 'help';
 switch (cmd) {
@@ -457,6 +781,15 @@ switch (cmd) {
   case 'ship-status':
     shipStatus(args);
     break;
+  case 'ship-dispatch':
+    shipDispatch(args);
+    break;
+  case 'ship-supervise':
+    shipSupervise(args);
+    break;
+  case 'ship-watch':
+    shipWatch(args);
+    break;
   default:
     console.log(`vzt-agent — VZT Agent Protocol CLI
 
@@ -472,5 +805,17 @@ Long-horizon runs (/vzt-ship):
   vzt-agent ship-start <SPEC.md>          open the run ledger
   vzt-agent ship-note  <SPEC.md> '<json>' append one ledger line
   vzt-agent ship-status [--target <dir>]  reconstruct run state from disk (use after a compaction)
+
+Orca supervision layer (parallel /vzt-ship runs in Orca worktree panes):
+  vzt-agent ship-dispatch <SPEC.md> [--execute] [--orca <path>]
+                                          one \`orca worktree create --agent claude\` per unit
+                                          (dry-run prints the commands; --execute runs them)
+  vzt-agent ship-supervise <SPEC.md> [--orca <path>]
+                                          run each unit's MACHINE_CHECK in its worktree,
+                                          record PASS/FAIL to the shared ledger + Orca card
+  vzt-agent ship-watch <SPEC.md> [--orca <path>] [--timeout-ms <n>]
+                                          KICK ONCE, WALK AWAY: dispatch every unit → wait
+                                          for each to finish → auto-verify + stamp + ledger →
+                                          integration gate. Stops at "ready to review + merge".
 `);
 }
