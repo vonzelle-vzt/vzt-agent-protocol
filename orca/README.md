@@ -1,26 +1,43 @@
-# VZT × Orca — the ship supervision layer
+# VZT × agent multiplexers — the ship supervision layer
 
-Orca (`stablyai/orca`) is an Agent Development Environment: a fleet of coding agents
-in parallel across isolated git worktrees, with per-worktree diffs, cards, and PR
-checks. This directory wires Orca as the **supervision layer for `/vzt-ship` runs** —
-watch N units work in parallel worktrees, each auto-verified — **without** changing
-the terminal-native protocol (routing, hooks, subagents, skills all inherit unchanged
-because Orca just runs `claude`).
+Wires an **agent multiplexer** as the **supervision layer for `/vzt-ship` runs** — watch
+N units work in parallel git worktrees, each auto-verified — **without** changing the
+terminal-native protocol (routing, hooks, subagents, skills all inherit unchanged because
+the mux just runs `claude`). Two backends, one interface, pick with `--mux`:
 
-**Not fan-out.** `vzt-route` rejects Orca as a *racing* mechanism and that still holds.
-This is the opposite: pairwise-disjoint units (each owns different files, graded by its
-own oracle), which is what `/vzt-ship` already produces. See `skills/vzt-route/SKILL.md`
-→ "Accepted — Orca as the ship SUPERVISION layer".
+| `--mux` | tool | what it is |
+|---|---|---|
+| `orca` (default) | [`stablyai/orca`](https://github.com/stablyai/orca) | desktop ADE — per-worktree diffs, cards, PR checks |
+| `herdr` | [`herdr`](https://herdr.dev) | terminal-native agent multiplexer — persistent, SSH/mobile, a binary not an app |
+
+Both manage git worktrees + panes and report agent state; the VZT commands drive either
+through one 5-method backend (dispatch / waitIdle / resolve / stamp / plan in `cli/vzt-agent.js`).
+
+**Not fan-out.** `vzt-route` rejects these tools as a *racing* mechanism and that still
+holds. This is the opposite: pairwise-disjoint units (each owns different files, graded by
+its own oracle), which is what `/vzt-ship` already produces. See `skills/vzt-route/SKILL.md`
+→ "Accepted — the ship SUPERVISION layer".
+
+## Herdr prerequisites (one-time)
+
+```
+brew install herdr                    # or: curl -fsSL https://herdr.dev/install.sh | sh
+brew services start herdr             # the socket API needs the server running
+herdr integration install claude      # so claude reports idle/working/blocked → `agent wait`
+```
+Orca needs its desktop app running (its daemon exposes the same socket API). Everything
+below works with `--mux herdr` or `--mux orca` (default).
 
 ## One command — kick once, walk away
 
 ```
-vzt-agent ship-check .vzt/ship/<slug>/SPEC.md   # gate first (unchanged)
-vzt-agent ship-watch .vzt/ship/<slug>/SPEC.md   # then this does everything:
+vzt-agent ship-check .vzt/ship/<slug>/SPEC.md              # gate first (unchanged)
+vzt-agent ship-watch .vzt/ship/<slug>/SPEC.md              # everything, on orca (default)
+vzt-agent ship-watch .vzt/ship/<slug>/SPEC.md --mux herdr  # …or on herdr
 ```
 
-`ship-watch` **dispatches** every unit as an Orca `claude` pane → **waits** for each to
-finish (`terminal wait --for tui-idle`) → the instant one idles, **auto-verifies** its
+`ship-watch` **dispatches** every unit as a `claude` worktree pane → **waits** for each to
+finish (agent idle) → the instant one idles, **auto-verifies** its
 oracle, **stamps** its card, and **records** the ledger → runs the **integration gate**.
 The barrier (if any) runs first and gates the units. It **stops at the green gate** with
 a "ready to review + merge" verdict — it never auto-merges (verify-before-accept stays a

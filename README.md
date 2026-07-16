@@ -190,24 +190,26 @@ reconstructs run state, and the `UserPromptSubmit` classifier hook re-injects
 a `[VZT-SHIP]` block on every prompt — compaction does not re-fire
 `SessionStart`, so the classifier is the only hook that survives it.
 
-### Optional: watch a run in Orca (`orca/`)
+### Optional: watch a run in an agent multiplexer (`orca/`)
 
 `workflows/vzt-ship.js` is the headless path. When you'd rather **watch** the units
-work in parallel — live diffs, cards, PR checks — the same gated `SPEC` drives an
-Orca ([`stablyai/orca`](https://github.com/stablyai/orca)) supervised run instead:
+work in parallel — live panes, diffs, agent state — the same gated `SPEC` drives a
+**supervised** run in an agent multiplexer. Two backends behind one `--mux` flag:
+[`orca`](https://github.com/stablyai/orca) (desktop ADE, default) or
+[`herdr`](https://herdr.dev) (terminal-native, persistent over SSH/mobile):
 
 ```
-vzt-agent ship-watch .vzt/ship/<slug>/SPEC.md
+vzt-agent ship-watch .vzt/ship/<slug>/SPEC.md              # orca (default)
+vzt-agent ship-watch .vzt/ship/<slug>/SPEC.md --mux herdr  # herdr
 ```
 
-One command: dispatch every unit as an Orca `claude` worktree pane → wait for each to
-finish → auto-run its oracle, stamp its card, record the ledger → integration gate →
-stop at "ready to review + merge". Each pane is auto-bootstrapped
-(`orca/worktree-bootstrap.sh` symlinks `node_modules`/`.env*` from the primary
-checkout, so a worktree can actually build), and the ledger resolves to the **primary
-checkout** so parallel worker writes are never lost or conflicted. This is *not* the
-fan-out that `vzt-route` rejects — the units are pairwise-disjoint, not a race. Full
-guide: [`orca/README.md`](orca/README.md).
+One command: dispatch every unit as a `claude` worktree pane → wait for each to finish
+→ auto-run its oracle, stamp its card, record the ledger → integration gate → stop at
+"ready to review + merge". Each pane is auto-bootstrapped (`orca/worktree-bootstrap.sh`
+symlinks `node_modules`/`.env*` from the primary checkout, so a worktree can actually
+build), and the ledger resolves to the **primary checkout** so parallel worker writes
+are never lost or conflicted. This is *not* the fan-out that `vzt-route` rejects — the
+units are pairwise-disjoint, not a race. Full guide: [`orca/README.md`](orca/README.md).
 
 ## Guardrails
 
@@ -241,10 +243,11 @@ vzt-agent ship-start <SPEC.md>                  # open the run ledger for a gate
 vzt-agent ship-note  <SPEC.md> '<json>'         # append one ledger line
 vzt-agent ship-status [--target <dir>]          # reconstruct run state from disk (use after a compaction)
 
-# Orca supervision layer (optional — parallel /vzt-ship runs in Orca worktree panes)
-vzt-agent ship-watch    <SPEC.md> [--timeout-ms <n>]  # kick once: dispatch → wait → verify → gate
-vzt-agent ship-dispatch <SPEC.md> [--execute]         # one `orca worktree create --agent claude` per unit
-vzt-agent ship-supervise <SPEC.md>                    # verify each unit's oracle → shared ledger + Orca card
+# Supervision layer (optional — parallel /vzt-ship runs in an agent multiplexer)
+#   --mux orca (default) | herdr
+vzt-agent ship-watch    <SPEC.md> [--mux orca|herdr] [--timeout-ms <n>]  # kick once: dispatch → wait → verify → gate
+vzt-agent ship-dispatch <SPEC.md> [--mux orca|herdr] [--execute]        # one worktree+claude per unit
+vzt-agent ship-supervise <SPEC.md> [--mux orca|herdr]                   # verify each oracle → shared ledger + mux card
 ```
 
 Get the bare `vzt-agent` command with `npm install -g github:vonzelle-vzt/vzt-agent-protocol`,
@@ -353,6 +356,21 @@ a vibe.
 - [CLAUDE.md snippet for manual installs](templates/CLAUDE-snippet.md)
 
 ## Release notes
+
+### 1.7.0 — Herdr backend (agent-multiplexer supervision, `--mux`)
+
+- The supervision layer is now **multiplexer-agnostic** via `--mux orca|herdr`
+  (default `orca`). Added **Herdr** ([herdr.dev](https://herdr.dev)) — a
+  terminal-native agent multiplexer (a binary, persistent over SSH/mobile) — as a
+  second backend. `ship-watch`/`ship-dispatch`/`ship-supervise` all take `--mux`.
+- Refactored the Orca-specific code into a **5-method backend interface**
+  (dispatch / waitIdle / resolve / stamp / plan). The Orca path is unchanged;
+  `worktree-bootstrap.sh` and the primary-checkout ledger resolution are already
+  mux-agnostic.
+- Herdr prerequisites (one-time): `brew install herdr`, `brew services start herdr`,
+  `herdr integration install claude` (so claude reports state → `herdr agent wait`).
+  Verified live: worktree resolution, oracle-in-worktree, and workspace-label
+  stamping (`orca` card / `herdr workspace` label). 68/68 tests green.
 
 ### 1.6.0 — Orca supervision layer
 

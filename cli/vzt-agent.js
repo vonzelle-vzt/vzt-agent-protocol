@@ -53,6 +53,8 @@ function parseArgs(argv) {
     else if (a === '--target') args.target = argv[++i];
     else if (a === '--execute') args.execute = true;
     else if (a === '--orca') args.orca = argv[++i];
+    else if (a === '--herdr') args.herdr = argv[++i];
+    else if (a === '--mux') args.mux = argv[++i];
     else if (a === '--timeout-ms') args.timeoutMs = argv[++i];
     else args._.push(a);
   }
@@ -502,7 +504,8 @@ function matrix() {
 // separate it into phase 1 and gate phase 2 behind it.
 
 const DEFAULT_ORCA = '/Applications/Orca.app/Contents/Resources/bin/orca';
-// Where `vzt-agent install` places the Orca helper scripts (see install()).
+const DEFAULT_HERDR = 'herdr'; // on PATH via Homebrew (agent multiplexer, terminal-native)
+// Where `vzt-agent install` places the helper scripts (see install()).
 const ORCA_VZT_DIR = path.join(os.homedir(), '.orca', 'vzt');
 const BOOTSTRAP = path.join(ORCA_VZT_DIR, 'worktree-bootstrap.sh');
 
@@ -529,22 +532,114 @@ function unitPrompt(spec, u) {
   ].join('\n');
 }
 
-function orcaArgvFor(spec, u) {
-  return [
-    'worktree', 'create',
-    '--repo', `path:${spec.root}`,
-    '--name', `${spec.slug}-${u.id}`,
-    '--no-parent',
-    '--agent', 'claude',
-    '--setup', 'run',
-    '--prompt', unitPrompt(spec, u),
-    '--json',
-  ];
-}
-
 /** POSIX single-quote an argument for safe copy-paste of the printed command. */
 function shq(s) {
   return `'${String(s).replace(/'/g, `'\\''`)}'`;
+}
+
+// ——— mux backends — Orca and Herdr behind ONE 5-method interface ————————————
+//
+// Both are agent multiplexers that manage git worktrees + panes. A backend exposes:
+//   plan(spec,u)    → [shell lines]        for `ship-dispatch` dry-run (copy-paste)
+//   dispatch(spec,u)→ {path, ws, handle}   create the worktree + launch claude w/ the brief
+//   waitIdle(handle)                        block until that agent goes idle
+//   resolve(spec,u) → {path, ws}|null      find an already-created unit worktree
+//   stamp(spec,u,info,status,pass)          write the visible PASS/FAIL onto the card/workspace
+// Every mux CLI wraps responses in an envelope; unwrap `.result` (a live bug taught us this).
+// Unit → worktree key: Orca `--name <slug>-<id>`, Herdr `--branch <slug>-<id>`.
+
+function envJson(bin, argv) {
+  const out = execFileSync(bin, argv, { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] });
+  const d = JSON.parse(out);
+  return d && d.result ? d.result : d;
+}
+
+function orcaBackend(args) {
+  const bin = args.orca || process.env.ORCA_CLI || DEFAULT_ORCA;
+  const key = (spec, u) => `${spec.slug}-${u.id}`;
+  const createArgv = (spec, u) => ['worktree', 'create', '--repo', `path:${spec.root}`,
+    '--name', key(spec, u), '--no-parent', '--agent', 'claude', '--setup', 'run',
+    '--prompt', unitPrompt(spec, u), '--json'];
+  return {
+    name: 'orca', bin,
+    plan(spec, u) { return [`${shq(bin)} ${createArgv(spec, u).map(shq).join(' ')}`]; },
+    dispatch(spec, u) {
+      const res = envJson(bin, createArgv(spec, u));
+      const wt = res.worktree || res;
+      const handle = res.agentTerminalHandle || res.startupTerminal?.handle || wt.startupTerminal?.handle || null;
+      const wpath = wt.path || (wt.id && String(wt.id).split('::')[1]) || null;
+      return { path: wpath, ws: key(spec, u), handle };
+    },
+    waitIdle(handle, t) {
+      if (!handle) return;
+      try { execFileSync(bin, ['terminal', 'wait', '--terminal', handle, '--for', 'tui-idle', '--timeout-ms', String(t), '--json'], { stdio: ['ignore', 'ignore', 'ignore'] }); } catch { /* timed out/stale — verify anyway */ }
+    },
+    resolve(spec, u) {
+      try {
+        const r = envJson(bin, ['worktree', 'list', '--json']);
+        const list = Array.isArray(r) ? r : r.worktrees || [];
+        const n = key(spec, u);
+        const hit = list.find((w) => w.name === n || w.displayName === n);
+        return hit ? { path: hit.path || (hit.id && String(hit.id).split('::')[1]) || null, ws: n } : null;
+      } catch { return null; }
+    },
+    stamp(spec, u, info, status, pass) {
+      try { execFileSync(bin, ['worktree', 'set', '--worktree', `name:${info.ws}`, '--comment', `oracle: ${status}`, '--workspace-status', pass ? 'in-review' : 'in-progress', '--json'], { stdio: ['ignore', 'ignore', 'ignore'] }); } catch { /* not live */ }
+    },
+  };
+}
+
+function herdrBackend(args) {
+  const bin = args.herdr || process.env.HERDR_CLI || DEFAULT_HERDR;
+  const branch = (spec, u) => `${spec.slug}-${u.id}`;
+  return {
+    name: 'herdr', bin,
+    plan(spec, u) {
+      const b = branch(spec, u);
+      return [
+        `${shq(bin)} worktree create --cwd ${shq(spec.root)} --branch ${shq(b)} --label ${shq(b)} --no-focus --json`,
+        `${shq(bin)} agent start claude --workspace <WS> --cwd <WT_PATH> --no-focus -- claude ${shq(unitPrompt(spec, u))}`,
+      ];
+    },
+    dispatch(spec, u) {
+      const b = branch(spec, u);
+      const wt = envJson(bin, ['worktree', 'create', '--cwd', spec.root, '--branch', b, '--label', b, '--no-focus', '--json']);
+      const ws = wt.workspace?.workspace_id || wt.worktree?.open_workspace_id || null;
+      const wpath = wt.worktree?.path || wt.workspace?.worktree?.checkout_path || null;
+      let handle = null;
+      if (ws && wpath) {
+        try {
+          const ag = envJson(bin, ['agent', 'start', 'claude', '--workspace', ws, '--cwd', wpath, '--no-focus', '--', 'claude', unitPrompt(spec, u)]);
+          handle = ag.agent?.pane_id || null;
+        } catch (e) { console.error(`  ${u.id}: herdr agent start failed — ${e.message}`); }
+      }
+      return { path: wpath, ws, handle };
+    },
+    waitIdle(handle, t) {
+      if (!handle) return;
+      try { execFileSync(bin, ['agent', 'wait', handle, '--status', 'idle', '--timeout', String(t)], { stdio: ['ignore', 'ignore', 'ignore'] }); } catch { /* timed out/stale — verify anyway */ }
+    },
+    resolve(spec, u) {
+      try {
+        const r = envJson(bin, ['worktree', 'list', '--cwd', spec.root, '--json']);
+        const b = branch(spec, u);
+        const hit = (r.worktrees || []).find((w) => w.branch === b);
+        return hit ? { path: hit.path, ws: hit.open_workspace_id } : null;
+      } catch { return null; }
+    },
+    stamp(spec, u, info, status /* , pass */) {
+      if (!info.ws) return;
+      try { execFileSync(bin, ['workspace', 'rename', info.ws, `${branch(spec, u)} oracle:${status}`], { stdio: ['ignore', 'ignore', 'ignore'] }); } catch { /* not live */ }
+    },
+  };
+}
+
+function getBackend(args) {
+  const name = (args.mux || process.env.VZT_MUX || 'orca').toLowerCase();
+  if (name === 'herdr') return herdrBackend(args);
+  if (name === 'orca') return orcaBackend(args);
+  console.error(`unknown --mux "${name}" (use: orca | herdr)`);
+  process.exit(2);
 }
 
 function shipDispatch(args) {
@@ -555,31 +650,30 @@ function shipDispatch(args) {
     console.error('❌ refusing to dispatch: SPEC does not pass ship-check. Run `vzt-agent ship-check` first.');
     process.exit(1);
   }
-  const ORCA = args.orca || process.env.ORCA_CLI || DEFAULT_ORCA;
+  const be = getBackend(args);
   const phases = [];
   if (spec.barrier) phases.push({ label: 'PHASE 1 — barrier (run FIRST, alone; its oracle grades every unit)', units: [spec.barrier] });
   phases.push({ label: `PHASE ${spec.barrier ? 2 : 1} — units (parallel; pairwise-disjoint scopes)`, units: spec.units });
 
   console.log(`# ship-dispatch: ${spec.slug} — ${spec.title}`);
   console.log(`# root: ${spec.root}`);
-  console.log(`# ${args.execute ? 'EXECUTING via' : 'DRY RUN (add --execute to run) via'} ${ORCA}`);
+  console.log(`# ${args.execute ? 'EXECUTING via' : 'DRY RUN (add --execute to run) via'} ${be.name} (${be.bin})`);
   if (spec.barrier) console.log('# NOTE: wait for the barrier oracle to pass before dispatching the units.');
 
   for (const phase of phases) {
     console.log(`\n## ${phase.label}`);
     for (const u of phase.units) {
-      const argv = orcaArgvFor(spec, u);
       if (args.execute) {
-        console.log(`\n→ creating worktree for ${u.id} …`);
+        console.log(`\n→ dispatching ${u.id} …`);
         try {
-          const out = execFileSync(ORCA, argv, { encoding: 'utf8' });
-          console.log(out.trim());
+          const info = be.dispatch(spec, u);
+          console.log(`  ${u.id} → ${info.path || '(worktree)'}${info.handle ? '' : '  (no agent handle — will resolve on verify)'}`);
         } catch (e) {
-          console.error(`❌ ${u.id}: orca worktree create failed — ${e.message}`);
+          console.error(`❌ ${u.id}: ${be.name} dispatch failed — ${e.message}`);
         }
       } else {
         console.log(`\n# ${u.id}: verified by  ${u.machineCheck}`);
-        console.log(`${shq(ORCA)} ${argv.map(shq).join(' ')}`);
+        for (const line of be.plan(spec, u)) console.log(line);
       }
     }
   }
@@ -597,21 +691,6 @@ function shipDispatch(args) {
 // card. Oracles are self-contained (`cd <root> && …`), so this also works without a
 // live Orca: it falls back to running the check as written and recording the verdict.
 
-/** Resolve an Orca-managed worktree path by its --name. null when Orca is not live. */
-function resolveWorktreePath(ORCA, name) {
-  try {
-    const out = execFileSync(ORCA, ['worktree', 'list', '--json'], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] });
-    const data = JSON.parse(out);
-    // The orca CLI wraps every response in a {id, ok, result} envelope.
-    const root = data && data.result ? data.result : data;
-    const list = Array.isArray(root) ? root : root.worktrees || [];
-    const hit = list.find((w) => w.name === name || w.displayName === name);
-    return hit ? hit.path || (hit.id && hit.id.split('::')[1]) || null : null;
-  } catch {
-    return null; // Orca not running / older CLI — fall back to the primary checkout
-  }
-}
-
 /** Run a self-contained oracle command; return {pass, code, output}. */
 function runOracle(machineCheck, cwd) {
   try {
@@ -624,27 +703,23 @@ function runOracle(machineCheck, cwd) {
 
 /**
  * Verify ONE unit and record everywhere: run its oracle in its worktree, append the
- * verdict to the SHARED ledger, and stamp the Orca card. Shared by ship-supervise
- * (batch) and ship-watch (as each worker finishes). `wtPath` may be pre-resolved by
- * the caller; otherwise it's looked up. Returns true on PASS.
+ * verdict to the SHARED ledger, and stamp the mux card/workspace. Shared by
+ * ship-supervise (batch) and ship-watch (as each worker finishes). `info` ({path,ws})
+ * may be pre-resolved by the caller (dispatch result); otherwise it's looked up.
+ * Returns true on PASS. Falls back to the primary checkout when the mux isn't live.
  */
-function verifyAndRecord(ORCA, spec, u, specPath, wtPath, via) {
-  const wt = wtPath || resolveWorktreePath(ORCA, `${spec.slug}-${u.id}`);
+function verifyAndRecord(be, spec, u, specPath, info, via) {
+  const ref = info && info.path ? info : be.resolve(spec, u);
+  const wt = ref && ref.path;
   const r = runOracle(u.machineCheck, wt || spec.root);
   const status = r.pass ? 'PASS' : 'FAIL';
   console.log(`  ${u.id} … ${status}${wt ? '' : '  (no live worktree — ran against primary)'}`);
   try {
     execFileSync(process.execPath, [fileURLToPath(import.meta.url), 'ship-note', specPath,
-      JSON.stringify({ kind: 'unit_result', unit: u.id, status, via, code: r.code })],
+      JSON.stringify({ kind: 'unit_result', unit: u.id, status, via, mux: be.name, code: r.code })],
       { stdio: ['ignore', 'ignore', 'ignore'] });
   } catch { /* best-effort */ }
-  if (wt) {
-    try {
-      execFileSync(ORCA, ['worktree', 'set', '--worktree', `name:${spec.slug}-${u.id}`,
-        '--comment', `oracle: ${status}`, '--workspace-status', r.pass ? 'in-review' : 'in-progress', '--json'],
-        { stdio: ['ignore', 'ignore', 'ignore'] });
-    } catch { /* Orca not live / older CLI */ }
-  }
+  if (ref) { try { be.stamp(spec, u, ref, status, r.pass); } catch { /* not live */ } }
   return r.pass;
 }
 
@@ -666,49 +741,22 @@ function shipSupervise(args) {
     console.error('❌ refusing to supervise: SPEC does not pass ship-check.');
     process.exit(1);
   }
-  const ORCA = args.orca || process.env.ORCA_CLI || DEFAULT_ORCA;
+  const be = getBackend(args);
   const units = [spec.barrier, ...spec.units].filter(Boolean);
   let passed = 0;
-  for (const u of units) if (verifyAndRecord(ORCA, spec, u, specPath, null, 'ship-supervise')) passed++;
+  for (const u of units) if (verifyAndRecord(be, spec, u, specPath, null, 'ship-supervise')) passed++;
   console.log(`\n${passed}/${units.length} unit oracle(s) PASS. Verdicts appended to the shared LEDGER.`);
   console.log(`next: run the integration gate → ${spec.integration && spec.integration.machineCheck ? spec.integration.machineCheck : '(none declared)'}`);
   if (passed < units.length) process.exitCode = 1;
 }
 
-// ——— /vzt-ship: Orca ship-watch — ONE command, kick once and walk away ————————
+// ——— /vzt-ship: ship-watch — ONE command, kick once and walk away ————————————
 //
-// The full automatic loop: dispatch every unit as an Orca claude pane, wait for each
-// to finish (tui-idle), auto-run its oracle + stamp its card + record the ledger the
-// instant it's done, then run the integration gate. The barrier (if any) runs FIRST
-// and gates the units. Stops at the green gate with a "ready to review + merge"
-// verdict — it never auto-merges (verify-before-accept stays a human call).
-
-/** Run an orca command with --json and return the unwrapped `result`. Throws on failure. */
-function orcaJson(ORCA, argv) {
-  const out = execFileSync(ORCA, [...argv, '--json'], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] });
-  const d = JSON.parse(out);
-  return d && d.result ? d.result : d;
-}
-
-function dispatchOne(ORCA, spec, u) {
-  const res = orcaJson(ORCA, ['worktree', 'create', '--repo', `path:${spec.root}`,
-    '--name', `${spec.slug}-${u.id}`, '--no-parent', '--agent', 'claude', '--setup', 'run',
-    '--prompt', unitPrompt(spec, u)]);
-  const wt = res.worktree || res;
-  const handle = res.agentTerminalHandle || (res.startupTerminal && res.startupTerminal.handle)
-    || (wt.startupTerminal && wt.startupTerminal.handle) || null;
-  const wtPath = wt.path || (wt.id && String(wt.id).split('::')[1]) || null;
-  console.log(`  dispatched ${u.id} → ${wtPath || '(worktree)'}${handle ? '' : '  (no agent handle — will resolve on verify)'}`);
-  return { u, wtPath, handle };
-}
-
-function waitIdle(ORCA, handle, timeoutMs) {
-  if (!handle) return;
-  try {
-    execFileSync(ORCA, ['terminal', 'wait', '--terminal', handle, '--for', 'tui-idle',
-      '--timeout-ms', String(timeoutMs), '--json'], { stdio: ['ignore', 'ignore', 'ignore'] });
-  } catch { /* timed out or handle stale — verify anyway */ }
-}
+// The full automatic loop on either mux: dispatch every unit as a claude worktree
+// pane, wait for each to finish (agent idle), auto-run its oracle + stamp its card +
+// record the ledger the instant it's done, then run the integration gate. The barrier
+// (if any) runs FIRST and gates the units. Stops at the green gate with a "ready to
+// review + merge" verdict — it never auto-merges (verify-before-accept stays human).
 
 function shipWatch(args) {
   const specPath = args._[1];
@@ -718,19 +766,25 @@ function shipWatch(args) {
     console.error('❌ refusing to watch: SPEC does not pass ship-check. Run `vzt-agent ship-check` first.');
     process.exit(1);
   }
-  const ORCA = args.orca || process.env.ORCA_CLI || DEFAULT_ORCA;
+  const be = getBackend(args);
   const timeoutMs = args.timeoutMs ? Number(args.timeoutMs) : 30 * 60 * 1000;
-  console.log(`ship-watch: ${spec.slug} — dispatch → wait → verify → integration gate (timeout ${Math.round(timeoutMs / 60000)}m/unit)`);
+  console.log(`ship-watch [${be.name}]: ${spec.slug} — dispatch → wait → verify → integration gate (timeout ${Math.round(timeoutMs / 60000)}m/unit)`);
 
   // Open the ledger.
   try { execFileSync(process.execPath, [fileURLToPath(import.meta.url), 'ship-start', specPath], { stdio: ['ignore', 'ignore', 'ignore'] }); } catch {}
 
+  const dispatch = (u) => {
+    const info = be.dispatch(spec, u);
+    console.log(`  dispatched ${u.id} → ${info.path || '(worktree)'}${info.handle ? '' : '  (no agent handle — will resolve on verify)'}`);
+    return { u, info };
+  };
+
   // Phase 1 — barrier gates everything.
   if (spec.barrier) {
     console.log('\n## barrier (runs first; its oracle grades every unit)');
-    const b = dispatchOne(ORCA, spec, spec.barrier);
-    waitIdle(ORCA, b.handle, timeoutMs);
-    if (!verifyAndRecord(ORCA, spec, spec.barrier, specPath, b.wtPath, 'ship-watch')) {
+    const b = dispatch(spec.barrier);
+    be.waitIdle(b.info.handle, timeoutMs);
+    if (!verifyAndRecord(be, spec, spec.barrier, specPath, b.info, 'ship-watch')) {
       console.error('\n❌ barrier oracle FAILED — aborting before dispatching units. Fix the barrier worktree, then re-run.');
       process.exit(1);
     }
@@ -738,12 +792,12 @@ function shipWatch(args) {
 
   // Phase 2 — units in parallel; verify each as it idles.
   console.log('\n## units (parallel)');
-  const workers = spec.units.map((u) => dispatchOne(ORCA, spec, u));
+  const workers = spec.units.map(dispatch);
   console.log('\n## verifying as each finishes …');
   let passed = 0;
   for (const w of workers) {
-    waitIdle(ORCA, w.handle, timeoutMs); // by the time earlier ones idle, later ones often already have
-    if (verifyAndRecord(ORCA, spec, w.u, specPath, w.wtPath, 'ship-watch')) passed++;
+    be.waitIdle(w.info.handle, timeoutMs); // by the time earlier ones idle, later ones often already have
+    if (verifyAndRecord(be, spec, w.u, specPath, w.info, 'ship-watch')) passed++;
   }
 
   console.log(`\n${passed}/${workers.length} unit oracle(s) PASS.`);
@@ -806,16 +860,16 @@ Long-horizon runs (/vzt-ship):
   vzt-agent ship-note  <SPEC.md> '<json>' append one ledger line
   vzt-agent ship-status [--target <dir>]  reconstruct run state from disk (use after a compaction)
 
-Orca supervision layer (parallel /vzt-ship runs in Orca worktree panes):
-  vzt-agent ship-dispatch <SPEC.md> [--execute] [--orca <path>]
-                                          one \`orca worktree create --agent claude\` per unit
-                                          (dry-run prints the commands; --execute runs them)
-  vzt-agent ship-supervise <SPEC.md> [--orca <path>]
-                                          run each unit's MACHINE_CHECK in its worktree,
-                                          record PASS/FAIL to the shared ledger + Orca card
-  vzt-agent ship-watch <SPEC.md> [--orca <path>] [--timeout-ms <n>]
+Supervision layer — parallel /vzt-ship runs in an agent multiplexer [--mux orca|herdr]:
+  vzt-agent ship-watch <SPEC.md> [--mux orca|herdr] [--timeout-ms <n>]
                                           KICK ONCE, WALK AWAY: dispatch every unit → wait
                                           for each to finish → auto-verify + stamp + ledger →
                                           integration gate. Stops at "ready to review + merge".
+  vzt-agent ship-dispatch <SPEC.md> [--mux orca|herdr] [--execute]
+                                          one worktree+claude per unit (dry-run prints commands)
+  vzt-agent ship-supervise <SPEC.md> [--mux orca|herdr]
+                                          run each unit's MACHINE_CHECK in its worktree,
+                                          record PASS/FAIL to the shared ledger + mux card
+  (default mux is orca; --mux herdr uses the herdr agent multiplexer)
 `);
 }

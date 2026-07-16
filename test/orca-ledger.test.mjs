@@ -51,6 +51,43 @@ test('ship-note from a linked worktree lands in the PRIMARY checkout, not the wo
   }
 });
 
+// The --mux backend abstraction: ship-dispatch dry-run must emit the right CLI shape
+// for each multiplexer without either tool being installed/running (dry-run is pure).
+test('ship-dispatch --mux selects the backend and emits its command shape (dry-run)', () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'vzt-mux-'));
+  try {
+    const specDir = path.join(root, '.vzt', 'ship', 'demo');
+    fs.mkdirSync(specDir, { recursive: true });
+    const spec = path.join(specDir, 'SPEC.md');
+    fs.writeFileSync(spec, `# Demo
+<!-- vzt-spec -->
+\`\`\`json
+{
+  "slug": "demo", "title": "t", "root": "${root}",
+  "contract": "c", "integration": { "machineCheck": "true", "expect": "0" },
+  "units": [
+    { "id": "u1", "title": "A", "agentType": "vzt-builder", "filesInScope": ["a.txt"], "brief": "b", "machineCheck": "true", "expect": "0" },
+    { "id": "u2", "title": "B", "agentType": "vzt-builder", "filesInScope": ["b.txt"], "brief": "b", "machineCheck": "true", "expect": "0" }
+  ]
+}
+\`\`\`
+`);
+    const orca = execFileSync(process.execPath, [CLI, 'ship-dispatch', spec], { encoding: 'utf8' });
+    assert.match(orca, /worktree' 'create'.*'--agent' 'claude'/s, 'orca (default) uses one worktree-create --agent call');
+
+    const herdr = execFileSync(process.execPath, [CLI, 'ship-dispatch', spec, '--mux', 'herdr'], { encoding: 'utf8' });
+    assert.match(herdr, /herdr' worktree create --cwd/, 'herdr uses worktree create');
+    assert.match(herdr, /herdr' agent start claude/, 'herdr launches the agent in a second step');
+
+    assert.throws(
+      () => execFileSync(process.execPath, [CLI, 'ship-dispatch', spec, '--mux', 'bogus'], { encoding: 'utf8', stdio: ['ignore', 'ignore', 'ignore'] }),
+      'an unknown --mux exits non-zero',
+    );
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
 // Backward compatibility: in a PLAIN checkout the primary root IS the repo root, so
 // the ledger sits next to the spec exactly as before Workflow D.
 test('ship-note in a plain checkout writes next to the spec (unchanged behaviour)', () => {

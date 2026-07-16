@@ -136,12 +136,15 @@ rejected the implementation:
   which is what makes "pick the winner" pay. Fanning N `vzt-builder`s is N draws
   from **one model with one prior**: diversity of phrasing, not of understanding.
 
-### Accepted — Orca as the ship SUPERVISION layer (not fan-out)
+### Accepted — the ship SUPERVISION layer (not fan-out)
 
-The rejection above is narrow: it kills Orca as a *fan-out/racing* mechanism. It
-does **not** reject Orca as a place to *watch* a `/vzt-ship` run whose units are
-already pairwise-disjoint (not a race — each unit owns different files and is graded
-by its own oracle). That use is accepted and wired via `orca/` in this package:
+The rejection above is narrow: it kills the *fan-out/racing* mechanism. It does
+**not** reject using an agent multiplexer to *watch* a `/vzt-ship` run whose units are
+already pairwise-disjoint (not a race — each unit owns different files and is graded by
+its own oracle). Two backends behind `--mux orca|herdr` (default `orca`):
+[Orca](https://github.com/stablyai/orca) (desktop ADE) and
+[Herdr](https://herdr.dev) (terminal-native, persistent over SSH/mobile). Wired via
+`orca/` in this package:
 
 - **Terminal stays the substrate; routing is untouched.** Orca runs `claude`, so the
   `[VZT-ROUTE]` hooks, subagents, and skills inherit unchanged. Reserve Orca for
