@@ -72,8 +72,18 @@ test('ship-dispatch --mux selects the backend and emits its command shape (dry-r
 }
 \`\`\`
 `);
-    const orca = execFileSync(process.execPath, [CLI, 'ship-dispatch', spec], { encoding: 'utf8' });
+    // Isolate VZT_MUX from the caller's shell — this asserts the CODE default (orca).
+    // A machine-wide `export VZT_MUX=herdr` is a legit user override but must never
+    // flip a test of the built-in default, or the suite goes red on herdr-default machines.
+    const codeDefaultEnv = { ...process.env };
+    delete codeDefaultEnv.VZT_MUX;
+    const orca = execFileSync(process.execPath, [CLI, 'ship-dispatch', spec], { encoding: 'utf8', env: codeDefaultEnv });
     assert.match(orca, /worktree' 'create'.*'--agent' 'claude'/s, 'orca (default) uses one worktree-create --agent call');
+
+    // And with VZT_MUX=herdr exported, the same no-flag call must resolve to herdr.
+    const herdrDefaultEnv = { ...process.env, VZT_MUX: 'herdr' };
+    const herdrByEnv = execFileSync(process.execPath, [CLI, 'ship-dispatch', spec], { encoding: 'utf8', env: herdrDefaultEnv });
+    assert.match(herdrByEnv, /herdr' agent start claude/, 'VZT_MUX=herdr makes herdr the default without --mux');
 
     const herdr = execFileSync(process.execPath, [CLI, 'ship-dispatch', spec, '--mux', 'herdr'], { encoding: 'utf8' });
     assert.match(herdr, /herdr' worktree create --cwd/, 'herdr uses worktree create');
