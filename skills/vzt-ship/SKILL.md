@@ -67,7 +67,25 @@ vzt-agent ship-start .vzt/ship/<slug>/SPEC.md
 
 ## Phase 3 — RUN
 
-Read the `<!-- vzt-spec -->` block and pass it in. Workflow scripts have
+**Default substrate — a live agent multiplexer (Herdr).** If `vzt-agent` is on
+`PATH` and a mux is live (`herdr worktree list --cwd . --json` succeeds), drive the
+run there by default — you do NOT need to be asked. Each pairwise-disjoint unit
+becomes a **real `claude` agent in its own worktree pane** you can watch and attach,
+including over SSH/mobile:
+
+```bash
+vzt-agent ship-watch .vzt/ship/<slug>/SPEC.md      # dispatch → idle-wait → independent oracle → integration gate
+```
+
+`export VZT_MUX=herdr` makes Herdr the mux, so **omit `--mux`** (default is Herdr;
+pass `--mux orca` for Orca). This STOPS at the green integration gate — **never
+auto-merge**; Phase 4 LAND stays human. Small/inline work never comes here: a
+single-file edit, a quick fix, or a one-off script is normal in-session work, not a
+ship run. See `orca/README.md` for the mux backends.
+
+**Fallback substrate — the headless Workflow tool** (no mux live, or `vzt-agent`
+off `PATH`). Resumable + content-cached, but not watchable. **Say which driver you
+used.** Read the `<!-- vzt-spec -->` block and pass it in — Workflow scripts have
 **no filesystem access**, so the script cannot read the spec itself:
 
 ```
@@ -75,11 +93,11 @@ Workflow({ scriptPath: "<~/.claude|$CLAUDE_PROJECT_DIR/.claude>/workflows/vzt-sh
            args: { spec: <the parsed vzt-spec object> } })
 ```
 
-It runs in the background: barrier → parallel units → **independent read-only
-verification of every oracle** (builders never grade themselves) → bounded repair
-(≤2 rounds) → integration gate.
+Either substrate runs the same shape: barrier → parallel units → **independent
+read-only verification of every oracle** (builders never grade themselves) →
+bounded repair (≤2 rounds) → integration gate.
 
-Record the runId immediately:
+Record the runId immediately (Workflow path):
 
 ```bash
 vzt-agent ship-note .vzt/ship/<slug>/SPEC.md '{"kind":"workflow_launched","wfRunId":"wf_..."}'

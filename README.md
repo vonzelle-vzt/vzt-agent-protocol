@@ -357,6 +357,23 @@ a vibe.
 
 ## Release notes
 
+### 1.8.0 — Herdr-supervised runs are the DEFAULT substrate for `/vzt-ship`
+
+- The `/vzt-ship` skill now drives supervised runs in a **live agent multiplexer by
+  default** — when `vzt-agent` is on `PATH` and a mux is live, run
+  `vzt-agent ship-watch <SPEC.md>` so each unit is a real `claude` agent in a
+  watchable/attachable worktree pane (Herdr via `VZT_MUX=herdr`; omit `--mux`). The
+  headless Workflow tool becomes the **fallback** (no mux live / `vzt-agent` off
+  `PATH`) — resumable but not watchable; the skill says which driver it used. This
+  ships in the files `install()` copies (`skills/vzt-ship/SKILL.md` +
+  `hooks/vzt-session-start.mjs`), so every project pulls the default in on install —
+  no per-repo `CLAUDE.md` edit needed.
+- `ship-watch` still STOPS at the green integration gate; **never auto-merges**.
+- Test isolation fix: the `ship-dispatch` default-mux test now clears `VZT_MUX` from
+  the child env before asserting the code default (orca), and separately asserts that
+  `VZT_MUX=herdr` makes herdr the default with no `--mux`. Prevents a machine-wide
+  `export VZT_MUX=herdr` from turning the suite red. 70/70 tests.
+
 ### 1.7.0 — Herdr backend (agent-multiplexer supervision, `--mux`)
 
 - The supervision layer is now **multiplexer-agnostic** via `--mux orca|herdr`
