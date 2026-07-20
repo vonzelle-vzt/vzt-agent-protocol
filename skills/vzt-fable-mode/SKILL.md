@@ -34,7 +34,8 @@ Before executing, try once to break your plan: what input, state, or ordering
 makes it wrong? What's the strongest argument this is the trigger and not the
 cause? Name the evidence that would refute your approach and go check it. If
 the attack lands, fix the plan now — it is exponentially cheaper than fixing
-the shipped version.
+the shipped version. Name the load-bearing seam — the one place where a mistake
+cascades — and give it double scrutiny.
 
 ## Gate 4 — Verify before declaring done
 
