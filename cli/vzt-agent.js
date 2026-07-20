@@ -592,13 +592,24 @@ function orcaBackend(args) {
 function herdrBackend(args) {
   const bin = args.herdr || process.env.HERDR_CLI || DEFAULT_HERDR;
   const branch = (spec, u) => `${spec.slug}-${u.id}`;
+  // The herdr server runs as a brew LaunchAgent, whose PATH is the bare system
+  // default (/usr/bin:/bin:/usr/sbin:/sbin) — it does NOT inherit the login
+  // shell's. `agent start claude` therefore dies with "No viable candidates
+  // found in PATH" because claude lives in ~/.local/bin (and node in nvm).
+  // Hand the child our own PATH explicitly; the mux adapter is the right layer
+  // to do it, since patching the brew-owned plist is undone by every upgrade.
+  const envPath = ['--env', `PATH=${process.env.PATH || ''}`];
+  // How long to wait for a just-spawned agent to show any sign of life before
+  // concluding it never ran. Claude takes a few seconds to boot and start
+  // emitting, so this must comfortably exceed that; it is NOT the unit budget.
+  const START_GRACE_MS = Number(process.env.VZT_START_GRACE_MS || 90_000);
   return {
     name: 'herdr', bin,
     plan(spec, u) {
       const b = branch(spec, u);
       return [
         `${shq(bin)} worktree create --cwd ${shq(spec.root)} --branch ${shq(b)} --label ${shq(b)} --no-focus --json`,
-        `${shq(bin)} agent start claude --workspace <WS> --cwd <WT_PATH> --no-focus -- claude ${shq(unitPrompt(spec, u))}`,
+        `${shq(bin)} agent start claude --workspace <WS> --cwd <WT_PATH> --no-focus --env PATH="$PATH" -- claude ${shq(unitPrompt(spec, u))}`,
       ];
     },
     dispatch(spec, u) {
@@ -609,7 +620,7 @@ function herdrBackend(args) {
       let handle = null;
       if (ws && wpath) {
         try {
-          const ag = envJson(bin, ['agent', 'start', 'claude', '--workspace', ws, '--cwd', wpath, '--no-focus', '--', 'claude', unitPrompt(spec, u)]);
+          const ag = envJson(bin, ['agent', 'start', 'claude', '--workspace', ws, '--cwd', wpath, '--no-focus', ...envPath, '--', 'claude', unitPrompt(spec, u)]);
           handle = ag.agent?.pane_id || null;
         } catch (e) { console.error(`  ${u.id}: herdr agent start failed — ${e.message}`); }
       }
@@ -617,6 +628,29 @@ function herdrBackend(args) {
     },
     waitIdle(handle, t) {
       if (!handle) return;
+      // A freshly-spawned pane reports `unknown`/`idle` BEFORE the agent has
+      // produced anything, so waiting on `idle` alone returns almost instantly
+      // and the oracle then grades an empty worktree. Observed: dispatch at
+      // T+0.0s, unit_result FAIL at T+1.0s, with the unit's file never written.
+      //
+      // So wait for the agent to actually START before waiting for it to stop.
+      // `blocked` counts as started too — an agent sitting on a permission
+      // prompt has clearly begun, and we want the idle wait (not a 1s false
+      // FAIL) to be what governs it.
+      const started = ['working', 'blocked'].some((st) => {
+        try {
+          execFileSync(bin, ['agent', 'wait', handle, '--status', st, '--timeout', String(Math.min(t, START_GRACE_MS))],
+            { stdio: ['ignore', 'ignore', 'ignore'] });
+          return true;
+        } catch { return false; }
+      });
+      if (!started) {
+        // Never observed running. Either it died on launch, or it finished
+        // faster than we looked. Don't grade yet — the oracle is the authority,
+        // but give the filesystem a beat so a fast unit isn't failed on a race.
+        try { execFileSync(bin, ['agent', 'wait', handle, '--status', 'idle', '--timeout', String(Math.min(t, START_GRACE_MS))], { stdio: ['ignore', 'ignore', 'ignore'] }); } catch { /* fall through */ }
+        return;
+      }
       try { execFileSync(bin, ['agent', 'wait', handle, '--status', 'idle', '--timeout', String(t)], { stdio: ['ignore', 'ignore', 'ignore'] }); } catch { /* timed out/stale — verify anyway */ }
     },
     resolve(spec, u) {
