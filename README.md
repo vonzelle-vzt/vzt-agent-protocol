@@ -7,7 +7,7 @@
 Part of the [VZT Tech Consulting Protocol](https://github.com/vonzelle-vzt/VZT-Tech-Consulting-Protocol) ecosystem.
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
-[![Version](https://img.shields.io/badge/Version-1.9.0-purple.svg)](#)
+[![Version](https://img.shields.io/badge/Version-1.9.1-purple.svg)](#)
 [![Tiers](https://img.shields.io/badge/Tiers-Fable%205%20%7C%20Opus%204.8%20%7C%20Sonnet%205%20%7C%20Haiku%204.5-green.svg)](docs/ROUTING-MATRIX.md)
 
 ---
@@ -365,6 +365,21 @@ a vibe.
 - [CLAUDE.md snippet for manual installs](templates/CLAUDE-snippet.md)
 
 ## Release notes
+
+### 1.9.1 — routing gap-fill (audit follow-through)
+
+- **`xhigh` for hard Opus builds.** The per-prompt classifier now suggests `effort: xhigh`
+  for a **high-confidence, multi-signal Opus build** (a clearly-hard refactor +
+  performance/concurrency + complexity task) — the current Claude Code default for hard
+  coding/agentic, and what the `vzt-heavy-builder` it delegates to already runs at, so the
+  inline suggestion matches the delegate. Single-signal Opus builds stay `high`; Opus review
+  and horizon-supervision stay `high`; the classifier still never emits `max`.
+- **`/fast` lever in the Opus chair profile.** The Opus chair is explicitly wall-clock
+  constrained, and `/fast` (Opus 4.8, ~2.5× output at premium tokens) is the direct lever —
+  now named in the doctrine.
+- **`--mux vscode` doctrine parity.** The native VS Code backend shipped in 1.9.0 but the
+  doctrine still read "two backends / orca|herdr"; threaded `vscode` through the Opus
+  long-horizon profile and the `vzt-route` / `vzt-ship` skills.
 
 ### 1.9.0 — native `--mux vscode` + model-currency audit
 
