@@ -1,7 +1,7 @@
 {
   "$schema": "https://json.schemastore.org/package.json",
   "name": "vzt-agent-protocol",
-  "version": "1.8.0",
+  "version": "1.9.0",
   "description": "VZT Agent Protocol - Automatic model routing between Claude Fable 5, Opus 4.8, Sonnet 5, and Haiku 4.5 for Claude Code. Right model, right task, zero manual switching.",
   "keywords": [
     "claude-code",

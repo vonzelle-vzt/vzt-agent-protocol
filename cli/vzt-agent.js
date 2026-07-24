@@ -39,6 +39,10 @@ const ORCA_SRC_DIR = path.join(PKG_ROOT, 'orca');
 const HOOKS = [
   { event: 'UserPromptSubmit', basename: 'vzt-route-classifier.mjs', timeout: 10 },
   { event: 'SessionStart', basename: 'vzt-session-start.mjs', timeout: 10 },
+  // Idle sentinel for the native VS Code mux (--mux vscode). Fires on every Stop
+  // but no-ops unless VZT_VSCODE_MUX=1 is set in the env — i.e. only inside a unit
+  // terminal the vscode backend launched. See hooks/vzt-vscode-agent-state.sh.
+  { event: 'Stop', basename: 'vzt-vscode-agent-state.sh', timeout: 10, runner: 'bash' },
 ];
 const MANAGED_MARKER = 'vzt-agent-protocol';
 // The hooks honour VZT_ROUTER_STATE_DIR; the CLI used to hardcode ~/.claude,
@@ -102,9 +106,10 @@ function wireSettings(dotClaude, { portable = false } = {}) {
     const bucket = (settings.hooks[h.event] = settings.hooks[h.event] || []);
     // Project installs use $CLAUDE_PROJECT_DIR so the committed settings.json
     // works on any clone; global installs use the absolute ~/.claude path.
+    const runner = h.runner || 'node';
     const cmd = portable
-      ? `node "$CLAUDE_PROJECT_DIR/.claude/hooks/vzt-router/${h.basename}"`
-      : `node "${path.join(dotClaude, 'hooks', 'vzt-router', h.basename)}"`;
+      ? `${runner} "$CLAUDE_PROJECT_DIR/.claude/hooks/vzt-router/${h.basename}"`
+      : `${runner} "${path.join(dotClaude, 'hooks', 'vzt-router', h.basename)}"`;
     const already = bucket.some((m) =>
       (m.hooks || []).some((x) => typeof x.command === 'string' && x.command.includes(h.basename))
     );
@@ -177,7 +182,7 @@ function install(args) {
 
   console.log(`  agents:   ${agents.length} installed (fable×2, opus×2, sonnet×1, haiku×2)`);
   console.log(`  skills:   ${skills.length} files installed (/vzt-route /vzt-plan /vzt-fix /vzt-build /vzt-quick /vzt-fable-mode /vzt-diagnose /vzt-ship)`);
-  console.log(`  hooks:    ${hooks.length} installed (SessionStart chair-profile + UserPromptSubmit classifier)`);
+  console.log(`  hooks:    ${hooks.length} installed (SessionStart chair-profile + UserPromptSubmit classifier + Stop vscode-mux idle sentinel)`);
   console.log(`  templates: ${templates.length} installed (worker-brief delegation contract, ship spec)`);
   console.log(`  workflows: ${workflows.length} installed (vzt-ship long-horizon orchestration)`);
   console.log(`  orca:     ${orca.length} helper(s) → ${ORCA_VZT_DIR} (worktree-bootstrap for ship-dispatch/ship-watch)`);
@@ -508,6 +513,11 @@ const DEFAULT_HERDR = 'herdr'; // on PATH via Homebrew (agent multiplexer, termi
 // Where `vzt-agent install` places the helper scripts (see install()).
 const ORCA_VZT_DIR = path.join(os.homedir(), '.orca', 'vzt');
 const BOOTSTRAP = path.join(ORCA_VZT_DIR, 'worktree-bootstrap.sh');
+// Native VS Code mux (--mux vscode) exchanges work with the companion extension
+// purely through the filesystem — no socket, no compiled binary. The backend
+// writes launch records to queue/ and PASS/FAIL to state/; the extension drains
+// queue/ into native integrated terminals; the Stop hook writes state/*.idle.
+const VZT_VSCODE_DIR = process.env.VZT_VSCODE_DIR || path.join(os.homedir(), '.vzt', 'vscode-mux');
 
 function unitPrompt(spec, u) {
   const files = (u.filesInScope || []).map((f) => `    - ${f}`).join('\n');
@@ -592,13 +602,38 @@ function orcaBackend(args) {
 function herdrBackend(args) {
   const bin = args.herdr || process.env.HERDR_CLI || DEFAULT_HERDR;
   const branch = (spec, u) => `${spec.slug}-${u.id}`;
+  // The herdr server runs as a brew LaunchAgent, whose PATH is the bare system
+  // default (/usr/bin:/bin:/usr/sbin:/sbin) — it does NOT inherit the login
+  // shell's. `agent start claude` therefore dies with "No viable candidates
+  // found in PATH" because claude lives in ~/.local/bin (and node in nvm).
+  // Hand the child our own PATH explicitly; the mux adapter is the right layer
+  // to do it, since patching the brew-owned plist is undone by every upgrade.
+  const envPath = ['--env', `PATH=${process.env.PATH || ''}`];
+  // How long to wait for a just-spawned agent to show any sign of life before
+  // concluding it never ran. Claude takes a few seconds to boot and start
+  // emitting, so this must comfortably exceed that; it is NOT the unit budget.
+  const START_GRACE_MS = Number(process.env.VZT_START_GRACE_MS || 90_000);
+  // Ship panes run UNSUPERVISED — a human is not sitting on each worktree to
+  // clear permission prompts. So the pane's claude must skip permission checks
+  // and drive the unit autonomously; otherwise it boots and blocks forever on
+  // the first tool prompt, the idle-wait returns, and the oracle grades an
+  // empty worktree. Opt out per-run with VZT_HERDR_SKIP_PERMISSIONS=0.
+  const skipPerms = process.env.VZT_HERDR_SKIP_PERMISSIONS !== '0';
+  const claudeArgv = (prompt) => ['claude', ...(skipPerms ? ['--dangerously-skip-permissions'] : []), prompt];
+  // herdr enforces GLOBALLY-UNIQUE agent instance names. The `<name>` positional
+  // of `agent start <name>` is the instance name, NOT the agent type — the type
+  // (claude/codex/…) is auto-detected from the running process. So naming every
+  // unit's agent "claude" made the first unit claim the name and every later
+  // `agent start claude` die with `agent_name_taken`, launching nothing and
+  // grading empty worktrees. Name each agent by its unit key (already unique).
   return {
     name: 'herdr', bin,
     plan(spec, u) {
       const b = branch(spec, u);
+      const cargv = claudeArgv(unitPrompt(spec, u)).map(shq).join(' ');
       return [
         `${shq(bin)} worktree create --cwd ${shq(spec.root)} --branch ${shq(b)} --label ${shq(b)} --no-focus --json`,
-        `${shq(bin)} agent start claude --workspace <WS> --cwd <WT_PATH> --no-focus -- claude ${shq(unitPrompt(spec, u))}`,
+        `${shq(bin)} agent start ${shq(b)} --workspace <WS> --cwd <WT_PATH> --no-focus --env PATH="$PATH" -- ${cargv}`,
       ];
     },
     dispatch(spec, u) {
@@ -609,7 +644,7 @@ function herdrBackend(args) {
       let handle = null;
       if (ws && wpath) {
         try {
-          const ag = envJson(bin, ['agent', 'start', 'claude', '--workspace', ws, '--cwd', wpath, '--no-focus', '--', 'claude', unitPrompt(spec, u)]);
+          const ag = envJson(bin, ['agent', 'start', b, '--workspace', ws, '--cwd', wpath, '--no-focus', ...envPath, '--', ...claudeArgv(unitPrompt(spec, u))]);
           handle = ag.agent?.pane_id || null;
         } catch (e) { console.error(`  ${u.id}: herdr agent start failed — ${e.message}`); }
       }
@@ -617,6 +652,29 @@ function herdrBackend(args) {
     },
     waitIdle(handle, t) {
       if (!handle) return;
+      // A freshly-spawned pane reports `unknown`/`idle` BEFORE the agent has
+      // produced anything, so waiting on `idle` alone returns almost instantly
+      // and the oracle then grades an empty worktree. Observed: dispatch at
+      // T+0.0s, unit_result FAIL at T+1.0s, with the unit's file never written.
+      //
+      // So wait for the agent to actually START before waiting for it to stop.
+      // `blocked` counts as started too — an agent sitting on a permission
+      // prompt has clearly begun, and we want the idle wait (not a 1s false
+      // FAIL) to be what governs it.
+      const started = ['working', 'blocked'].some((st) => {
+        try {
+          execFileSync(bin, ['agent', 'wait', handle, '--status', st, '--timeout', String(Math.min(t, START_GRACE_MS))],
+            { stdio: ['ignore', 'ignore', 'ignore'] });
+          return true;
+        } catch { return false; }
+      });
+      if (!started) {
+        // Never observed running. Either it died on launch, or it finished
+        // faster than we looked. Don't grade yet — the oracle is the authority,
+        // but give the filesystem a beat so a fast unit isn't failed on a race.
+        try { execFileSync(bin, ['agent', 'wait', handle, '--status', 'idle', '--timeout', String(Math.min(t, START_GRACE_MS))], { stdio: ['ignore', 'ignore', 'ignore'] }); } catch { /* fall through */ }
+        return;
+      }
       try { execFileSync(bin, ['agent', 'wait', handle, '--status', 'idle', '--timeout', String(t)], { stdio: ['ignore', 'ignore', 'ignore'] }); } catch { /* timed out/stale — verify anyway */ }
     },
     resolve(spec, u) {
@@ -634,11 +692,123 @@ function herdrBackend(args) {
   };
 }
 
+// A tiny synchronous sleep so the vscode backend can poll a sentinel file
+// without turning the whole 5-method interface async.
+function sleepSync(ms) {
+  try { Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, Math.max(0, ms)); } catch { /* SAB unavailable */ }
+}
+
+// The native VS Code backend needs NO compiled binary — it talks to the
+// companion extension (vscode/) purely over the filesystem contract in
+// VZT_VSCODE_DIR. dispatch: git worktree + queue a launch record; the extension
+// opens a native integrated terminal running claude with the unit brief. waitIdle:
+// poll for the Stop-hook idle sentinel. Same 5 methods as orca/herdr, so it drops
+// straight into shipWatch()/verifyAndRecord() unchanged.
+function vscodeBackend(/* args */) {
+  const key = (spec, u) => `${spec.slug}-${u.id}`;
+  const queueDir = path.join(VZT_VSCODE_DIR, 'queue');
+  const stateDir = path.join(VZT_VSCODE_DIR, 'state');
+  const promptDir = path.join(VZT_VSCODE_DIR, 'prompts');
+  const wtRoot = path.join(VZT_VSCODE_DIR, 'worktrees');
+  for (const d of [queueDir, stateDir, promptDir, wtRoot]) fs.mkdirSync(d, { recursive: true });
+  // Unit terminals run UNSUPERVISED, so their claude must skip permission prompts
+  // or it boots and blocks forever on the first tool call (same lesson as herdr).
+  // Opt out per-run with VZT_VSCODE_SKIP_PERMISSIONS=0.
+  const skipPerms = process.env.VZT_VSCODE_SKIP_PERMISSIONS !== '0';
+  // How long dispatch waits for the extension to consume a queue file before
+  // concluding it isn't running and printing the manual fallback command.
+  const DRAIN_GRACE_MS = Number(process.env.VZT_VSCODE_DRAIN_GRACE_MS || 8000);
+  // The prompt is multi-line, so pass it via a file the shell cats — a raw
+  // multi-line argv string would be mangled by the terminal's sendText.
+  const claudeCmd = (promptFile) =>
+    `claude ${skipPerms ? '--dangerously-skip-permissions ' : ''}"$(cat ${shq(promptFile)})"`;
+
+  const ensureWorktree = (spec, u) => {
+    const k = key(spec, u);
+    const wtPath = path.join(wtRoot, k);
+    if (fs.existsSync(path.join(wtPath, '.git'))) return wtPath; // reuse from a prior run
+    try {
+      execFileSync('git', ['-C', spec.root, 'worktree', 'add', '-b', k, wtPath, 'HEAD'], { stdio: ['ignore', 'ignore', 'pipe'] });
+    } catch {
+      // Branch already exists (re-dispatch) — attach it instead of recreating.
+      execFileSync('git', ['-C', spec.root, 'worktree', 'add', wtPath, k], { stdio: ['ignore', 'ignore', 'pipe'] });
+    }
+    return wtPath;
+  };
+
+  return {
+    name: 'vscode', bin: 'code',
+    plan(spec, u) {
+      const k = key(spec, u);
+      const wtPath = path.join(wtRoot, k);
+      const promptFile = path.join(promptDir, `${k}.txt`);
+      return [
+        `git -C ${shq(spec.root)} worktree add -b ${shq(k)} ${shq(wtPath)} HEAD`,
+        `# then in a VS Code integrated terminal at ${shq(wtPath)}:  ${claudeCmd(promptFile)}`,
+        `# (--mux vscode does both automatically via the companion extension)`,
+      ];
+    },
+    dispatch(spec, u) {
+      const k = key(spec, u);
+      const wtPath = ensureWorktree(spec, u);
+      for (const f of [`${k}.idle`, `${k}.status`]) { try { fs.unlinkSync(path.join(stateDir, f)); } catch { /* none */ } }
+      const promptFile = path.join(promptDir, `${k}.txt`);
+      fs.writeFileSync(promptFile, unitPrompt(spec, u));
+      const idleFile = path.join(stateDir, `${k}.idle`);
+      const cmd = claudeCmd(promptFile);
+      const queueFile = path.join(queueDir, `${k}.json`);
+      fs.writeFileSync(queueFile, JSON.stringify({ unitKey: k, cwd: wtPath, env: { VZT_VSCODE_MUX: '1', VZT_VSCODE_UNIT: k }, cmd }, null, 2));
+      // Wait briefly for the extension to consume the record (it deletes the file).
+      let launched = false;
+      const deadline = Date.now() + DRAIN_GRACE_MS;
+      while (Date.now() < deadline) {
+        if (!fs.existsSync(queueFile)) { launched = true; break; }
+        sleepSync(200);
+      }
+      if (!launched) {
+        console.error(`  ${u.id}: VS Code companion extension isn't draining the queue (installed? window open?).`);
+        console.error(`  Manual fallback — open a terminal and run:\n    cd ${shq(wtPath)} && ${cmd}`);
+      }
+      return { path: wtPath, ws: k, handle: { idleFile, launched } };
+    },
+    waitIdle(handle, t) {
+      if (!handle || !handle.idleFile) return;
+      // If the terminal never launched, don't burn the full unit budget on a
+      // sentinel that will never arrive — verify will run against the worktree.
+      const deadline = Date.now() + (handle.launched ? t : Math.min(t, 5000));
+      while (Date.now() < deadline) {
+        if (fs.existsSync(handle.idleFile)) return;
+        sleepSync(1000);
+      }
+    },
+    resolve(spec, u) {
+      const k = key(spec, u);
+      try {
+        const out = execFileSync('git', ['-C', spec.root, 'worktree', 'list', '--porcelain'], { encoding: 'utf8' });
+        let curPath = null;
+        for (const line of out.split('\n')) {
+          if (line.startsWith('worktree ')) curPath = line.slice(9).trim();
+          else if (line.startsWith('branch ')) {
+            const b = line.slice(7).trim().replace(/^refs\/heads\//, '');
+            if (b === k && curPath) return { path: curPath, ws: k };
+          }
+        }
+      } catch { /* not a git repo / no worktrees */ }
+      const wtPath = path.join(wtRoot, k);
+      return fs.existsSync(path.join(wtPath, '.git')) ? { path: wtPath, ws: k } : null;
+    },
+    stamp(spec, u, info, status /*, pass */) {
+      try { fs.writeFileSync(path.join(stateDir, `${key(spec, u)}.status`), status); } catch { /* best-effort */ }
+    },
+  };
+}
+
 function getBackend(args) {
   const name = (args.mux || process.env.VZT_MUX || 'orca').toLowerCase();
   if (name === 'herdr') return herdrBackend(args);
   if (name === 'orca') return orcaBackend(args);
-  console.error(`unknown --mux "${name}" (use: orca | herdr)`);
+  if (name === 'vscode') return vscodeBackend(args);
+  console.error(`unknown --mux "${name}" (use: orca | herdr | vscode)`);
   process.exit(2);
 }
 
@@ -860,16 +1030,17 @@ Long-horizon runs (/vzt-ship):
   vzt-agent ship-note  <SPEC.md> '<json>' append one ledger line
   vzt-agent ship-status [--target <dir>]  reconstruct run state from disk (use after a compaction)
 
-Supervision layer — parallel /vzt-ship runs in an agent multiplexer [--mux orca|herdr]:
-  vzt-agent ship-watch <SPEC.md> [--mux orca|herdr] [--timeout-ms <n>]
+Supervision layer — parallel /vzt-ship runs in an agent multiplexer [--mux orca|herdr|vscode]:
+  vzt-agent ship-watch <SPEC.md> [--mux orca|herdr|vscode] [--timeout-ms <n>]
                                           KICK ONCE, WALK AWAY: dispatch every unit → wait
                                           for each to finish → auto-verify + stamp + ledger →
                                           integration gate. Stops at "ready to review + merge".
-  vzt-agent ship-dispatch <SPEC.md> [--mux orca|herdr] [--execute]
+  vzt-agent ship-dispatch <SPEC.md> [--mux orca|herdr|vscode] [--execute]
                                           one worktree+claude per unit (dry-run prints commands)
-  vzt-agent ship-supervise <SPEC.md> [--mux orca|herdr]
+  vzt-agent ship-supervise <SPEC.md> [--mux orca|herdr|vscode]
                                           run each unit's MACHINE_CHECK in its worktree,
                                           record PASS/FAIL to the shared ledger + mux card
-  (default mux is orca; --mux herdr uses the herdr agent multiplexer)
+  (default mux is orca; --mux herdr uses the herdr multiplexer; --mux vscode opens each
+   unit as a native VS Code integrated terminal — needs the companion extension in vscode/)
 `);
 }
