@@ -102,16 +102,40 @@ test('classifier returns confidence and signals', () => {
   assert.ok(Array.isArray(r.matched));
 });
 
-test('classify() effort is always low/medium/high, never max', () => {
+test('classify() effort is always low/medium/high/xhigh, never max', () => {
   for (const [prompt] of cases) {
     const r = classify(prompt);
-    assert.ok(['low', 'medium', 'high'].includes(r.effort), `unexpected effort "${r.effort}" for "${prompt}"`);
+    assert.ok(['low', 'medium', 'high', 'xhigh'].includes(r.effort), `unexpected effort "${r.effort}" for "${prompt}"`);
   }
+});
+
+test('classify() lifts a HARD (multi-signal) opus build to xhigh (matches the heavy-builder it delegates to)', () => {
+  // A single opus signal is medium-confidence and stays at high; only a clearly-hard
+  // build (refactor + performance/concurrency + complexity) reaches high → xhigh.
+  const r = classify('Refactor the ingest pipeline for performance — the concurrency is gnarly with tricky edge cases');
+  assert.equal(r.tier, 'opus');
+  assert.equal(r.kind, 'build');
+  assert.equal(r.confidence, 'high');
+  assert.equal(r.effort, 'xhigh');
+});
+
+test('classify() keeps a single-signal opus build at high (not every opus build is xhigh)', () => {
+  const r = classify('Refactor the payment module handlers');
+  assert.equal(r.tier, 'opus');
+  assert.equal(r.confidence, 'medium');
+  assert.equal(r.effort, 'high');
 });
 
 test('suggestEffort: opus downgrades to medium on low confidence', () => {
   assert.equal(suggestEffort('opus', 'low'), 'medium');
-  assert.equal(suggestEffort('opus', 'high'), 'high');
+  assert.equal(suggestEffort('opus', 'high'), 'high'); // no kind → tier default
+});
+
+test('suggestEffort: high-confidence opus BUILD earns xhigh; review/moderate stay high', () => {
+  assert.equal(suggestEffort('opus', 'high', 'build'), 'xhigh');
+  assert.equal(suggestEffort('opus', 'high', 'review'), 'high');
+  assert.equal(suggestEffort('opus', 'medium', 'build'), 'high');
+  assert.equal(suggestEffort('opus', 'low', 'build'), 'medium');
 });
 
 test('suggestEffort: haiku is always low regardless of confidence', () => {

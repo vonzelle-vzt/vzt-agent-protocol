@@ -34,11 +34,16 @@ export const TIERS = {
   haiku: { label: 'Haiku 4.5 (mechanical/recon)', agents: { scout: 'vzt-scout', mech: 'vzt-mechanic' }, effort: 'low', cost: 1, intelligence: 5, taste: 4 },
 };
 
-// Suggested per-prompt effort: mirrors the tier default, except a low-confidence
-// Opus classification downgrades to medium (don't burn high effort on a guess).
+// Suggested per-prompt effort: mirrors the tier default, with two adjustments on
+// Opus. A low-confidence Opus classification downgrades to medium (don't burn high
+// effort on a guess); a HIGH-confidence Opus BUILD earns xhigh — the current
+// Claude Code default for hard coding/agentic work, and what the vzt-heavy-builder
+// this routes to already runs at, so the inline suggestion matches the delegate.
+// Opus review and horizon-supervision stay at high (not dense inline coding).
 // Never returns 'max' by construction — that's reserved for pinned fable agents.
-export function suggestEffort(tier, confidence) {
+export function suggestEffort(tier, confidence, kind) {
   if (tier === 'opus' && confidence === 'low') return 'medium';
+  if (tier === 'opus' && kind === 'build' && confidence === 'high') return 'xhigh';
   return TIERS[tier].effort;
 }
 
@@ -132,7 +137,7 @@ export function classify(prompt) {
 
   const runnerUp = Math.max(...order.filter((t) => t !== best).map((t) => scores[t]));
   const confidence = bestScore >= 4 && bestScore - runnerUp >= 2 ? 'high' : bestScore >= 2 ? 'medium' : 'low';
-  return { tier: best, kind: kinds[best], confidence, effort: suggestEffort(best, confidence), matched, scores, words };
+  return { tier: best, kind: kinds[best], confidence, effort: suggestEffort(best, confidence, kinds[best]), matched, scores, words };
 }
 
 function chairModel(sessionId) {

@@ -78,10 +78,11 @@ vzt-agent ship-watch .vzt/ship/<slug>/SPEC.md      # dispatch → idle-wait → 
 ```
 
 `export VZT_MUX=herdr` makes Herdr the mux, so **omit `--mux`** (default is Herdr;
-pass `--mux orca` for Orca). This STOPS at the green integration gate — **never
-auto-merge**; Phase 4 LAND stays human. Small/inline work never comes here: a
-single-file edit, a quick fix, or a one-off script is normal in-session work, not a
-ship run. See `orca/README.md` for the mux backends.
+pass `--mux orca` for Orca, or `--mux vscode` for native VS Code integrated terminals).
+This STOPS at the green integration gate — **never auto-merge**; Phase 4 LAND stays
+human. Small/inline work never comes here: a single-file edit, a quick fix, or a one-off
+script is normal in-session work, not a ship run. See `orca/README.md` for the mux
+backends and `docs/VSCODE.md` for the native VS Code backend.
 
 **Fallback substrate — the headless Workflow tool** (no mux live, or `vzt-agent`
 off `PATH`). Resumable + content-cached, but not watchable. **Say which driver you
