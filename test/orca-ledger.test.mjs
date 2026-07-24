@@ -83,11 +83,19 @@ test('ship-dispatch --mux selects the backend and emits its command shape (dry-r
     // And with VZT_MUX=herdr exported, the same no-flag call must resolve to herdr.
     const herdrDefaultEnv = { ...process.env, VZT_MUX: 'herdr' };
     const herdrByEnv = execFileSync(process.execPath, [CLI, 'ship-dispatch', spec], { encoding: 'utf8', env: herdrDefaultEnv });
-    assert.match(herdrByEnv, /herdr' agent start claude/, 'VZT_MUX=herdr makes herdr the default without --mux');
+    assert.match(herdrByEnv, /herdr' agent start 'demo-u1'/, 'VZT_MUX=herdr makes herdr the default without --mux');
 
     const herdr = execFileSync(process.execPath, [CLI, 'ship-dispatch', spec, '--mux', 'herdr'], { encoding: 'utf8' });
     assert.match(herdr, /herdr' worktree create --cwd/, 'herdr uses worktree create');
-    assert.match(herdr, /herdr' agent start claude/, 'herdr launches the agent in a second step');
+    assert.match(herdr, /herdr' agent start 'demo-u1'/, 'herdr launches the agent in a second step');
+
+    // vscode: no external binary — plan() emits a plain `git worktree add` per unit
+    // and a `claude` launch line the companion extension runs in a native terminal.
+    // Isolate VZT_VSCODE_DIR so backend construction can't touch the real ~/.vzt.
+    const vscodeEnv = { ...process.env, VZT_VSCODE_DIR: path.join(root, 'vscode-mux') };
+    const vscode = execFileSync(process.execPath, [CLI, 'ship-dispatch', spec, '--mux', 'vscode'], { encoding: 'utf8', env: vscodeEnv });
+    assert.match(vscode, /worktree add -b 'demo-u1'/, 'vscode creates one git worktree per unit');
+    assert.match(vscode, /claude --dangerously-skip-permissions/, 'vscode launches claude in the unit terminal');
 
     assert.throws(
       () => execFileSync(process.execPath, [CLI, 'ship-dispatch', spec, '--mux', 'bogus'], { encoding: 'utf8', stdio: ['ignore', 'ignore', 'ignore'] }),

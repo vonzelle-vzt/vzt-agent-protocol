@@ -194,14 +194,23 @@ a `[VZT-SHIP]` block on every prompt — compaction does not re-fire
 
 `workflows/vzt-ship.js` is the headless path. When you'd rather **watch** the units
 work in parallel — live panes, diffs, agent state — the same gated `SPEC` drives a
-**supervised** run in an agent multiplexer. Two backends behind one `--mux` flag:
-[`orca`](https://github.com/stablyai/orca) (desktop ADE, default) or
-[`herdr`](https://herdr.dev) (terminal-native, persistent over SSH/mobile):
+**supervised** run in an agent multiplexer. Three backends behind one `--mux` flag:
+[`orca`](https://github.com/stablyai/orca) (desktop ADE, default),
+[`herdr`](https://herdr.dev) (terminal-native, persistent over SSH/mobile), or
+`vscode` (each unit opens as a **native VS Code integrated terminal** via the
+companion extension in [`vscode/`](vscode/) — no external binary, just VS Code):
 
 ```
-vzt-agent ship-watch .vzt/ship/<slug>/SPEC.md              # orca (default)
-vzt-agent ship-watch .vzt/ship/<slug>/SPEC.md --mux herdr  # herdr
+vzt-agent ship-watch .vzt/ship/<slug>/SPEC.md               # orca (default)
+vzt-agent ship-watch .vzt/ship/<slug>/SPEC.md --mux herdr   # herdr
+vzt-agent ship-watch .vzt/ship/<slug>/SPEC.md --mux vscode  # native VS Code terminals
 ```
+
+The `vscode` backend needs no multiplexer install: it uses `git worktree` + a
+filesystem queue the companion extension drains into terminals, and a `Stop` hook
+for idle detection. Setup + the honest constraints (VS Code can't rename terminal
+tabs, so PASS/FAIL shows in a "VZT Ship" output channel + status bar) are in
+[`docs/VSCODE.md`](docs/VSCODE.md).
 
 One command: dispatch every unit as a `claude` worktree pane → wait for each to finish
 → auto-run its oracle, stamp its card, record the ledger → integration gate → stop at
@@ -244,10 +253,10 @@ vzt-agent ship-note  <SPEC.md> '<json>'         # append one ledger line
 vzt-agent ship-status [--target <dir>]          # reconstruct run state from disk (use after a compaction)
 
 # Supervision layer (optional — parallel /vzt-ship runs in an agent multiplexer)
-#   --mux orca (default) | herdr
-vzt-agent ship-watch    <SPEC.md> [--mux orca|herdr] [--timeout-ms <n>]  # kick once: dispatch → wait → verify → gate
-vzt-agent ship-dispatch <SPEC.md> [--mux orca|herdr] [--execute]        # one worktree+claude per unit
-vzt-agent ship-supervise <SPEC.md> [--mux orca|herdr]                   # verify each oracle → shared ledger + mux card
+#   --mux orca (default) | herdr | vscode (native VS Code terminals; see docs/VSCODE.md)
+vzt-agent ship-watch    <SPEC.md> [--mux orca|herdr|vscode] [--timeout-ms <n>]  # kick once: dispatch → wait → verify → gate
+vzt-agent ship-dispatch <SPEC.md> [--mux orca|herdr|vscode] [--execute]        # one worktree+claude per unit
+vzt-agent ship-supervise <SPEC.md> [--mux orca|herdr|vscode]                   # verify each oracle → shared ledger + mux card
 ```
 
 Get the bare `vzt-agent` command with `npm install -g github:vonzelle-vzt/vzt-agent-protocol`,

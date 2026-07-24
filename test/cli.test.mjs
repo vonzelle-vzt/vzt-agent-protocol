@@ -21,7 +21,7 @@ test('install → doctor → uninstall round-trip in a temp target', () => {
   try {
     const out = run(['install', '--target', target]);
     assert.match(out, /agents:\s+7 installed/);
-    assert.match(out, /hooks:\s+2 installed/);
+    assert.match(out, /hooks:\s+3 installed/);
 
     const dotClaude = path.join(target, '.claude');
     assert.ok(fs.existsSync(path.join(dotClaude, 'agents', 'vzt-planner.md')));
