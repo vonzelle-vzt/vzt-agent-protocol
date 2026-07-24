@@ -141,9 +141,10 @@ rejected the implementation:
 The rejection above is narrow: it kills the *fan-out/racing* mechanism. It does
 **not** reject using an agent multiplexer to *watch* a `/vzt-ship` run whose units are
 already pairwise-disjoint (not a race — each unit owns different files and is graded by
-its own oracle). Two backends behind `--mux orca|herdr` (default `orca`):
-[Orca](https://github.com/stablyai/orca) (desktop ADE) and
-[Herdr](https://herdr.dev) (terminal-native, persistent over SSH/mobile). Wired via
+its own oracle). Three backends behind `--mux orca|herdr|vscode` (default `orca`):
+[Orca](https://github.com/stablyai/orca) (desktop ADE), [Herdr](https://herdr.dev)
+(terminal-native, persistent over SSH/mobile), and `vscode` (native VS Code integrated
+terminals via the companion extension — see [`docs/VSCODE.md`](../../docs/VSCODE.md)). Wired via
 `orca/` in this package:
 
 - **Terminal stays the substrate; routing is untouched.** Orca runs `claude`, so the
