@@ -2,7 +2,7 @@
 name: vzt-heavy-builder
 description: "Heavy implementation agent (Opus 4.8) — large refactors, migrations, dense algorithmic work, performance surgery, concurrency, multi-file changes with tight coupling. Use when the change is too gnarly for the standard builder, or when a plan step is tagged tier: opus."
 model: opus
-effort: high
+effort: xhigh
 memory: project
 ---
 

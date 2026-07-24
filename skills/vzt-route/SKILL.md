@@ -14,8 +14,8 @@ can do it well. This skill is the canonical decision procedure; the
 <!-- sync: TIERS in hooks/vzt-route-classifier.mjs — test/classifier.test.mjs asserts the Cost column matches -->
 | Tier | Model | Owns | Fleet agents | Cost | Intelligence | Taste |
 |------|-------|------|--------------|------|--------------|-------|
-| 4 | **Fable 5** | Architecture, system design, planning, impossible bugs, root-cause, security analysis, multi-repo strategy | `vzt-planner`, `vzt-oracle` | 25× | 10 | 10 |
-| 3 | **Opus 4.8** | Large refactors, migrations, dense algorithms, performance/concurrency surgery, load-bearing review | `vzt-heavy-builder`, `vzt-reviewer` | 15× | 9 | 9 |
+| 4 | **Fable 5** | Architecture, system design, planning, impossible bugs, root-cause, security analysis, multi-repo strategy | `vzt-planner`, `vzt-oracle` | 10× | 10 | 10 |
+| 3 | **Opus 4.8** | Large refactors, migrations, dense algorithms, performance/concurrency surgery, load-bearing review | `vzt-heavy-builder`, `vzt-reviewer` | 5× | 9 | 9 |
 | 2 | **Sonnet 5** | Standard implementation, features, bug fixes, tests, endpoints, components — the default | `vzt-builder` | 3× | 8 | 8 |
 | 1 | **Haiku 4.5** | Search/recon, summaries, renames, typos, formatting, version bumps, commit messages, file moves | `vzt-scout`, `vzt-mechanic` | 1× | 5 | 4 |
 
@@ -66,7 +66,7 @@ re-fire `SessionStart`.
 - The classifier never suggests `max` — that's reserved for pinned Fable
   agents or an explicit escalation, not routine routing.
 - Fable-low ≈ Opus-high in quality-per-cost.
-- `xhigh`/`max` on routine work causes overthinking, not quality.
+- `xhigh` is the coding/agentic default and the right call for the heavy-builder's dense work; on routine work `xhigh`/`max` overthinks, not improves.
 
 ## Delegation vs. turn-switch
 
@@ -188,7 +188,7 @@ silently clobber each other and **neither reports a problem**.
 The frontier tier designs and verifies; cheap tiers execute. When Fable or
 Opus orchestrates a multi-step or dynamic workflow, worker steps default to
 Sonnet (Haiku if mechanical) — measured results on routine steps are equal at
-~8–25× lower cost (see the Cost column above). Workers report back after each
+~2–10× lower cost (see the Cost column above). Workers report back after each
 step; the orchestrator uses the reports to design the next step. Never promote
 a worker step to the orchestrator's own tier without a stated reason.
 

@@ -22,12 +22,14 @@ import os from 'node:os';
 
 const STATE_DIR = process.env.VZT_ROUTER_STATE_DIR || path.join(os.homedir(), '.claude', 'vzt-router');
 
-// cost = relative multiplier (not dollars); intelligence/taste on a 10-scale.
+// cost = relative price multiplier vs Haiku, anchored to current sticker pricing
+// (Fable $10/$50, Opus $5/$25, Sonnet $3/$15, Haiku $1/$5 per 1M in/out →
+// ratios 10/5/3/1); intelligence/taste on a 10-scale.
 // Mirrored in docs/ROUTING-MATRIX.md and skills/vzt-route/SKILL.md — a sync
 // test enforces the cost values match across all three.
 export const TIERS = {
-  fable: { label: 'Fable 5 (frontier reasoning)', agents: { plan: 'vzt-planner', debug: 'vzt-oracle' }, effort: 'high', cost: 25, intelligence: 10, taste: 10 },
-  opus: { label: 'Opus 4.8 (heavy implementation/review)', agents: { build: 'vzt-heavy-builder', review: 'vzt-reviewer', horizon: 'vzt-heavy-builder' }, effort: 'high', cost: 15, intelligence: 9, taste: 9 },
+  fable: { label: 'Fable 5 (frontier reasoning)', agents: { plan: 'vzt-planner', debug: 'vzt-oracle' }, effort: 'high', cost: 10, intelligence: 10, taste: 10 },
+  opus: { label: 'Opus 4.8 (heavy implementation/review)', agents: { build: 'vzt-heavy-builder', review: 'vzt-reviewer', horizon: 'vzt-heavy-builder' }, effort: 'high', cost: 5, intelligence: 9, taste: 9 },
   sonnet: { label: 'Sonnet 5 (standard execution)', agents: { build: 'vzt-builder' }, effort: 'medium', cost: 3, intelligence: 8, taste: 8 },
   haiku: { label: 'Haiku 4.5 (mechanical/recon)', agents: { scout: 'vzt-scout', mech: 'vzt-mechanic' }, effort: 'low', cost: 1, intelligence: 5, taste: 4 },
 };
@@ -194,7 +196,7 @@ export function directive(result, chair) {
   lines.push(
     '  escalation ladder: if the chosen tier fails twice on the same problem, escalate exactly one tier (haiku→sonnet→opus→fable) and say so.',
     '  budget rules: mechanical/recon work never rises above Haiku; Sonnet burns its own separate weekly bucket — prefer it for all routine execution; keep Fable turns ≤15% of the session.',
-    '  effort note: use the suggested effort — Fable-low ≈ Opus-high; xhigh/max on routine work causes overthinking, not quality.'
+    '  effort note: use the suggested effort — Fable-low ≈ Opus-high. xhigh is the right setting for HARD coding/agentic work (the heavy-builder runs there); on routine work xhigh/max overthinks, not improves.'
   );
   return lines.join('\n');
 }
