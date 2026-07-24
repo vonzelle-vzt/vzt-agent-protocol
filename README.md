@@ -7,7 +7,7 @@
 Part of the [VZT Tech Consulting Protocol](https://github.com/vonzelle-vzt/VZT-Tech-Consulting-Protocol) ecosystem.
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
-[![Version](https://img.shields.io/badge/Version-1.5.0-purple.svg)](#)
+[![Version](https://img.shields.io/badge/Version-1.9.0-purple.svg)](#)
 [![Tiers](https://img.shields.io/badge/Tiers-Fable%205%20%7C%20Opus%204.8%20%7C%20Sonnet%205%20%7C%20Haiku%204.5-green.svg)](docs/ROUTING-MATRIX.md)
 
 ---
@@ -321,7 +321,7 @@ compensate for a skipped gate — a skipped gate at max effort is still a guess.
 They also scale down: on Haiku each gate is one line of output; the discipline
 is identical, the prose is shorter. Combined with the orchestrator doctrine
 (frontier designs and verifies, Sonnet/Haiku execute and report back), this is
-what delivers the ~8–25× lower cost on routine steps at equal quality. The
+what delivers the ~2–10× lower cost on routine steps at equal quality. The
 Cost/Intelligence/Taste columns in the [routing matrix](docs/ROUTING-MATRIX.md)
 quantify that trade-off tier by tier, so the routing decision is a number, not
 a vibe.
@@ -365,6 +365,20 @@ a vibe.
 - [CLAUDE.md snippet for manual installs](templates/CLAUDE-snippet.md)
 
 ## Release notes
+
+### 1.9.0 — native `--mux vscode` + model-currency audit
+
+- **Native VS Code multiplexer** — a third `--mux` backend alongside `orca`/`herdr`.
+  `vzt-agent ship-watch <SPEC> --mux vscode` opens each ship unit as its own native
+  VS Code integrated terminal in its own `git worktree`, via a filesystem queue drained
+  by the companion extension in [`vscode/`](vscode/) and a `Stop`-event idle sentinel
+  hook. No external multiplexer binary. See [`docs/VSCODE.md`](docs/VSCODE.md).
+- **Model-currency audit** — verified the lineup is current (Fable 5 / Opus 4.8 /
+  Sonnet 5 / Haiku 4.5; `model: fable` confirmed a valid Claude Code alias). Corrected
+  the `TIERS` cost multipliers to today's sticker ratios (Fable `25×`→`10×`,
+  Opus `15×`→`5×`; Sonnet/Haiku unchanged), so the printed "× cost saving" figures are
+  honest. Adopted `xhigh` for the Opus `vzt-heavy-builder` — now the Claude Code default
+  for hard coding/agentic work — while keeping the "no xhigh on routine work" guardrail.
 
 ### 1.8.0 — Herdr-supervised runs are the DEFAULT substrate for `/vzt-ship`
 
@@ -478,8 +492,8 @@ a vibe.
   and `vzt-mechanic`.
 - Effort is now a routing dimension: the classifier computes a suggested
   effort (`suggestEffort()`) per prompt and surfaces it in every `[VZT-ROUTE]`
-  directive (`@ effort low|medium|high`), alongside an effort note explaining
-  when not to reach for `xhigh`/`max`.
+  directive (`@ effort low|medium|high`), alongside an effort note: `xhigh` for
+  hard coding/agentic (where the heavy-builder runs), not for routine work.
 - Added Cost/Intelligence/Taste columns to `TIERS` in the classifier hook, with
   matching columns in `docs/ROUTING-MATRIX.md` and `skills/vzt-route/SKILL.md`
   — a sync test now enforces the cost values match across all three.

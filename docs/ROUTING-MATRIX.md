@@ -9,8 +9,8 @@ burns the quota this protocol exists to protect.
 <!-- sync: TIERS in hooks/vzt-route-classifier.mjs — test/classifier.test.mjs asserts the Cost column matches -->
 | Tier | Model | Alias | Owns | Fleet agents | Turn skill | Cost | Intelligence | Taste |
 |------|-------|-------|------|--------------|------------|------|--------------|-------|
-| 4 | Claude Fable 5 | `fable` | Architecture, system design, planning, migration strategy, impossible bugs, root-cause analysis, security analysis, multi-repo strategy | `vzt-planner`, `vzt-oracle` | `/vzt-plan`, `/vzt-fix` | 25× | 10 | 10 |
-| 3 | Claude Opus 4.8 | `opus` | Large refactors, migrations, dense algorithms, performance/concurrency surgery, load-bearing review | `vzt-heavy-builder`, `vzt-reviewer` | — | 15× | 9 | 9 |
+| 4 | Claude Fable 5 | `fable` | Architecture, system design, planning, migration strategy, impossible bugs, root-cause analysis, security analysis, multi-repo strategy | `vzt-planner`, `vzt-oracle` | `/vzt-plan`, `/vzt-fix` | 10× | 10 | 10 |
+| 3 | Claude Opus 4.8 | `opus` | Large refactors, migrations, dense algorithms, performance/concurrency surgery, load-bearing review | `vzt-heavy-builder`, `vzt-reviewer` | — | 5× | 9 | 9 |
 | 2 | Claude Sonnet 5 | `sonnet` | Standard implementation: features, bug fixes, tests, endpoints, components, integration — **the default tier** | `vzt-builder` | `/vzt-build` | 3× | 8 | 8 |
 | 1 | Claude Haiku 4.5 | `haiku` | Search/recon, summaries, renames, typo fixes, formatting, lint, version bumps, commit messages, file moves | `vzt-scout`, `vzt-mechanic` | `/vzt-quick` | 1× | 5 | 4 |
 
@@ -75,7 +75,7 @@ MODEL.**
 - The classifier never suggests `max` — that's reserved for pinned Fable
   agents or an explicit escalation, not routine routing.
 - Fable-low ≈ Opus-high in quality-per-cost.
-- `xhigh`/`max` on routine work causes overthinking, not quality.
+- `xhigh` is the coding/agentic default and the right call for the heavy-builder's dense work; on routine work `xhigh`/`max` overthinks, not improves.
 
 **`/vzt-fable-mode` is a separate dial from tier/effort routing above**: it
 carries no `model:` pin and runs on whichever model the router already picked,
