@@ -309,7 +309,7 @@ function stats() {
     console.log(`  ${tier.padEnd(6)} ${String(pct).padStart(3)}%  ${bar} (${n})`);
   }
   const fablePct = total ? ((byTier.fable || 0) / total) * 100 : 0;
-  console.log(`\nTarget: Fable ≤15% — ${fablePct <= 15 ? '✅ on target' : `❌ over (${Math.round(fablePct)}%) — tighten routing or use /vzt-build for execution`}`);
+  console.log(`\nTarget: Fable ≤10% — ${fablePct <= 10 ? '✅ on target' : `❌ over (${Math.round(fablePct)}%) — tighten routing: routine planning belongs on opus@max (/vzt-design), execution on /vzt-build`}`);
 
   // /vzt-ship ships with the test that can delete it. If the spec is not buying
   // coherence, it is buying a document, and a document is a tax.

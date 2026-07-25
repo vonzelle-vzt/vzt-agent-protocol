@@ -105,8 +105,9 @@ its pinned model regardless of your session model:
 
 | Agent | Model | Effort | Role |
 |-------|-------|--------|------|
-| `vzt-planner` | fable | max | Plans with a **step-routing table** (each step tagged with its cheapest sufficient tier) |
+| `vzt-planner` | fable | max | **No-prior-art** plans only — novel/greenfield architecture, one-way-door distributed-systems calls |
 | `vzt-oracle` | fable | max | Root-causes impossible bugs; returns a fix packet, not a guess |
+| `vzt-architect` | opus | max | **The `opus@max` rung** — routine planning, with a **step-routing table** (each step tagged with its cheapest sufficient tier) |
 | `vzt-heavy-builder` | opus | high | Tightly-coupled multi-file surgery, algorithms, migrations |
 | `vzt-reviewer` | opus | high | Reviews **only the load-bearing seam** the plan flags |
 | `vzt-builder` | sonnet | medium | The workhorse — all routine implementation |
@@ -117,7 +118,10 @@ its pinned model regardless of your session model:
 When up- or down-tier work needs the **full conversation context** (subagents
 start fresh), these switch the *current turn's* model in place:
 
-- `/vzt-plan <task>` — plan this turn on **Fable 5**
+- `/vzt-design <task>` — plan this turn on **Opus 5 @ `max`** (the `opus@max`
+  rung — the default planning turn)
+- `/vzt-plan <task>` — plan this turn on **Fable 5** (only when the design has
+  no prior art to reason from)
 - `/vzt-fix <bug>` — root-cause this turn on **Fable 5**
 - `/vzt-build <step>` — execute this turn on **Sonnet 5**
 - `/vzt-quick <task>` — mechanical turn on **Haiku 4.5**
@@ -140,7 +144,8 @@ The session model returns on your next prompt.
 
 ```
 you: "build feature X"  (a non-trivial, multi-part feature)
- └─ PLAN → vzt-planner (Fable 5, effort max)   ·   or /vzt-plan for an in-context turn
+ └─ PLAN → vzt-architect (Opus 5, effort max)  ·   or /vzt-design for an in-context turn
+     ·    (novel/greenfield design instead? → vzt-planner (Fable 5) or /vzt-plan)
      └─ plan with step-routing table + load-bearing seam flagged
          ├─ steps tagged sonnet → vzt-builder        (parallel)
          ├─ steps tagged haiku  → vzt-mechanic/scout (parallel)
@@ -168,7 +173,7 @@ language *alone* is still a planning question and stays on Fable ("design the
 architecture for the whole system"); scope **+ a build verb**
 (build/implement/ship/create/scaffold/rewrite/...) is a shipping question and
 becomes `HORIZON`. Fable narrows to genuinely hard debugging (`/vzt-fix`) and
-stays ≤15% of turns.
+stays ≤10% of turns.
 
 A `HORIZON` classification points at `/vzt-ship`, which runs four phases:
 
@@ -225,10 +230,15 @@ units are pairwise-disjoint, not a race. Full guide: [`orca/README.md`](orca/REA
 
 ## Guardrails
 
-- **Escalation ladder** — two failures at a tier escalates exactly one tier
-  (haiku→sonnet→opus→fable), stated aloud. Under-routing is self-healing.
-- **Fable budget** — ≤15% of turns; `vzt-agent stats` shows your distribution
-  against the target.
+- **Escalation ladder** — two failures at a rung escalates exactly one rung
+  (haiku→sonnet→opus→opus@max→fable), stated aloud. Under-routing is self-healing.
+- **Fable budget** — ≤10% of turns; `vzt-agent stats` shows your distribution
+  against the target. The `opus@max` rung absorbs the planning that used to
+  land on Fable.
+- **Delegation cap** — never delegate work finishable in a handful of tool
+  calls; prefer one sub-agent over several; once delegated, commit. Verify
+  *external* artifacts (run the oracle, `git diff` the worker's output); never
+  spawn a sub-agent to double-check your own inline work.
 - **No frontier execution** — plans always hand execution to cheaper tiers.
 - **Advisory, not authoritarian** — directives are context injections; Claude
   overrides them only with a stated reason.
@@ -332,7 +342,7 @@ a vibe.
 ### How fable-mode activates
 
 - **Always on at the Opus tier** — Opus never runs bare. Every Opus surface
-  carries the five gates by default: the `vzt-heavy-builder` and `vzt-reviewer`
+  carries the five gates by default: the `vzt-architect`, `vzt-heavy-builder` and `vzt-reviewer`
   agents state them as their first rule, the Opus chair profile injects them at
   session start, and every `[VZT-ROUTE]` directive that targets Opus restates
   them. Opus stays Opus (no model change) — it just always works with Fable's

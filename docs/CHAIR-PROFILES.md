@@ -139,4 +139,4 @@ Check your actual distribution any time:
 vzt-agent stats
 ```
 
-It shows the tier split and flags if Fable exceeds the ≤15% target.
+It shows the tier split and flags if Fable exceeds the ≤10% target.
