@@ -4,7 +4,7 @@
  *
  * Runs on every prompt. Scores the prompt against the routing matrix and
  * injects an advisory routing directive as additional context, so the session
- * automatically uses the right model tier (Fable 5 / Opus 4.8 / Sonnet 5 /
+ * automatically uses the right model tier (Fable 5 / Opus 5 / Sonnet 5 /
  * Haiku 4.5) without the user ever touching /model.
  *
  * Deterministic, zero-API-cost, <50ms. Chair-aware: reads the session model
@@ -29,19 +29,26 @@ const STATE_DIR = process.env.VZT_ROUTER_STATE_DIR || path.join(os.homedir(), '.
 // test enforces the cost values match across all three.
 export const TIERS = {
   fable: { label: 'Fable 5 (frontier reasoning)', agents: { plan: 'vzt-planner', debug: 'vzt-oracle' }, effort: 'high', cost: 10, intelligence: 10, taste: 10 },
-  opus: { label: 'Opus 4.8 (heavy implementation/review)', agents: { build: 'vzt-heavy-builder', review: 'vzt-reviewer', horizon: 'vzt-heavy-builder' }, effort: 'high', cost: 5, intelligence: 9, taste: 9 },
+  opus: { label: 'Opus 5 (heavy implementation/review)', agents: { build: 'vzt-heavy-builder', review: 'vzt-reviewer', horizon: 'vzt-heavy-builder', plan: 'vzt-architect' }, effort: 'high', cost: 5, intelligence: 9, taste: 9 },
   sonnet: { label: 'Sonnet 5 (standard execution)', agents: { build: 'vzt-builder' }, effort: 'medium', cost: 3, intelligence: 8, taste: 8 },
   haiku: { label: 'Haiku 4.5 (mechanical/recon)', agents: { scout: 'vzt-scout', mech: 'vzt-mechanic' }, effort: 'low', cost: 1, intelligence: 5, taste: 4 },
 };
 
-// Suggested per-prompt effort: mirrors the tier default, with two adjustments on
+// Suggested per-prompt effort: mirrors the tier default, with three adjustments on
 // Opus. A low-confidence Opus classification downgrades to medium (don't burn high
 // effort on a guess); a HIGH-confidence Opus BUILD earns xhigh — the current
 // Claude Code default for hard coding/agentic work, and what the vzt-heavy-builder
 // this routes to already runs at, so the inline suggestion matches the delegate.
 // Opus review and horizon-supervision stay at high (not dense inline coding).
-// Never returns 'max' by construction — that's reserved for pinned fable agents.
+//
+// Opus PLAN returns 'max' — this is the `opus@max` rung of the escalation ladder,
+// and it is the one place the classifier suggests max. Opus 5 is a step change on
+// deep reasoning at half Fable's cost, so routine architecture/planning that used
+// to earn Fable now runs here instead (see the demotion in classify()). The older
+// "never returns max by construction" invariant was retired with that rung: max is
+// no longer exclusive to pinned fable agents.
 export function suggestEffort(tier, confidence, kind) {
+  if (tier === 'opus' && kind === 'plan') return 'max';
   if (tier === 'opus' && confidence === 'low') return 'medium';
   if (tier === 'opus' && kind === 'build' && confidence === 'high') return 'xhigh';
   return TIERS[tier].effort;
@@ -50,14 +57,33 @@ export function suggestEffort(tier, confidence, kind) {
 // ——— HORIZON: the two-factor gate ————————————————————————————————————————
 //
 // SCOPE language alone is a PLANNING question ("design the architecture for the
-// whole system") and stays on Fable. SCOPE + a BUILD verb is a SHIPPING question,
-// and shipping-at-scale is what /vzt-ship exists for.
+// whole system") and routes to the planning rungs — in practice Fable, because
+// most HORIZON_SCOPE terms (from scratch, greenfield, ground-up, multi-tenant)
+// are also FRONTIER_NOVEL markers; plainer planning lands on opus@max instead.
+// SCOPE + a BUILD verb is a SHIPPING question, and shipping-at-scale is what
+// /vzt-ship exists for.
 //
 // Deliberately absent from BUILD: "design", "plan", "refactor", "migrate" — the
 // first two are planning, and the last two describe work on an existing system
 // that Opus already handles inline without a spec ceremony.
 const HORIZON_SCOPE = /\b(entire (codebase|repo|app|system|product|platform)|whole (app|system|product|platform|thing)|from scratch|greenfield|ground[- ]up|across (all|every|multiple)|end[- ]to[- ]end|multi[- ](tenant|region|agent|repo)|overnight|every (screen|route|endpoint|page|model|service|table))\b/i;
 const HORIZON_BUILD = /\b(build|implement|ship|create|write|stand up|scaffold|port|rewrite|deliver|generate)\b/i;
+
+// ——— FRONTIER_NOVEL: what still earns Fable on a PLAN ————————————————————
+//
+// Opus 5 is a step change on deep reasoning and long-horizon work at HALF Fable's
+// cost, with the full low..max effort ladder. That collapsed most of the planning
+// band: "design the auth system", "plan the migration", "write the tech spec" are
+// all Opus-at-max work now. What Opus 5 does NOT subsume is planning with no prior
+// art to pattern-match against — a novel system, a from-scratch architecture, a
+// distributed-systems or multi-tenancy decision whose blast radius is the whole
+// product. Those keep the frontier tier.
+//
+// Applied in classify() as a post-scoring demotion so every SIGNALS weight below
+// stays untouched: fable:plan without a frontier marker falls to opus:plan @ max.
+// The fable:DEBUG band is deliberately NOT gated by this — an impossible bug is
+// frontier work regardless of how ordinary the system it lives in sounds.
+const FRONTIER_NOVEL = /\b(novel|greenfield|from scratch|ground[- ]up|net[- ]new|first principles|clean[- ]sheet|multi[- ](tenant|region|repo|cloud)|distributed system|consensus|shard(ed|ing)|replication|event[- ]sourc(ed|ing)|re-?platform|migrate off|rearchitect|re-?architect)\b/i;
 
 // Signal groups. Each hit adds its weight to that tier's score.
 const SIGNALS = [
@@ -67,7 +93,7 @@ const SIGNALS = [
   { tier: 'fable', kind: 'plan', w: 2, re: /\b(trade-?offs?|evaluate (options|approaches)|compare (approaches|architectures|designs)|which (approach|architecture|design)|pros and cons)\b/i },
   { tier: 'fable', kind: 'debug', w: 2, re: /\b(security (audit|review|hole)|vulnerab|exploit|threat model|pen(etration)? test)\b/i },
 
-  // ——— Opus 4.8: heavy implementation, deep review ———
+  // ——— Opus 5: heavy implementation, deep review ———
   { tier: 'opus', kind: 'build', w: 3, re: /\b(refactor (the|this|our|across|everything)|large refactor|rewrite (the|this|our)|migrate (the|this|our|all|from)|overhaul|re-?architect|port (the|this|it) (to|from))\b/i },
   { tier: 'opus', kind: 'build', w: 2, re: /\b(performance|optimi[sz]e|concurren(t|cy)|parallel(ize)?|distributed|caching layer|algorithm)\b/i },
   { tier: 'opus', kind: 'review', w: 2, re: /\b(deep (review|dive)|thorough(ly)? (review|audit)|code review|review (the|this|my) (pr|diff|branch|change))\b/i },
@@ -137,6 +163,24 @@ export function classify(prompt) {
 
   const runnerUp = Math.max(...order.filter((t) => t !== best).map((t) => scores[t]));
   const confidence = bestScore >= 4 && bestScore - runnerUp >= 2 ? 'high' : bestScore >= 2 ? 'medium' : 'low';
+
+  // The `opus@max` rung. A PLAN that won Fable on generic planning language, with no
+  // FRONTIER_NOVEL marker, is Opus-at-max work — same reasoning depth, half the cost.
+  // Debug keeps Fable unconditionally; an impossible bug is frontier work either way.
+  if (best === 'fable' && kinds.fable === 'plan' && !FRONTIER_NOVEL.test(prompt)) {
+    matched.push('opus:plan(demoted-from-fable)');
+    return {
+      tier: 'opus',
+      kind: 'plan',
+      confidence,
+      effort: suggestEffort('opus', confidence, 'plan'),
+      demotedFrom: 'fable',
+      matched,
+      scores,
+      words,
+    };
+  }
+
   return { tier: best, kind: kinds[best], confidence, effort: suggestEffort(best, confidence, kinds[best]), matched, scores, words };
 }
 
@@ -174,6 +218,14 @@ export function directive(result, chair) {
       '  why NOT Fable: long-horizon work fails on lost coherence, not on raw model IQ — and the coherence is lost to context compaction, which a slower model does not fix. Put the plan on disk and the chair stays coherent across compaction at Opus wall-clock. Escalate the PROCESS, not the MODEL.',
       '  if compaction already ate the plan: run `vzt-agent ship-status`, then re-read SPEC.md. The file is the plan; your memory of it is a hypothesis.'
     );
+  } else if (result.kind === 'plan' && result.tier === 'opus') {
+    lines.push(
+      '  action: PLAN task on the `opus@max` rung — design first, do NOT start implementing. Produce a plan with a step-routing table whose execution steps hand DOWN to "vzt-builder".',
+      `  how: inline at effort max if this chair is Opus or Fable; otherwise delegate to the "${t.agents.plan}" subagent, or invoke /vzt-design when the plan needs full conversation context.`,
+      result.demotedFrom === 'fable'
+        ? '  why NOT Fable: this is planning with prior art to pattern-match against. Opus 5 covers that band at max effort for half the cost. Fable is reserved for planning with no prior art — a novel/greenfield/from-scratch architecture, distributed-systems or multi-tenancy decisions — and for impossible bugs (/vzt-fix). If this task is genuinely novel and you can say why, escalate one rung and say so.'
+        : '  escalation: if the design turns out to have no prior art to reason from, escalate one rung to Fable ("vzt-planner" / /vzt-plan) and state the reason.'
+    );
   } else if (chair !== 'unknown' && target === RANK[chair] && result.tier !== 'haiku') {
     lines.push('  action: chair matches target tier — handle inline. Do not spawn a subagent for this.');
   } else if (target > seat) {
@@ -199,9 +251,9 @@ export function directive(result, chair) {
   }
 
   lines.push(
-    '  escalation ladder: if the chosen tier fails twice on the same problem, escalate exactly one tier (haiku→sonnet→opus→fable) and say so.',
-    '  budget rules: mechanical/recon work never rises above Haiku; Sonnet burns its own separate weekly bucket — prefer it for all routine execution; keep Fable turns ≤15% of the session.',
-    '  effort note: use the suggested effort — Fable-low ≈ Opus-high. xhigh is the right setting for HARD coding/agentic work (the heavy-builder runs there); on routine work xhigh/max overthinks, not improves.'
+    '  escalation ladder: if the chosen tier fails twice on the same problem, escalate exactly one rung (haiku→sonnet→opus→opus@max→fable) and say so.',
+    '  budget rules: mechanical/recon work never rises above Haiku; Sonnet burns its own separate weekly bucket — prefer it for all routine execution; keep Fable turns ≤10% of the session (opus@max absorbs the planning that used to go there).',
+    '  effort note: start xhigh for coding/agentic work and high elsewhere, then sweep DOWN — Opus 5 is unusually strong at low/medium, so prior-model effort defaults over-spend. max is the opus@max planning rung, not a routine setting.'
   );
   return lines.join('\n');
 }
@@ -324,6 +376,7 @@ if (import.meta.url === `file://${process.argv[1]}`) {
     kind: result.kind,
     confidence: result.confidence,
     effort: result.effort,
+    demotedFrom: result.demotedFrom || null,
     override: Boolean(override),
     words: result.words,
     signals: result.matched,

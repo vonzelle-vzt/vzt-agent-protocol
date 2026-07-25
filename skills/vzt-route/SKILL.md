@@ -14,8 +14,9 @@ can do it well. This skill is the canonical decision procedure; the
 <!-- sync: TIERS in hooks/vzt-route-classifier.mjs — test/classifier.test.mjs asserts the Cost column matches -->
 | Tier | Model | Owns | Fleet agents | Cost | Intelligence | Taste |
 |------|-------|------|--------------|------|--------------|-------|
-| 4 | **Fable 5** | Architecture, system design, planning, impossible bugs, root-cause, security analysis, multi-repo strategy | `vzt-planner`, `vzt-oracle` | 10× | 10 | 10 |
-| 3 | **Opus 4.8** | Large refactors, migrations, dense algorithms, performance/concurrency surgery, load-bearing review | `vzt-heavy-builder`, `vzt-reviewer` | 5× | 9 | 9 |
+| 4 | **Fable 5** | Planning with **no prior art**: novel/greenfield architecture, from-scratch design, one-way-door sharding/replication/consensus/multi-tenancy. Impossible bugs, root-cause, security analysis | `vzt-planner`, `vzt-oracle` | 10× | 10 | 10 |
+| 3+ | **Opus 5** @ `max` | **Routine planning** — architecture, tech specs, roadmaps, migration plans, PRD breakdown, approach selection (the `opus@max` rung) | `vzt-architect` | 5× | 9 | 9 |
+| 3 | **Opus 5** | Large refactors, migrations, dense algorithms, performance/concurrency surgery, load-bearing review | `vzt-heavy-builder`, `vzt-reviewer` | 5× | 9 | 9 |
 | 2 | **Sonnet 5** | Standard implementation, features, bug fixes, tests, endpoints, components — the default | `vzt-builder` | 3× | 8 | 8 |
 | 1 | **Haiku 4.5** | Search/recon, summaries, renames, typos, formatting, version bumps, commit messages, file moves | `vzt-scout`, `vzt-mechanic` | 1× | 5 | 4 |
 
@@ -23,15 +24,19 @@ can do it well. This skill is the canonical decision procedure; the
 
 1. **Is it mechanical or pure discovery?** → Tier 1. Never higher, no exceptions.
 2. **Does it require choosing an approach** (architecture, schema, strategy,
-   trade-offs) or **has it beaten a lower tier twice**? → Tier 4.
+   trade-offs)? → **Tier 3+, the `opus@max` rung** (`vzt-architect` /
+   `/vzt-design`). Planning lives here by default.
+   → **Tier 4** only when the design has no prior art to reason from (novel,
+   greenfield, from-scratch, or a one-way-door distributed-systems call), or
+   when it has beaten a lower rung twice.
 3. **Is it implementation with tight coupling, algorithms, or blast radius?**
    → Tier 3.
 4. **Does it name scope language** (entire codebase / from scratch /
    greenfield / end-to-end / multi-tenant / ...) **AND a build verb**
    (build/implement/ship/create/scaffold/rewrite/...)? → Tier 3, kind
    `HORIZON` — spec-first via `/vzt-ship`, never routine inline execution.
-   Scope language *without* a build verb is still a planning question and
-   stays on Tier 4.
+   Scope language *without* a build verb is still a planning question — it
+   goes to `opus@max`, or Tier 4 if genuinely novel.
 5. **Everything else** → Tier 2. When unsure between two tiers, take the lower
    one — the escalation ladder exists precisely so under-routing is cheap.
 
@@ -63,10 +68,13 @@ re-fire `SessionStart`.
   `low`.
 - Opus downgrades to `medium` on low-confidence classifications — don't spend
   high effort confirming a guess.
-- The classifier never suggests `max` — that's reserved for pinned Fable
-  agents or an explicit escalation, not routine routing.
-- Fable-low ≈ Opus-high in quality-per-cost.
-- `xhigh` is the coding/agentic default and the right call for the heavy-builder's dense work; on routine work `xhigh`/`max` overthinks, not improves.
+- **Opus `PLAN` returns `max`** — that *is* the `opus@max` rung, and the only
+  place the classifier suggests `max`. (The older "never suggests max"
+  invariant was retired when the rung was added.)
+- Start `xhigh` for coding/agentic work and `high` elsewhere, then sweep
+  **down** — Opus 5 is unusually strong at `low`/`medium`, so effort defaults
+  carried over from earlier models over-spend. `xhigh` stays right for the
+  heavy-builder's dense work.
 
 ## Delegation vs. turn-switch
 
@@ -195,11 +203,17 @@ a worker step to the orchestrator's own tier without a stated reason.
 
 ## Hard rules
 
-- Escalation ladder: two failures at a tier → up exactly one tier, stated aloud.
+- Escalation ladder: two failures at a rung → up exactly one rung
+  (haiku → sonnet → opus → opus@max → fable), stated aloud.
   On a *bug*, run `/vzt-diagnose` before the rung that lands on Fable — cheap
   parallel evidence first, frontier reasoning only once it is earned.
 - Fan out for divergence and evidence, never for correctness. Sonnet/Haiku only.
-- Fable turns ≤15% of the session. Never execute a routine plan on Fable/Opus.
+- Delegation cap: never delegate work finishable in a handful of tool calls;
+  prefer one sub-agent over several; keep spawn counts low; once delegated,
+  commit — don't re-derive a worker's findings. Verify *external* artifacts
+  (run the oracle, `git diff` the worker's output); never spawn a sub-agent to
+  double-check your own inline work.
+- Fable turns ≤10% of the session. Never execute a routine plan on Fable/Opus.
 - Sonnet draws on its own separate weekly usage bucket on Max plans — routing
   execution there directly preserves the all-models bucket Fable/Opus burn.
 - Routing directives are advisory: override with a stated reason, never silently.
@@ -210,4 +224,4 @@ a worker step to the orchestrator's own tier without a stated reason.
   state tier + agent + why, then proceed with that routing.
 - `/vzt-route stats` → run `vzt-agent stats` (or read
   `~/.claude/vzt-router/decisions.jsonl`) and summarize tier distribution vs.
-  the ≤15%-Fable target.
+  the ≤10%-Fable target.

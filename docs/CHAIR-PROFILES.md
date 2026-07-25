@@ -7,14 +7,14 @@ you sit. Same fleet, same classifier; the delegation direction flips.
 
 | Chair | Scarce resource | Default motion | Reaches for |
 |-------|-----------------|----------------|-------------|
-| **Opus 4.8** | Wall-clock + Opus quota | Build inline, delegate **down** | Sonnet for routine, Haiku for mechanical, Fable for the hard 15% |
+| **Opus 5** | Wall-clock + Opus quota | Build inline, delegate **down** | Sonnet for routine, Haiku for mechanical, Fable for the hard ≤10% |
 | **Sonnet 5** | Model capability | Stay inline on the Sonnet bucket, escalate **up** when earned | Opus for heavy work, Fable for planning/impossible bugs, Haiku for recon |
-| **Fable 5** | Fable tokens (tight limit) | Plan/reason inline, delegate **all** execution down | Sonnet/Opus/Haiku for everything that isn't frontier reasoning |
+| **Fable 5** | Fable tokens (tight limit) | Reason inline, delegate **all** execution down | Sonnet/Opus/Haiku for everything that isn't frontier reasoning — including routine planning, which is an `opus@max` job |
 | **Haiku 4.5** | Judgment | Dispatcher — delegate almost everything up | Sonnet for builds, Opus/Fable for anything needing judgment |
 
 ---
 
-## Opus 4.8 chair — the recommended flagship setup
+## Opus 5 chair — the recommended flagship setup
 
 Sit on Opus so strong first-line reasoning is always on tap, and let the
 protocol push routine work *down* so your all-models bucket lasts the week.
@@ -42,9 +42,20 @@ protocol push routine work *down* so your all-models bucket lasts the week.
 - **Mechanical / recon** (renames, formatting, version bumps, searches,
   summaries) → delegated **down** to `vzt-mechanic` / `vzt-scout` (Haiku 4.5),
   which is nearly free.
-- **Genuinely hard reasoning** (novel architecture, migration strategy,
-  impossible bugs) → escalated **up** to Fable via `/vzt-plan`, `/vzt-fix`, or
-  the `vzt-planner` / `vzt-oracle` subagents. Kept to ≤15% of turns.
+- **Planning** (architecture, tech specs, roadmaps, migration plans) → stays
+  **here**, at `max` effort — the `opus@max` rung, inline or via `vzt-architect`
+  / `/vzt-design`. Opus 5 is a step change on deep reasoning at half Fable's
+  cost, so this band no longer earns the frontier tier.
+- **Genuinely hard reasoning** (planning with *no prior art* — novel or
+  greenfield architecture, one-way-door sharding/consensus/multi-tenancy calls —
+  and impossible bugs) → escalated **up** to Fable via `/vzt-plan`, `/vzt-fix`,
+  or the `vzt-planner` / `vzt-oracle` subagents. Kept to ≤10% of turns.
+- **Bounded delegation.** This chair reaches for sub-agents readily, so the
+  profile caps it: never delegate what you could finish in a handful of tool
+  calls, prefer one sub-agent over several, and once you delegate, commit —
+  don't re-derive a worker's findings. Verify *external* artifacts relentlessly
+  (run the oracle, `git diff` the worker's output); never spawn a sub-agent to
+  double-check your own inline work.
 
 **A turn on the Opus chair:**
 
@@ -64,6 +75,9 @@ you (Opus chair): "design the multi-tenant billing architecture and plan
  └─ this earns the frontier tier → /vzt-plan (switches THIS turn to Fable 5)
      or delegate to vzt-planner — returns a plan with a step-routing table
      → execution steps hand back down to vzt-builder / vzt-mechanic
+
+     (a plain "design the billing architecture", with no novel/greenfield
+      marker, would instead stay here on the opus@max rung — /vzt-design)
 ```
 
 **Why this fits "use Opus first line so I can call on Sonnet":** you never leave
@@ -84,8 +98,10 @@ the Sonnet-only bucket; the protocol escalates *up* only when a task earns it.
 - **Standard execution** → inline on Sonnet.
 - **Recon / mechanical** → down to `vzt-scout` / `vzt-mechanic` (Haiku).
 - **Heavy implementation / load-bearing review** → up to `vzt-heavy-builder` /
-  `vzt-reviewer` (Opus).
-- **Planning / architecture / impossible bugs** → up to `vzt-planner` /
+  `vzt-reviewer` (Opus 5).
+- **Planning / architecture** → up to `vzt-architect` (Opus 5 @ `max`) or
+  `/vzt-design`. Stop at this rung; it handles almost all planning.
+- **No-prior-art architecture / impossible bugs** → up to `vzt-planner` /
   `vzt-oracle` (Fable), or the `/vzt-plan` / `/vzt-fix` turn skills when the
   work needs full conversation context.
 
@@ -100,7 +116,9 @@ the tightest limit, so the doctrine is aggressive delegation:
 /model fable
 ```
 
-- Planning, architecture, and root-cause reasoning → **inline** (that's the point).
+- No-prior-art architecture and root-cause reasoning → **inline** (that's the point).
+- Routine planning → down to `vzt-architect` / `/vzt-design`. Ordinary
+  architecture does not need Fable tokens.
 - **All** execution → down: routine → `vzt-builder`, mechanical → `vzt-mechanic`,
   heavy parallel implementation → `vzt-heavy-builder`.
 - Never do file-by-file mechanical work inline on this chair.
@@ -113,7 +131,7 @@ The chair is read fresh at every session start, so switching is just
 `/model <name>` on your next session — the correct profile loads automatically.
 Mid-session, before the next SessionStart fires, the router falls back to a
 safe chair-agnostic ladder (recon→Haiku, routine→Sonnet, heavy→Opus,
-frontier→Fable), so routing stays correct either way.
+planning→opus@max, frontier→Fable), so routing stays correct either way.
 
 Check your actual distribution any time:
 

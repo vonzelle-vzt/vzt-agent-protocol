@@ -2,7 +2,7 @@
 /**
  * vzt-agent — installer/CLI for the VZT Agent Protocol.
  *
- * Installs automatic model routing (Fable 5 / Opus 4.8 / Sonnet 5 / Haiku 4.5)
+ * Installs automatic model routing (Fable 5 / Opus 5 / Sonnet 5 / Haiku 4.5)
  * into a Claude Code project (.claude/) or globally (~/.claude/).
  *
  * Commands:
@@ -180,8 +180,8 @@ function install(args) {
   // install (~/.claude) uses the absolute path.
   const settingsPath = wireSettings(dotClaude, { portable: !args.global });
 
-  console.log(`  agents:   ${agents.length} installed (fable×2, opus×2, sonnet×1, haiku×2)`);
-  console.log(`  skills:   ${skills.length} files installed (/vzt-route /vzt-plan /vzt-fix /vzt-build /vzt-quick /vzt-fable-mode /vzt-diagnose /vzt-ship)`);
+  console.log(`  agents:   ${agents.length} installed (fable×2, opus×3, sonnet×1, haiku×2)`);
+  console.log(`  skills:   ${skills.length} files installed (/vzt-route /vzt-design /vzt-plan /vzt-fix /vzt-build /vzt-quick /vzt-fable-mode /vzt-diagnose /vzt-ship)`);
   console.log(`  hooks:    ${hooks.length} installed (SessionStart chair-profile + UserPromptSubmit classifier + Stop vscode-mux idle sentinel)`);
   console.log(`  templates: ${templates.length} installed (worker-brief delegation contract, ship spec)`);
   console.log(`  workflows: ${workflows.length} installed (vzt-ship long-horizon orchestration)`);

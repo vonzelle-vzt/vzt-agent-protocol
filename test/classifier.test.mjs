@@ -102,9 +102,15 @@ test('classifier returns confidence and signals', () => {
   assert.ok(Array.isArray(r.matched));
 });
 
-test('classify() effort is always low/medium/high/xhigh, never max', () => {
+test('classify() reserves max for the opus@max PLAN rung — everything else stays low..xhigh', () => {
   for (const [prompt] of cases) {
     const r = classify(prompt);
+    if (r.effort === 'max') {
+      // The one sanctioned max: routine planning demoted off Fable onto opus@max.
+      assert.equal(r.tier, 'opus', `max effort outside the opus tier for "${prompt}"`);
+      assert.equal(r.kind, 'plan', `max effort outside the plan rung for "${prompt}"`);
+      continue;
+    }
     assert.ok(['low', 'medium', 'high', 'xhigh'].includes(r.effort), `unexpected effort "${r.effort}" for "${prompt}"`);
   }
 });
@@ -150,6 +156,64 @@ test('suggestEffort: fable never returns max', () => {
   }
 });
 
+test('suggestEffort: the opus PLAN rung is max at every confidence (opus@max)', () => {
+  for (const confidence of ['low', 'medium', 'high']) {
+    assert.equal(suggestEffort('opus', confidence, 'plan'), 'max');
+  }
+  // ...and the rung does not leak into the other opus kinds.
+  assert.equal(suggestEffort('opus', 'high', 'review'), 'high');
+  assert.equal(suggestEffort('opus', 'high', 'horizon'), 'high');
+  assert.equal(suggestEffort('opus', 'low', 'build'), 'medium');
+});
+
+test('routine planning is demoted off Fable onto the opus@max rung', () => {
+  for (const prompt of [
+    'Design the system architecture for the internal admin tool',
+    'Help me plan the technical roadmap for Q3',
+    'Write a tech spec for the notifications service',
+  ]) {
+    const r = classify(prompt);
+    assert.equal(r.tier, 'opus', `expected demotion to opus for "${prompt}"`);
+    assert.equal(r.kind, 'plan', `expected kind=plan for "${prompt}"`);
+    assert.equal(r.effort, 'max', `expected max effort for "${prompt}"`);
+    assert.equal(r.demotedFrom, 'fable');
+    assert.ok(r.matched.includes('opus:plan(demoted-from-fable)'), 'demotion is not recorded in signals');
+  }
+});
+
+test('planning with no prior art KEEPS Fable (the demotion is not blanket)', () => {
+  for (const prompt of [
+    'Design a novel architecture for the multi-tenant billing platform',
+    'Design the greenfield architecture for our event-sourced ledger',
+    'Design the sharding strategy and plan the migration, weighing the trade-offs',
+  ]) {
+    const r = classify(prompt);
+    assert.equal(r.tier, 'fable', `frontier planning wrongly demoted for "${prompt}"`);
+    assert.equal(r.kind, 'plan');
+    assert.equal(r.demotedFrom, undefined);
+  }
+});
+
+test('the DEBUG band is never demoted — an impossible bug stays frontier', () => {
+  for (const prompt of [
+    'There is a race condition somewhere and I have no idea why it breaks',
+    'Find the root cause of this memory leak, it is still failing after three fixes',
+  ]) {
+    const r = classify(prompt);
+    assert.equal(r.tier, 'fable', `debug wrongly demoted for "${prompt}"`);
+    assert.equal(r.kind, 'debug');
+    assert.notEqual(r.effort, 'max', 'debug should not pick up the opus@max effort');
+  }
+});
+
+test('the opus@max directive names the plan agent and explains why it is not Fable', () => {
+  const d = directive(classify('Design the system architecture for the internal admin tool'), 'opus');
+  assert.ok(d.includes('opus@max'), 'directive does not name the rung');
+  assert.ok(d.includes(TIERS.opus.agents.plan), 'directive does not name the plan agent');
+  assert.ok(d.includes('why NOT Fable'), 'directive does not justify skipping Fable');
+  assert.ok(d.includes('/vzt-design'), 'directive does not offer the turn skill');
+});
+
 test('docs mirror TIERS cost values exactly (sync check)', () => {
   const matrix = fs.readFileSync(path.join(REPO_ROOT, 'docs', 'ROUTING-MATRIX.md'), 'utf8');
   const skill = fs.readFileSync(path.join(REPO_ROOT, 'skills', 'vzt-route', 'SKILL.md'), 'utf8');
@@ -157,6 +221,65 @@ test('docs mirror TIERS cost values exactly (sync check)', () => {
     const costString = `${TIERS[tier].cost}×`;
     assert.ok(matrix.includes(costString), `docs/ROUTING-MATRIX.md missing "${costString}" for ${tier}`);
     assert.ok(skill.includes(costString), `skills/vzt-route/SKILL.md missing "${costString}" for ${tier}`);
+  }
+});
+
+// ——— Model-currency guard ————————————————————————————————————————————————
+//
+// The protocol's doctrine names specific models in prose, across a dozen files.
+// When a model launches, the fleet agents auto-upgrade (they pin ALIASES — `model:
+// opus` resolves to "the latest Opus"), but the prose does not — so the docs start
+// describing a model nobody is running. These two tests turn "remember to update
+// nine files" into a failing command.
+
+test('docs mirror the TIERS model names (currency guard — fails on the next model launch)', () => {
+  const surfaces = {
+    'docs/ROUTING-MATRIX.md': fs.readFileSync(path.join(REPO_ROOT, 'docs', 'ROUTING-MATRIX.md'), 'utf8'),
+    'skills/vzt-route/SKILL.md': fs.readFileSync(path.join(REPO_ROOT, 'skills', 'vzt-route', 'SKILL.md'), 'utf8'),
+    'README.md': fs.readFileSync(path.join(REPO_ROOT, 'README.md'), 'utf8'),
+    'docs/CHAIR-PROFILES.md': fs.readFileSync(path.join(REPO_ROOT, 'docs', 'CHAIR-PROFILES.md'), 'utf8'),
+  };
+  for (const tier of Object.keys(TIERS)) {
+    // 'Opus 5 (heavy implementation/review)' -> 'Opus 5'
+    const model = TIERS[tier].label.replace(/\s*\(.*$/, '').trim();
+    for (const [file, text] of Object.entries(surfaces)) {
+      assert.ok(text.includes(model), `${file} does not mention "${model}" — TIERS says that is the ${tier} tier`);
+    }
+  }
+});
+
+test('no retired model version survives anywhere in the shipped protocol', () => {
+  // Add a row here whenever a model is superseded; the value is the replacement.
+  const RETIRED = [
+    [/Opus 4\.8/g, 'Opus 5'],
+    [/opus-4-8/g, 'claude-opus-5 (or the `opus` alias)'],
+  ];
+  const files = [
+    'README.md',
+    'package.json',
+    'cli/vzt-agent.js',
+    'docs/ROUTING-MATRIX.md',
+    'docs/CHAIR-PROFILES.md',
+    'hooks/vzt-route-classifier.mjs',
+    'hooks/vzt-session-start.mjs',
+    'skills/vzt-route/SKILL.md',
+    'skills/vzt-fable-mode/SKILL.md',
+    'agents/vzt-heavy-builder.md',
+    'agents/vzt-reviewer.md',
+    'agents/vzt-architect.md',
+  ];
+  for (const rel of files) {
+    const text = fs.readFileSync(path.join(REPO_ROOT, rel), 'utf8');
+    for (const [pattern, replacement] of RETIRED) {
+      // The release-notes section is a historical record — it is allowed to name old models.
+      const body = rel === 'README.md' ? text.split('## Release notes')[0] : text;
+      assert.equal(
+        pattern.test(body),
+        false,
+        `${rel} still names a retired model (${pattern.source}) — should be "${replacement}"`
+      );
+      pattern.lastIndex = 0; // /g regexes are stateful across .test() calls
+    }
   }
 });
 

@@ -2,13 +2,13 @@
 
 ![VZT Agent Protocol — automatic model routing for Claude Code](assets/banner.jpg)
 
-**Automatic model routing for Claude Code — Fable 5, Opus 4.8, Sonnet 5, Haiku 4.5. Right model, right task, zero manual switching.**
+**Automatic model routing for Claude Code — Fable 5, Opus 5, Sonnet 5, Haiku 4.5. Right model, right task, zero manual switching.**
 
 Part of the [VZT Tech Consulting Protocol](https://github.com/vonzelle-vzt/VZT-Tech-Consulting-Protocol) ecosystem.
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 [![Version](https://img.shields.io/badge/Version-1.9.1-purple.svg)](#)
-[![Tiers](https://img.shields.io/badge/Tiers-Fable%205%20%7C%20Opus%204.8%20%7C%20Sonnet%205%20%7C%20Haiku%204.5-green.svg)](docs/ROUTING-MATRIX.md)
+[![Tiers](https://img.shields.io/badge/Tiers-Fable%205%20%7C%20Opus%205%20%7C%20Sonnet%205%20%7C%20Haiku%204.5-green.svg)](docs/ROUTING-MATRIX.md)
 
 ---
 
@@ -26,8 +26,9 @@ with zero API cost for the routing itself:
 
 | Tier | Model | Owns |
 |------|-------|------|
-| 4 | **Fable 5** | Architecture, planning, impossible bugs, root-cause, security analysis |
-| 3 | **Opus 4.8** | Large refactors, dense algorithms, performance surgery, load-bearing review |
+| 4 | **Fable 5** | No-prior-art architecture, impossible bugs, root-cause, security analysis |
+| 3+ | **Opus 5** @ `max` | Routine planning — architecture, specs, roadmaps, migration plans (the `opus@max` rung) |
+| 3 | **Opus 5** | Large refactors, dense algorithms, performance surgery, load-bearing review |
 | 2 | **Sonnet 5** | Standard implementation — the default (burns its own separate weekly bucket) |
 | 1 | **Haiku 4.5** | Search, summaries, renames, formatting, commit messages — nearly free |
 
@@ -36,11 +37,13 @@ with zero API cost for the routing itself:
 execution to Sonnet and mechanical work to Haiku means your premium quota is
 spent only where premium reasoning actually changes the outcome.
 
-**Recommended setup — Opus first line:** sit on Opus 4.8 (`/model opus`) so
-strong reasoning is always on tap, and let the protocol delegate routine builds
-*down* to Sonnet and mechanical work *down* to Haiku, reaching *up* to Fable only
-on the ~15% of turns that are genuinely frontier-hard. See
-[Chair Profiles](docs/CHAIR-PROFILES.md) for every chair's behavior.
+**Recommended setup — Opus first line:** sit on Opus 5 (`/model opus`) so strong
+reasoning is always on tap, and let the protocol delegate routine builds *down*
+to Sonnet and mechanical work *down* to Haiku, reaching *up* to Fable only on the
+≤10% of turns that are genuinely frontier-hard. Opus 5 is a step change on deep
+reasoning at half Fable's cost, so planning now runs on the `opus@max` rung
+rather than the frontier tier. See [Chair Profiles](docs/CHAIR-PROFILES.md) for
+every chair's behavior.
 
 ## Quick start
 
@@ -69,10 +72,10 @@ node cli/vzt-agent.js doctor --global
 Restart Claude Code. Pick the chair that matches how you work — the protocol
 adapts the routing doctrine to it either way:
 
-- **Opus 4.8 chair** (`/model opus`) — build inline, delegate routine execution
-  *down* to Sonnet and mechanical work to Haiku, escalate *up* to Fable only for
-  hard architecture/debugging. Best when you want strong first-line reasoning on
-  tap and Sonnet as your workhorse below it.
+- **Opus 5 chair** (`/model opus`) — build *and plan* inline, delegate routine
+  execution *down* to Sonnet and mechanical work to Haiku, escalate *up* to Fable
+  only for no-prior-art architecture and impossible bugs. Best when you want
+  strong first-line reasoning on tap and Sonnet as your workhorse below it.
 - **Sonnet 5 chair** (`/model sonnet`) — most work stays inline on the
   Sonnet-only bucket; escalate *up* to Opus/Fable only when a task earns it.
   Best for maximum quota efficiency.
@@ -365,6 +368,62 @@ a vibe.
 - [CLAUDE.md snippet for manual installs](templates/CLAUDE-snippet.md)
 
 ## Release notes
+
+### 1.10.0 — Opus 5: the `opus@max` rung
+
+Opus 5 launched, and the fleet had **already moved** — `model: opus` is an alias for
+*the latest* Opus (`claude --help`: "an alias for the latest model"), so every agent
+was running Opus 5 from launch day while the doctrine around it still described Opus
+4.8. Nothing was broken; the guidance was just describing a model nobody was running —
+and in one case describing behavior Opus 5 had *reversed*.
+
+- **New rung: `haiku → sonnet → opus → opus@max → fable`.** Routine planning —
+  architecture, tech specs, roadmaps, migration plans, PRD breakdown — no longer
+  reaches the frontier tier. Opus 5 is a step change on deep reasoning at **half
+  Fable's cost** ($5/$25 vs $10/$50), so that band now runs on Opus at `max` effort
+  via the new **`vzt-architect`** agent and **`/vzt-design`** turn skill. Fable keeps
+  what only Fable can do: planning with **no prior art to reason from** (novel,
+  greenfield, from-scratch, or a one-way-door sharding / replication / consensus /
+  multi-tenancy call) and impossible bugs. **Fable budget ≤15% → ≤10%.**
+- **Implemented as a post-scoring demotion, not a signal rewrite.** Every `SIGNALS`
+  weight is untouched: a `fable:plan` win falls to `opus:plan @ max` unless
+  `FRONTIER_NOVEL` matches. One block, reversible. The `fable:debug` band is
+  deliberately **not** gated by it — an impossible bug is frontier work regardless of
+  how ordinary the system it lives in sounds.
+- **`suggestEffort` now emits `max`** for `opus`+`plan`. That *is* the rung, and it is
+  the only place the classifier suggests it — retiring the "never emits max" invariant
+  1.9.1 shipped.
+- **Delegation cap — this reverses 1.9.x guidance, on purpose.** Opus 4.8 *under*-reached
+  for sub-agents, so the chair profile pushed parallel fan-out hard. Opus 5 reaches for
+  them readily, and that guidance now compounds an existing bias into sub-agent sprawl.
+  The Opus chair and `vzt-heavy-builder` now carry a ceiling: never delegate work
+  finishable in a handful of tool calls, prefer one sub-agent over several, keep spawn
+  counts low, and once you delegate, **commit** — never re-derive a worker's findings.
+  Parallel waves are reframed from a default motion to genuinely independent tracks only.
+- **Verification, scoped precisely.** Opus 5 self-checks unprompted, so instructions
+  telling it to verify buy nothing. The line matters and was drawn deliberately:
+  verifying an **external artifact** — the oracle's output, a worker's diff on disk,
+  observed behavior — is the whole point and is untouched, so fable-mode **Gate 4**,
+  `MACHINE_CHECK`, "reporting ≠ persistence", and `/vzt-ship`'s independent verification
+  stage all survive unchanged. What's cut is *self*-verification: don't spawn a sub-agent
+  to double-check your own inline work, and don't pad turns with re-verification passes.
+- **Scope and concision clause** on the Opus chair and in `templates/worker-brief.md` —
+  Opus 5 expands scope and writes longer by default. Deliver the scope asked, no
+  unrequested refactors or abstractions, lead with the outcome.
+- **`/fast` is now priced in the doctrine.** On Opus 5 fast mode bills **$10/$50 per
+  MTok** — Fable-tier *price* for Opus-tier intelligence. Still the right lever when
+  wall-clock beats token cost; explicitly a bad default.
+- **Effort guidance re-tuned.** "Fable-low ≈ Opus-high" was an Opus 4.8-era equivalence
+  and is gone. Start `xhigh` for coding/agentic and `high` elsewhere, then sweep *down*
+  — Opus 5 is unusually strong at `low`/`medium`, so effort defaults inherited from
+  earlier models over-spend.
+- **Anti-staleness guard (the fix for the root cause).** Two new tests assert that every
+  `TIERS` label's model name appears across `ROUTING-MATRIX` / `vzt-route` / `README` /
+  `CHAIR-PROFILES`, and that no retired version string survives outside this
+  release-notes section. The next model launch now fails a command instead of quietly
+  rotting a dozen files. Add a row to the test's `RETIRED` table when a model is
+  superseded.
+- 79 tests green (was 72). 8 agents, 9 skills.
 
 ### 1.9.1 — routing gap-fill (audit follow-through)
 

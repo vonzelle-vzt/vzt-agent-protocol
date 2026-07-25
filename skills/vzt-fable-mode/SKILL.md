@@ -45,6 +45,15 @@ actual output. "Should work," "looks correct," and a green typecheck are not
 verification; behavior observed end-to-end is. If you cannot run the oracle,
 say so explicitly instead of implying you did.
 
+**This gate is about running a command, not about second-guessing yourself.**
+The distinction matters on current models, which already self-check without
+being asked: verifying an *external artifact* — the oracle's output, a worker's
+diff on disk, the actual rendered behavior — is the whole point and never gets
+cut. Adding a *self*-review pass on top of it is not more rigor, it is padding:
+don't spawn a sub-agent to double-check your own work, and don't re-run a
+reasoning pass over a change whose oracle already went green. One oracle, real
+output, then move on.
+
 ## Gate 5 — Report only what you verified
 
 No claim in the report you didn't check. Mark anything unverified as
@@ -60,10 +69,12 @@ shows them.
 - The gates are about *process*, not *effort*: do not raise the effort dial to
   compensate for a skipped gate — a skipped gate at max effort is still a guess.
 - **The Opus tier always runs the gates — no opt-in.** Every Opus surface
-  (`vzt-heavy-builder`, `vzt-reviewer`, the Opus chair profile, and every
-  Opus-targeted `[VZT-ROUTE]` directive) carries them by default. The model
-  stays Opus 4.8; only the working process is Fable's. Same discipline,
-  cheaper model.
-- Fleet executors (`vzt-builder`, `vzt-heavy-builder`, `vzt-mechanic`) and
-  `vzt-reviewer` carry a one-line summary of these gates in their rules; this
-  file is the canonical long form.
+  (`vzt-architect`, `vzt-heavy-builder`, `vzt-reviewer`, the Opus chair profile,
+  and every Opus-targeted `[VZT-ROUTE]` directive) carries them by default. The
+  model stays Opus 5; only the working process is Fable's. Same discipline,
+  cheaper model — and as the Opus tier climbs, that trade gets better, not
+  worse: the gates are why the `opus@max` rung can take planning that used to
+  need the frontier tier.
+- Fleet executors (`vzt-builder`, `vzt-heavy-builder`, `vzt-mechanic`) and the
+  read-only tiers (`vzt-architect`, `vzt-reviewer`) carry a one-line summary of
+  these gates in their rules; this file is the canonical long form.
