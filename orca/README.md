@@ -93,7 +93,7 @@ The prompt-driven bootstrap is the guaranteed path and needs no Orca config.
 ## Optional: scheduled automations
 
 ```
-# Track the Fable-≤15% budget daily inside Orca:
+# Track the Fable-≤10% budget daily inside Orca:
 orca automations create --name "VZT routing stats" --trigger daily --time 09:00 \
   --provider claude --repo path:<primary> --prompt "run: vzt-agent stats"
 ```

@@ -25,7 +25,7 @@ doctor --global` is green in a terminal, it's green for the extension too.
 
 The VS Code extension's chat webview is not the full Claude Code engine. It
 surfaces a subset of skills/commands, and its subagent execution (the
-`vzt-planner` → `vzt-builder`/`vzt-mechanic`/`vzt-heavy-builder` fan-out the
+`vzt-architect`/`vzt-planner` → `vzt-builder`/`vzt-mechanic`/`vzt-heavy-builder` fan-out the
 whole protocol is built on) is more limited than what the standalone CLI
 does. Routing decisions still get injected into the webview's context, but
 you may not get the full agent-fleet experience described in the

@@ -268,7 +268,7 @@ return {
   units: done,
   // Blocked units come back with the verbatim oracle output and a ONE-tier
   // escalation suggestion. The chair decides whether to spend it — tier
-  // escalation stays out of the automated path, which is how Fable stays ≤15%.
+  // escalation stays out of the automated path, which is how Fable stays ≤10%.
   blocked: failed.map((f) => ({ unit: f.unit, rounds: f.rounds, oracleOutput: f.oracleOutput, escalate: f.escalate || 'vzt-heavy-builder' })),
   integration,
   ledgerLines,

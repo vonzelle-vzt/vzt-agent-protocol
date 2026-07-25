@@ -41,6 +41,16 @@ REPORT: <what to include in the report back: diff summary, MACHINE_CHECK output
 - For parallel waves: every lane gets its own brief, FILES_IN_SCOPE sets must be
   pairwise disjoint, and the orchestrator reviews each lane's diff against
   ACCEPTANCE before merging any of them.
+- **Brief the smallest sufficient job, and only when a worker is warranted.**
+  Work the orchestrator could finish in a handful of tool calls costs more to
+  delegate than to do — a worker re-establishes context, re-explores, reports
+  back, and the report still has to be read. Prefer one worker over several;
+  split a wave only across genuinely independent tracks, never to chop one
+  modest job into pieces.
+- **The worker delivers the brief's scope, no more.** No unrequested refactors,
+  helpers, abstractions, or error handling for cases that cannot happen — a
+  drive-by improvement inside FILES_IN_SCOPE is still scope the orchestrator did
+  not ask for and now has to review.
 
 ## Supervision — dispatch is not delegation
 
