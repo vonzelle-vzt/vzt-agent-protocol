@@ -78,7 +78,16 @@ test('ship-dispatch --mux selects the backend and emits its command shape (dry-r
     const codeDefaultEnv = { ...process.env };
     delete codeDefaultEnv.VZT_MUX;
     const orca = execFileSync(process.execPath, [CLI, 'ship-dispatch', spec], { encoding: 'utf8', env: codeDefaultEnv });
-    assert.match(orca, /worktree' 'create'.*'--agent' 'claude'/s, 'orca (default) uses one worktree-create --agent call');
+    // TWO-STEP, and deliberately so. `worktree create --agent claude` launches
+    // Orca's built-in launcher, which accepts no agent-specific flags — there is
+    // no way to add --dangerously-skip-permissions to it, so an unsupervised unit
+    // hung on its first permission prompt. Orca's own orca-cli guide prescribes
+    // the two-step for a custom argv: create the worktree WITHOUT --agent, then
+    // `terminal create --command '<full argv>'`.
+    assert.doesNotMatch(orca, /'--agent' 'claude'/, 'orca must NOT use the built-in launcher — it cannot pass skip-permissions');
+    assert.match(orca, /worktree' 'create'/, 'orca still creates the worktree');
+    assert.match(orca, /terminal' 'create'/, 'orca launches the agent via terminal create');
+    assert.match(orca, /claude --dangerously-skip-permissions/, 'orca unit runs claude unsupervised');
 
     // And with VZT_MUX=herdr exported, the same no-flag call must resolve to herdr.
     const herdrDefaultEnv = { ...process.env, VZT_MUX: 'herdr' };

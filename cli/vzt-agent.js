@@ -694,44 +694,104 @@ function envJson(bin, argv) {
 function orcaBackend(args) {
   const bin = args.orca || process.env.ORCA_CLI || DEFAULT_ORCA;
   const key = (spec, u) => `${spec.slug}-${u.id}`;
-  // ⚠️ KNOWN GAP, deliberately not papered over: orca units cannot skip
-  // permission prompts.
+  // Ship panes run UNSUPERVISED, so a unit that stops on its first permission
+  // prompt never goes idle and burns its whole budget before the oracle grades
+  // an empty worktree. herdr and vscode both pass --dangerously-skip-permissions.
+  // Opt out per-run with VZT_ORCA_SKIP_PERMISSIONS=0.
+  const skipPerms = process.env.VZT_ORCA_SKIP_PERMISSIONS !== '0';
+
+  // TWO-STEP dispatch, which is what Orca documents for a custom agent argv.
   //
-  // Ship panes run UNSUPERVISED, so a unit that stops on its first tool
-  // permission prompt never goes idle and burns its whole budget before the
-  // oracle grades an empty worktree. herdr and vscode each pass
-  // `--dangerously-skip-permissions` to the claude they launch. Orca cannot:
-  // `orca worktree create` exposes only `--agent <id>` and `--prompt <text>`
-  // (verified against `orca worktree create --help`) with no way to forward
-  // arguments to the launched agent.
+  // `worktree create --agent claude` launches the built-in Claude launcher and
+  // accepts no agent-specific flags — there is no way to add
+  // --dangerously-skip-permissions to it. Orca's own orca-cli skill guide is
+  // explicit: for a custom command, create the worktree WITHOUT --agent, then
+  // `terminal create --command '<full argv>'` in it.
   //
-  // The escape hatch orca documents is `orca terminal create --command "<cmd>"`,
-  // which WOULD allow a full `claude --dangerously-skip-permissions "<brief>"`.
-  // Restructuring dispatch onto create-worktree-then-create-terminal is the real
-  // fix, but it is untestable here (orca is not running on this machine) and
-  // shipping an unverified rewrite of the DEFAULT backend is worse than a
-  // documented gap. Tracked in docs/VSCODE.md's backend-parity table.
+  // 🔴 The trap Orca documents alongside it: a bare `worktree create` (no
+  // --agent) opens a FALLBACK SHELL as the first terminal before our
+  // `terminal create` adds the agent. So the agent handle is the one returned
+  // by terminal create — never the worktree's startupTerminal — or waitIdle
+  // would poll an idle shell and grade the unit the instant it launched.
   const createArgv = (spec, u) => ['worktree', 'create', '--repo', `path:${spec.root}`,
-    '--name', key(spec, u), '--no-parent', '--agent', 'claude', '--setup', 'run',
-    '--prompt', unitPrompt(spec, u), '--json'];
+    '--name', key(spec, u), '--no-parent', '--setup', 'run', '--json'];
+  const claudeCmd = (spec, u) =>
+    `claude ${skipPerms ? '--dangerously-skip-permissions ' : ''}${shq(unitPrompt(spec, u))}`;
+  const termArgv = (spec, u, wtId) => ['terminal', 'create',
+    ...(wtId ? ['--worktree', wtId] : []),
+    '--title', key(spec, u), '--command', claudeCmd(spec, u), '--json'];
   return {
     name: 'orca', bin,
-    plan(spec, u) { return [`${shq(bin)} ${createArgv(spec, u).map(shq).join(' ')}`]; },
+    plan(spec, u) {
+      return [
+        `${shq(bin)} ${createArgv(spec, u).map(shq).join(' ')}`,
+        `${shq(bin)} ${termArgv(spec, u, '<WORKTREE_ID>').map(shq).join(' ')}`,
+      ];
+    },
     dispatch(spec, u) {
       const res = envJson(bin, createArgv(spec, u));
       const wt = res.worktree || res;
-      const handle = res.agentTerminalHandle || res.startupTerminal?.handle || wt.startupTerminal?.handle || null;
       const wpath = wt.path || (wt.id && String(wt.id).split('::')[1]) || null;
+      // The worktree id is a two-part `<repo-id>::<path>` address; a bare repo id
+      // is not a worktree id, so prefer the returned id verbatim.
+      const wtId = wt.id || (wpath ? `path:${wpath}` : null);
+
+      // The agent handle comes from `terminal create`, NEVER from the worktree.
+      // A bare `worktree create` (no --agent) leaves a fallback SHELL as the
+      // first terminal; waiting on that reports tui-idle immediately and grades
+      // the unit before the agent has done anything.
+      let handle = null;
+      try {
+        const term = envJson(bin, termArgv(spec, u, wtId));
+        handle = term.handle || term.terminal?.handle || term.startupTerminal?.handle || null;
+      } catch (e) {
+        console.error(`  ${u.id}: orca terminal create failed — ${(e.message || '').trim().split('\n')[0]}`);
+      }
       // A null handle means waitIdle has nothing to wait ON: it returns instantly
       // and the oracle grades a worktree the agent may not have touched yet.
       // herdr logs when `agent start` throws; orca said nothing at all.
       if (!handle) {
-        console.error(`  ${u.id}: orca returned no agent terminal handle — cannot wait for idle, so the oracle may grade an unfinished worktree.`);
+        console.error(`  ${u.id}: no orca agent terminal handle — cannot wait for idle, so the oracle may grade an unfinished worktree.`);
       }
       return { path: wpath, ws: key(spec, u), handle };
     },
+    // TWO-PHASE, matching herdr and vscode: prove the agent STARTED before
+    // waiting for it to stop. Orca exposes no agent status states, but
+    // `terminal read` returns a monotonic `latestCursor` — output is proof of
+    // life, and no output within the start grace means it never ran.
+    //
+    // Written from Orca's documented CLI contract and NOT exercised end-to-end
+    // (no Orca runtime on the machine this was written on), so it degrades on
+    // purpose: if a cursor cannot be read the phase is skipped entirely and we
+    // fall through to the single-phase wait that shipped before. Worst case is
+    // today's behaviour, not a broken default backend.
     waitIdle(handle, t) {
       if (!handle) return;
+      const startGrace = Number(process.env.VZT_START_GRACE_MS || 90_000);
+      const cursor = () => {
+        try {
+          const r = envJson(bin, ['terminal', 'read', '--terminal', handle, '--limit', '1', '--json']);
+          const c = r.latestCursor ?? r.nextCursor ?? null;
+          return typeof c === 'number' ? c : null;
+        } catch {
+          return null;
+        }
+      };
+      const base = cursor();
+      if (base !== null) {
+        const deadline = Date.now() + Math.min(t, startGrace);
+        let started = base > 0;
+        while (!started && Date.now() < deadline) {
+          sleepSync(1000);
+          const c = cursor();
+          if (c === null) { started = true; break; } // lost the signal — don't stall on it
+          if (c > base) started = true;
+        }
+        if (!started) {
+          console.error(`  orca: no output within ${Math.round(Math.min(t, startGrace) / 1000)}s — the agent likely never started; verifying anyway`);
+          return;
+        }
+      }
       try { execFileSync(bin, ['terminal', 'wait', '--terminal', handle, '--for', 'tui-idle', '--timeout-ms', String(t), '--json'], { stdio: ['ignore', 'ignore', 'ignore'] }); } catch { /* timed out/stale — verify anyway */ }
     },
     resolve(spec, u) {
@@ -1110,12 +1170,51 @@ function runOracle(machineCheck, cwd) {
  * may be pre-resolved by the caller (dispatch result); otherwise it's looked up.
  * Returns true on PASS. Falls back to the primary checkout when the mux isn't live.
  */
+/**
+ * Where Claude Code keeps its transcript for work done in `dir`.
+ *
+ * This is the backend-agnostic answer to Orca's `terminal read`. Orca can stream
+ * a running agent's output; herdr and vscode cannot, and the vscode extension
+ * API gives no read access to terminal contents at all — which is why a failing
+ * unit used to be a dead end (the whole diagnosis had to be reconstructed by
+ * redirecting unit output to files by hand).
+ *
+ * The transcript is strictly better than scrollback anyway: it survives the
+ * terminal closing, and its absence is itself the diagnosis — no directory means
+ * the agent never started, which is the single most common unit failure.
+ *
+ * Naming rule derived from real directories on disk: `/` and `.` both become `-`.
+ */
+function agentTranscriptDir(dir) {
+  if (!dir) return null;
+  const slug = dir.replace(/[/.]/g, '-');
+  const p = path.join(os.homedir(), '.claude', 'projects', slug);
+  return fs.existsSync(p) ? p : null;
+}
+
 function verifyAndRecord(be, spec, u, specPath, info, via) {
   const ref = info && info.path ? info : be.resolve(spec, u);
   const wt = ref && ref.path;
   const r = runOracle(u.machineCheck, wt || spec.root);
   const status = r.pass ? 'PASS' : 'FAIL';
   console.log(`  ${u.id} … ${status}${wt ? '' : '  (no live worktree — ran against primary)'}`);
+
+  // On failure, say WHY. A bare "FAIL" forces the operator to reconstruct the
+  // run from scratch; everything below is already in hand at this point.
+  if (!r.pass) {
+    if (r.output) {
+      console.log(`      oracle: ${u.machineCheck}`);
+      for (const line of r.output.split('\n').slice(-6)) console.log(`      | ${line}`);
+    }
+    if (wt) console.log(`      worktree: ${wt}`);
+    const transcript = agentTranscriptDir(wt);
+    if (transcript) {
+      console.log(`      agent transcript: ${transcript}`);
+    } else if (wt) {
+      // The loudest signal available: the agent produced no session at all.
+      console.log('      agent transcript: none — the agent never started in this worktree');
+    }
+  }
   try {
     execFileSync(process.execPath, [fileURLToPath(import.meta.url), 'ship-note', specPath,
       JSON.stringify({ kind: 'unit_result', unit: u.id, status, via, mux: be.name, code: r.code })],

@@ -196,10 +196,34 @@ editor process.
 
 | | orca | herdr | vscode |
 |---|---|---|---|
-| two-phase wait (start → idle) | ❌ | ✅ | ✅ |
+| two-phase wait (start → idle) | ✅ ¹ | ✅ | ✅ |
 | `blocked` visible | ❌ | ✅ | ✅ |
-| skip-permissions for unsupervised panes | ❌ ¹ | ✅ | ✅ |
-| in-editor worktree diff / tree | ❌ | ❌ | ✅ |
+| skip-permissions for unsupervised panes | ✅ ² | ✅ | ✅ |
+| re-dispatch onto an existing worktree | ❌ | ❌ | ✅ |
+| read a RUNNING agent's output | ✅ `terminal read` | ❌ | ❌ ³ |
+| rename a unit's tab | ✅ | ✅ | ❌ (VS Code API) |
+| worktree diff / tree inside the editor | ❌ | ❌ | ✅ |
+
+¹ Orca exposes no agent status states, so the start phase watches `terminal read`'s
+monotonic `latestCursor` — output is proof of life. Written from Orca's documented
+CLI contract and **not exercised end-to-end**; it degrades to the previous
+single-phase wait if a cursor cannot be read.
+
+² Via the two-step dispatch Orca itself prescribes for a custom argv:
+`worktree create` **without** `--agent`, then
+`terminal create --command 'claude --dangerously-skip-permissions …'`.
+`worktree create --agent claude` uses Orca's built-in launcher, which accepts no
+agent-specific flags. 🔴 The trap: a bare `worktree create` opens a **fallback
+shell** as the first terminal, so the agent handle is the one returned by
+`terminal create` — waiting on the shell reports idle instantly and grades the
+unit before it starts.
+
+³ The VS Code extension API gives no read access to terminal contents. The
+protocol closes this differently and backend-agnostically: on a unit FAIL,
+`verifyAndRecord` prints the oracle command, the oracle's own output, the
+worktree, and the path to the agent's Claude Code transcript — or states that
+none exists, which means the agent never started. A transcript also outlives the
+terminal, so it beats scrollback for post-mortems.
 
 ¹ `orca worktree create` exposes only `--agent <id>` and `--prompt <text>`,
 with no way to forward flags to the launched agent. The documented escape

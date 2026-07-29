@@ -2,6 +2,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
+import os from 'node:os';
 import { execFileSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { parseSpec, validateSpec, reduceLedger, nextAction, AGENT_TYPES } from '../cli/ship-lib.mjs';
@@ -86,6 +87,72 @@ test('every agent install() ships is accepted by validateSpec (AGENT_TYPES has n
   for (const a of AGENT_TYPES) {
     assert.ok(shipped.includes(a), `AGENT_TYPES lists "${a}" but agents/${a}.md is not shipped`);
   }
+});
+
+test('a FAILED unit reports why — oracle output, worktree, and whether the agent ever ran', () => {
+  // Orca can stream a running agent's output (`terminal read`); herdr and vscode
+  // cannot, and the VS Code extension API gives no read access to terminal
+  // contents at all. So a failing unit used to print a bare "FAIL" and nothing
+  // else — the diagnosis had to be reconstructed by hand, which on 2026-07-28
+  // cost about an hour to conclude "the agent never started".
+  //
+  // Everything asserted here is already in hand at verification time. The
+  // transcript's ABSENCE is the most valuable line of the three: no Claude Code
+  // session directory means the agent never ran, which is the most common unit
+  // failure and the least obvious from the outside.
+  const repo = fs.mkdtempSync(path.join(os.tmpdir(), 'vzt-diag-'));
+  execFileSync('git', ['init', '-q', '.'], { cwd: repo });
+  execFileSync('git', ['config', 'user.email', 't@t.local'], { cwd: repo });
+  execFileSync('git', ['config', 'user.name', 'T'], { cwd: repo });
+  fs.writeFileSync(path.join(repo, 'README.md'), 'seed\n');
+  execFileSync('git', ['add', '-A'], { cwd: repo });
+  execFileSync('git', ['commit', '-qm', 'seed'], { cwd: repo });
+
+  const specDir = path.join(repo, '.vzt', 'ship', 'diag');
+  fs.mkdirSync(specDir, { recursive: true });
+  const spec = {
+    specVersion: 1, slug: 'diag', title: 'T', root: repo, contract: 'c',
+    manifest: [{ path: 'a.txt', op: 'new' }, { path: 'b.txt', op: 'new' }],
+    units: [
+      { id: 'u1', title: 'A', agentType: 'vzt-builder', filesInScope: ['a.txt'], brief: 'x', machineCheck: 'cat a.txt', expect: 'exit 0' },
+      { id: 'u2', title: 'B', agentType: 'vzt-builder', filesInScope: ['b.txt'], brief: 'x', machineCheck: 'true', expect: 'exit 0' },
+    ],
+    integration: { machineCheck: 'true', expect: 'exit 0' },
+  };
+  const specPath = path.join(specDir, 'SPEC.md');
+  fs.writeFileSync(specPath, `# T\n\n<!-- vzt-spec -->\n\`\`\`json\n${JSON.stringify(spec, null, 2)}\n\`\`\`\n`);
+
+  // Create the unit worktrees the way a dispatch would, so resolve() finds them.
+  // Without a worktree the run falls back to the primary checkout and the
+  // transcript branch is never reached — the diagnostics being tested here only
+  // make sense for a unit that actually had somewhere to work.
+  const muxDir = path.join(repo, 'mux');
+  for (const id of ['u1', 'u2']) {
+    execFileSync('git', ['-C', repo, 'worktree', 'add', '-q', '-b', `diag-${id}`, path.join(muxDir, 'worktrees', `diag-${id}`), 'HEAD'], { stdio: 'ignore' });
+  }
+
+  // ship-supervise verifies without dispatching, so no agent is spent. It exits
+  // NON-ZERO when a unit fails — which is correct — so read stdout off the throw.
+  let out = ''
+  try {
+    out = execFileSync(process.execPath, [path.join(REPO_ROOT, 'cli', 'vzt-agent.js'), 'ship-supervise', specPath, '--mux', 'vscode'], {
+      cwd: repo,
+      env: { ...process.env, VZT_VSCODE_DIR: path.join(repo, 'mux') },
+      encoding: 'utf8',
+    });
+    assert.fail('ship-supervise must exit non-zero when a unit fails');
+  } catch (e) {
+    out = `${e.stdout || ''}`;
+    assert.ok(out, `expected stdout from the failing run, got: ${e.message}`);
+  }
+
+  assert.match(out, /u1 … FAIL/, 'the failing unit is reported');
+  assert.match(out, /oracle: cat a\.txt/, 'the oracle COMMAND is echoed, so the check itself is reviewable');
+  assert.match(out, /No such file/, "the oracle's own output is shown, not swallowed");
+  assert.match(out, /agent transcript: none — the agent never started/, 'a missing transcript is called out explicitly');
+  // A passing unit must stay quiet — diagnostics on success is noise.
+  const u2 = out.slice(out.indexOf('u2 …'));
+  assert.doesNotMatch(u2, /agent transcript/, 'a PASSing unit must not print failure diagnostics');
 });
 
 test('the workflow verifies with a DIFFERENT agent than the one that built (no self-grading)', () => {
