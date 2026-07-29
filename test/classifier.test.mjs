@@ -336,17 +336,31 @@ test('the chair follows a mid-session /model switch, in BOTH directions', () => 
     return (/chair:\s*(\w+)/.exec(ctx) || [])[1];
   };
 
-  // `/model` writes settings.model for a NON-default model and REMOVES it when
-  // you return to the default — so absence means "default is seated".
-  assert.equal(chairFor({}), 'opus', 'default model → SessionStart truth from chair.json');
-  assert.equal(chairFor({ model: 'claude-fable-5[1m]' }), 'fable', 'switch away must be seen');
-  assert.equal(chairFor({}), 'opus', 'switch BACK to default must be seen too');
+  // Neither file source is trustworthy alone — they go stale in OPPOSITE
+  // directions. chair.json[sessionId] is stamped once at SessionStart (stale
+  // after a mid-session /model); settings.json is global and was observed live
+  // on 2026-07-29 still reading `claude-fable-5[1m]` while the session was
+  // demonstrably on Opus 5. Session-scoped beats provably-stale-global.
+  assert.equal(chairFor({}), 'opus', 'no settings model → session entry');
+  assert.equal(
+    chairFor({ model: 'claude-fable-5[1m]' }),
+    'opus',
+    'a stale GLOBAL settings model must not override this session\'s own entry'
+  );
 
-  // The settings-derived reads must NOT be persisted — caching them is what would
-  // make the switch-back above return a stale "fable".
-  assert.deepEqual(
-    JSON.parse(fs.readFileSync(chairFile, 'utf8')),
-    { 'sess-1': 'claude-opus-5[1m]', latest: 'claude-opus-5[1m]' },
+  // settings.json is still better than nothing for a session we have never seen.
+  const unseen = execFileSync(process.execPath, [hook], {
+    input: JSON.stringify({ prompt: 'refactor the entire payment module', session_id: 'never-seen', cwd: '/tmp' }),
+    env: { ...process.env, VZT_ROUTER_STATE_DIR: state, CLAUDE_CONFIG_DIR: cfg },
+    encoding: 'utf8',
+  });
+  assert.equal((/chair:\s*(\w+)/.exec(JSON.parse(unseen).hookSpecificOutput.additionalContext) || [])[1], 'fable');
+
+  // Settings-derived reads must never be persisted, or chair.json inherits the
+  // staleness it exists to correct.
+  assert.equal(
+    JSON.parse(fs.readFileSync(chairFile, 'utf8'))['sess-1'],
+    'claude-opus-5[1m]',
     'settings.json reads must not write chair.json'
   );
 

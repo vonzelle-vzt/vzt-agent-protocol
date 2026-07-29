@@ -347,6 +347,24 @@ function doctor(args) {
         .pop() || null;
     } catch { /* no vscode extensions dir */ }
     checks.push([`vscode extension ${want} installed${found ? ` (found ${found})` : ' (not found — --mux vscode degrades to manual)'}`, found === want]);
+
+    // Installed-on-disk is NOT the same as loaded-in-the-host. VS Code caches
+    // extension code; neither a file copy nor `code --install-extension --force`
+    // hot-swaps a running window, only a reload does. Without this check a stale
+    // host is invisible: the fix "doesn't work" and you debug the code instead
+    // of the reload. The extension stamps its version on activate().
+    const hostFile = path.join(VZT_VSCODE_DIR, 'host.json');
+    if (fs.existsSync(hostFile)) {
+      const running = readJson(hostFile, {}).version;
+      checks.push([
+        running === want
+          ? `vscode extension host running ${running}`
+          : `vscode extension host running ${running}, but ${want} is installed — RELOAD THE WINDOW (Cmd+Shift+P → Developer: Reload Window)`,
+        running === want,
+      ]);
+    } else if (found) {
+      checks.push(['vscode extension host has not reported a version yet (reload the window once to enable the staleness check)', true]);
+    }
   }
 
   const major = Number(process.versions.node.split('.')[0]);
@@ -851,6 +869,21 @@ function vscodeBackend(/* args */) {
   // Unit terminals run UNSUPERVISED, so their claude must skip permission prompts
   // or it boots and blocks forever on the first tool call (same lesson as herdr).
   // Opt out per-run with VZT_VSCODE_SKIP_PERMISSIONS=0.
+  // Warn ONCE per run if the host is running a different build than is installed.
+  // A stale host silently ignores every extension fix, and the symptom — units
+  // that never start — looks identical to a code bug. Cheap to check, and it is
+  // the difference between "reload the window" and an hour of bisecting.
+  try {
+    const host = JSON.parse(fs.readFileSync(path.join(VZT_VSCODE_DIR, 'host.json'), 'utf8'));
+    const installed = JSON.parse(
+      fs.readFileSync(path.join(PKG_ROOT, 'vscode', 'package.json'), 'utf8')
+    ).version;
+    if (host.version && installed && host.version !== installed) {
+      console.error(`⚠️  VS Code extension host is running ${host.version} but ${installed} is installed.`);
+      console.error('    Reload the window (Cmd+Shift+P → Developer: Reload Window) before trusting this run.');
+    }
+  } catch { /* no heartbeat yet, or not readable — not worth failing a run over */ }
+
   const skipPerms = process.env.VZT_VSCODE_SKIP_PERMISSIONS !== '0';
   // How long dispatch waits for the extension to consume a queue file before
   // concluding it isn't running and printing the manual fallback command.

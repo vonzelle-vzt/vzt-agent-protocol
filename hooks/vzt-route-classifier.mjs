@@ -261,32 +261,55 @@ function tierOf(raw) {
  * makes it moot wherever the payload carries the model.
  */
 function chairModel(sessionId, payloadModel) {
+  const r = resolveChair(sessionId, payloadModel);
+  return r.tier;
+}
+
+/**
+ * @returns {{tier: string, source: string}} — `source` is logged so a wrong
+ * chair can be attributed to a source instead of guessed at.
+ */
+function resolveChair(sessionId, payloadModel) {
   const fromPayload = tierOf(payloadModel);
   if (fromPayload) {
     rememberChair(sessionId, payloadModel);
-    return fromPayload;
+    return { tier: fromPayload, source: 'payload' };
   }
 
-  // Read fresh every prompt, but deliberately NOT persisted.
+  // Fallback order, and WHY it is this way round.
   //
-  // `/model` writes this key when you pick a NON-default model and REMOVES it
-  // when you pick the default again (verified: present while on Fable, absent
-  // after switching back to the default Opus). So its absence means "the default
-  // is in the chair", not "no information" — and caching a value derived from it
-  // would make chair.json sticky-stale in the other direction: switch away, we
-  // persist fable; switch back to default, the key vanishes and we would read
-  // our own stale fable instead of the SessionStart truth. Only the payload is
-  // authoritative enough to write down.
-  const fromSettings = tierOf(readSettingsModel());
-  if (fromSettings) return fromSettings;
-
+  // Neither file source is trustworthy on its own — they go stale in OPPOSITE
+  // directions, which is what makes this subtle:
+  //
+  //   chair.json[sessionId] is stamped once at SessionStart. Correct when the
+  //     session begins, stale the moment you `/model` mid-session.
+  //   settings.json `model` is global, not session-scoped. It tracks the last
+  //     `/model` anywhere, and it does NOT reliably clear — observed live on
+  //     2026-07-29: it still read `claude-fable-5[1m]` while the session was
+  //     demonstrably on Opus 5, so the router reported the wrong chair.
+  //
+  // So session-scoped-but-possibly-stale beats global-and-provably-stale:
+  // chair.json first. settings.json only when this session has no entry at all,
+  // where a global hint beats nothing.
+  //
+  // The real answer is `payload.model` above. `modelSource` is logged on every
+  // decision precisely so we can see whether the payload carries it — if it
+  // does, both of these fallbacks become dead weight and should be deleted.
   try {
     const state = JSON.parse(fs.readFileSync(path.join(STATE_DIR, 'chair.json'), 'utf8'));
-    return tierOf(state[sessionId]) || tierOf(state.latest) || 'unknown';
+    const fromSession = tierOf(state[sessionId]);
+    if (fromSession) return { tier: fromSession, source: 'chair.json[session]' };
+
+    const fromSettings = tierOf(readSettingsModel());
+    if (fromSettings) return { tier: fromSettings, source: 'settings.json' };
+
+    const fromLatest = tierOf(state.latest);
+    if (fromLatest) return { tier: fromLatest, source: 'chair.json.latest' };
   } catch {
-    /* no state yet */
+    const fromSettings = tierOf(readSettingsModel());
+    if (fromSettings) return { tier: fromSettings, source: 'settings.json' };
   }
-  return 'unknown';
+  return { tier: 'unknown', source: 'none' };
 }
 
 function readSettingsModel() {
@@ -523,12 +546,20 @@ if (import.meta.url === `file://${process.argv[1]}`) {
   const result = override
     ? { tier: override, kind: 'build', confidence: 'high', effort: TIERS[override].effort, matched: ['user-override'], scores: {}, words: prompt.split(/\s+/).length }
     : classify(prompt);
-  const chair = chairModel(payload.session_id, payload.model);
+  const seat = resolveChair(payload.session_id, payload.model);
+  const chair = seat.tier;
 
   logDecision({
     ts: new Date().toISOString(),
     session: payload.session_id || null,
     chair,
+    // Which source the chair came from, and whether the hook payload carried a
+    // model at all. Both file fallbacks are known to go stale (in opposite
+    // directions), so when a routing directive is wrong this is the difference
+    // between attributing it and guessing. If `modelSource` reads "payload"
+    // consistently, the fallbacks are dead weight and should be deleted.
+    modelSource: seat.source,
+    payloadHadModel: Boolean(payload.model),
     tier: result.tier,
     kind: result.kind,
     confidence: result.confidence,

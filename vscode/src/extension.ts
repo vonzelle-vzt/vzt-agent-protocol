@@ -267,8 +267,36 @@ function processStatus(): void {
   }
 }
 
+/**
+ * Record which extension VERSION is actually loaded in this host.
+ *
+ * VS Code caches extension code in the running host. Neither copying a fresh
+ * `out/extension.js` into the extension folder nor
+ * `code --install-extension …vsix --force` hot-swaps it — only a window reload
+ * does. So the version ON DISK can differ from the version RUNNING, with no
+ * outward sign: a fix appears to have no effect, and you debug the code instead
+ * of the reload. That cost about an hour on 2026-07-28.
+ *
+ * Writing it here — inside activate(), which only runs on load — makes the
+ * running version observable from outside VS Code. `vzt-agent doctor` compares
+ * it against vscode/package.json and says "reload the window" instead of
+ * reporting green.
+ */
+function writeHostHeartbeat(context: vscode.ExtensionContext): void {
+  try {
+    const version = (context.extension?.packageJSON?.version as string) || 'unknown';
+    fs.writeFileSync(
+      path.join(baseDir(), "host.json"),
+      JSON.stringify({ version, pid: process.pid, activatedAt: new Date().toISOString() }, null, 2)
+    );
+  } catch {
+    /* diagnostics must never block activation */
+  }
+}
+
 export function activate(context: vscode.ExtensionContext): void {
   ensureDirs();
+  writeHostHeartbeat(context);
 
   outputChannel = vscode.window.createOutputChannel("VZT Ship");
   context.subscriptions.push(outputChannel);
