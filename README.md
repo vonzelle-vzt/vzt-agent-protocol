@@ -379,6 +379,64 @@ a vibe.
 
 ## Release notes
 
+### 1.12.0 — Orca reaches parity, and a failed unit says why
+
+**Orca can finally skip permission prompts.** `worktree create --agent claude`
+uses Orca's built-in launcher, which accepts no agent-specific flags — so orca
+was the one backend that could not pass `--dangerously-skip-permissions`, and an
+unsupervised unit hung on its first prompt. Orca is still the implicit default,
+so this was the untreated path most users would hit.
+
+`orca skills get orca-cli` documents the fix and the trap. Dispatch is now the
+two-step Orca prescribes for a custom argv — `worktree create` **without**
+`--agent`, then `terminal create --command '<full argv>'` — and the agent handle
+comes from `terminal create`, never the worktree: a bare `worktree create` leaves
+a **fallback shell** as the first terminal, and waiting on that reports
+`tui-idle` instantly and grades the unit before it starts.
+
+**Orca gained the two-phase wait.** It exposes no agent status states, but
+`terminal read` returns a monotonic `latestCursor`, and output is proof of life.
+Written from the documented CLI contract and **not exercised end-to-end** (no
+Orca runtime on the authoring machine), so it degrades on purpose: if a cursor
+cannot be read the phase is skipped and behaviour falls back to the single-phase
+wait that shipped before.
+
+**A failed unit now says why — on every backend.** Orca can stream a running
+agent's output (`terminal read`); herdr cannot, and the VS Code extension API
+gives no read access to terminal contents at all. So a failing unit printed a
+bare `FAIL` and the diagnosis had to be rebuilt by hand — about an hour, to
+conclude "the agent never started". `verifyAndRecord` now prints the oracle
+command, the oracle's own output, the worktree, and the agent's Claude Code
+transcript path — or states that none exists, which *is* the diagnosis. Better
+than the capability it replaces: a transcript outlives the terminal.
+
+**A stale VS Code extension host is now visible.** `activate()` stamps
+`~/.vzt/vscode-mux/host.json` with the version actually loaded; `doctor` compares
+it to the installed manifest and says RELOAD THE WINDOW instead of green, and
+`ship-watch` warns before spending units on a host that will ignore the fix.
+
+**The chair follows a mid-session `/model` switch — corrected.** 1.11.0 preferred
+`settings.json`; that was observed reading `claude-fable-5[1m]` while the session
+was demonstrably on Opus 5. Both file sources go stale in opposite directions, so
+the order is now payload → `chair.json[sessionId]` → `settings.json`. Every
+decision logs `modelSource` and `payloadHadModel`, so a wrong chair can be
+attributed instead of guessed at.
+
+**Not adopted, deliberately.** Orca's `orchestration` (task DAGs, dispatch,
+decision gates, coordinator loops) covers the same ground as `/vzt-ship`, but the
+two optimize for different failures: `/vzt-ship` keeps coherence in a FILE that
+survives compaction and lets no builder grade itself — completion is an
+independent oracle — while Orca keeps coherence in the runtime and treats a
+worker's own `worker_done` as completion, with stronger provenance than our
+chair-written ledger. Neither subsumes the other.
+
+**Known open issue.** `~/.vzt/vscode-mux/queue/` is global while extension hosts
+are per window, so with several windows open the hosts race to drain it — the
+terminal may open in a window you are not watching, running a different build.
+Scoping the queue per window is the fix.
+
+101 tests.
+
 ### 1.11.0 — the VS Code mux grows a lifecycle, and the ledger learns to close
 
 An audit of the protocol against its own live data. Every item below was

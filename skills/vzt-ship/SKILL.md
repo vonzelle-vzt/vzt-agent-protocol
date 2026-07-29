@@ -81,8 +81,14 @@ The built-in default is **orca** — `--mux` beats `VZT_MUX`, which beats orca. 
 `VZT_MUX=herdr` (or `vscode`) to change it, or pass `--mux herdr|vscode|orca` per run.
 `--mux vscode` opens each unit as a native VS Code integrated terminal and adds a Ship
 Run tree — per-unit status, the unit's worktree diff readable mid-run, and one-click
-oracle re-runs. The CLI warns when it falls through to orca implicitly, because orca is
-the least-hardened backend (no start-grace, no skip-permissions).
+oracle re-runs. The CLI still warns when it falls through to orca implicitly, because
+orca is where an unverified path remains: its skip-permissions and start-grace are
+written from Orca's documented CLI contract but not exercised end-to-end.
+
+**When a unit FAILs, read what it prints** — the oracle command, the oracle's own
+output, the worktree, and the agent's Claude Code transcript path. "agent transcript:
+none" is not missing information; it IS the diagnosis, and it means the agent never
+started in that worktree. Do not re-dispatch before reading it.
 This STOPS at the green integration gate — **never auto-merge**; Phase 4 LAND stays
 human. Small/inline work never comes here: a single-file edit, a quick fix, or a one-off
 script is normal in-session work, not a ship run. See `orca/README.md` for the mux

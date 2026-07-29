@@ -152,8 +152,10 @@ already pairwise-disjoint (not a race — each unit owns different files and is 
 its own oracle). Three backends behind `--mux orca|herdr|vscode` (default `orca`):
 [Orca](https://github.com/stablyai/orca) (desktop ADE), [Herdr](https://herdr.dev)
 (terminal-native, persistent over SSH/mobile), and `vscode` (native VS Code integrated
-terminals via the companion extension — see [`docs/VSCODE.md`](../../docs/VSCODE.md)). Wired via
-`orca/` in this package:
+terminals via the companion extension — see [`docs/VSCODE.md`](../../docs/VSCODE.md)). All three
+now carry the two-phase wait (prove the agent STARTED before waiting for it to stop) and
+pass skip-permissions to unsupervised units; a failed unit reports its oracle output and
+whether the agent ever ran, on every backend. Wired via `orca/` in this package:
 
 - **Terminal stays the substrate; routing is untouched.** Orca runs `claude`, so the
   `[VZT-ROUTE]` hooks, subagents, and skills inherit unchanged. Reserve Orca for

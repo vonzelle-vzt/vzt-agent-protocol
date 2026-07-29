@@ -192,6 +192,33 @@ editor process.
 | `VZT_VSCODE_DRAIN_GRACE_MS` | `8000` | how long dispatch waits for the extension to consume a queue record |
 | `VZT_VSCODE_SKIP_PERMISSIONS` | `1` | set `0` to keep permission prompts in unit terminals |
 
+### 🔴 Known open issue — the queue is global, extension hosts are per window
+
+`~/.vzt/vscode-mux/queue/` is ONE directory, but **every open VS Code window runs
+its own extension host**, and each polls it. Observed on 2026-07-29: 2 windows,
+3 plugin hosts, all watching the same queue. Whichever host wins the race drains
+the record and opens the terminal — possibly in a window you are not looking at,
+possibly running a different build of the extension.
+
+Two consequences worth knowing before you debug anything else:
+
+- **Identical runs can behave differently** depending on which host drained them.
+- **A reload can refresh one host while an older one keeps serving the queue.**
+  On the machine this was written on, `Developer: Reload Window` *and*
+  `Developer: Restart Extension Host` both left all three plugin hosts at their
+  original start time, and `host.json` was never written — so none of the
+  extension fixes were ever loaded.
+
+**Check `host.json` before debugging code.** It records the version actually
+running; `vzt-agent doctor` compares it to the installed manifest. If it is
+absent or stale, the fix you are testing is not running.
+
+⚠️ Reloading the window that hosts your Claude Code integrated terminal kills
+that session. `Developer: Restart Extension Host` is the right command in
+principle, since it leaves the window and its terminals alive.
+
+Scoping the queue per window is the fix, and it is not done yet.
+
 ### Backend parity
 
 | | orca | herdr | vscode |
