@@ -23,8 +23,43 @@ import { ShipTreeProvider, UnitItem } from "./shipTree";
 interface QueueRecord {
   unitKey: string;
   cwd: string;
+  /** The ship spec's `root` — the project this run belongs to. Scopes the record
+   *  to the window that has that project open. Absent on records written by a
+   *  CLI older than 1.13.0. */
+  workspaceRoot?: string;
   env: Record<string, string>;
   cmd: string;
+}
+
+/**
+ * Does THIS window own the record?
+ *
+ * The queue directory is global; extension hosts are per window. Every open
+ * window polls the same directory, so without this check they race and the unit
+ * terminal opens wherever the race landed — observed 2026-07-29 with 2 windows
+ * and 3 hosts, and the likely reason identical runs behaved differently.
+ *
+ * A record belongs to the window that has its project open. Matching is
+ * containment in either direction so that a window opened on a subfolder of the
+ * repo (or on a parent of it) still counts.
+ *
+ * Back-compat: a record with no `workspaceRoot` came from an older CLI, which
+ * had no concept of scoping. Claim it rather than stranding it forever — a
+ * version mismatch must degrade to the old behaviour, not to a dead queue.
+ */
+function ownsWorkspace(record: QueueRecord): boolean {
+  if (!record.workspaceRoot) {
+    return true;
+  }
+  const folders = vscode.workspace.workspaceFolders || [];
+  if (folders.length === 0) {
+    return false; // an empty window owns nothing
+  }
+  const root = path.resolve(record.workspaceRoot);
+  return folders.some((f) => {
+    const dir = path.resolve(f.uri.fsPath);
+    return dir === root || root.startsWith(dir + path.sep) || dir.startsWith(root + path.sep);
+  });
 }
 
 const POLL_INTERVAL_MS = 1000;
@@ -106,11 +141,30 @@ function processQueue(): void {
       continue;
     }
 
-    // Delete first so a slow terminal creation can't cause a re-scan to double-process.
+    // Is this record OURS? The queue directory is global but extension hosts are
+    // per window, so without this every open window competes for every record
+    // and the terminal opens in whichever host won the poll — possibly a window
+    // you are not looking at, possibly one running an older build.
+    if (!ownsWorkspace(record)) {
+      continue; // leave it on disk for the window that does own it
+    }
+
+    // CLAIM ATOMICALLY. Reading then unlinking is two steps, so two hosts could
+    // both read a record before either deleted it and both open a terminal for
+    // the same unit. `rename` is atomic: exactly one host wins and the loser's
+    // call throws ENOENT.
+    const claimed = `${filePath}.claimed-${process.pid}`;
     try {
-      fs.unlinkSync(filePath);
+      fs.renameSync(filePath, claimed);
     } catch {
-      // already gone — fine
+      continue; // another host claimed it first — not an error
+    }
+    // The claim file is the unit's tombstone until the terminal exists; drop it
+    // once we are past the point where a re-scan could double-process.
+    try {
+      fs.unlinkSync(claimed);
+    } catch {
+      // ignore
     }
 
     let terminal: vscode.Terminal;

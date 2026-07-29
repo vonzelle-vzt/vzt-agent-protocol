@@ -345,6 +345,66 @@ test('the unit command is sent on a DELAY, never on the shell-integration event'
   assert.ok(/VZT_VSCODE_SEND_DELAY_MS/.test(code), 'the delay must stay tunable');
 });
 
+test('a queue record is SCOPED to the window that has its project open', () => {
+  // The queue directory is global; extension hosts are per window. Observed
+  // 2026-07-29: 2 windows, 3 hosts, all polling the same directory. Whichever
+  // won the race opened the terminal — possibly in a window you are not looking
+  // at, possibly running an older build. Pulls the real compiled ownsWorkspace
+  // out and runs it against fake workspace shapes.
+  const js = fs.readFileSync(path.join(REPO_ROOT, 'vscode', 'out', 'extension.js'), 'utf8');
+  const start = js.indexOf('function ownsWorkspace');
+  assert.ok(start > 0, 'ownsWorkspace missing from the compiled extension');
+  const rest = js.slice(start);
+  const end = rest.indexOf('\nfunction ', 1);
+  const fnSrc = end > 0 ? rest.slice(0, end) : rest;
+
+  const make = (folders) => {
+    const fake = { workspace: { workspaceFolders: folders?.map((p) => ({ uri: { fsPath: p } })) } };
+    return new Function('vscode', 'path', `${fnSrc}\nreturn ownsWorkspace;`)(fake, path);
+  };
+  const repo = '/Users/me/projects/app';
+
+  assert.equal(make([repo])({ workspaceRoot: repo }), true, 'exact match is owned');
+  assert.equal(make(['/Users/me/projects'])({ workspaceRoot: repo }), true, 'a parent folder owns it');
+  assert.equal(make([`${repo}/packages/api`])({ workspaceRoot: repo }), true, 'a window opened on a subfolder owns it');
+  assert.equal(make(['/Users/me/projects/other'])({ workspaceRoot: repo }), false, 'an unrelated window must NOT claim it');
+  assert.equal(make([])({ workspaceRoot: repo }), false, 'an empty window owns nothing');
+  assert.equal(make(undefined)({ workspaceRoot: repo }), false, 'no workspaceFolders owns nothing');
+
+  // Back-compat: a record from a CLI predating scoping has no workspaceRoot.
+  // Stranding it forever would turn a version mismatch into a dead queue.
+  assert.equal(make(['/Users/me/projects/other'])({}), true, 'an unscoped record still gets claimed');
+});
+
+test('two hosts cannot both claim the same queue record', () => {
+  // read-then-unlink is TWO steps, so two hosts could both read a record before
+  // either deleted it and both open a terminal for the same unit. The claim is
+  // now a rename, which is atomic: exactly one wins, the loser gets ENOENT.
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'vzt-claim-'));
+  const f = path.join(dir, 'slug-u1.json');
+  fs.writeFileSync(f, '{}');
+
+  const claim = (pid) => {
+    try {
+      fs.renameSync(f, `${f}.claimed-${pid}`);
+      return true;
+    } catch {
+      return false;
+    }
+  };
+  const winners = [claim(111), claim(222), claim(333)].filter(Boolean);
+  assert.equal(winners.length, 1, 'exactly one host may claim a record');
+  assert.equal(fs.existsSync(f), false, 'the record is gone once claimed');
+
+  // And the extension must actually use that mechanism.
+  const ext = fs.readFileSync(path.join(REPO_ROOT, 'vscode', 'src', 'extension.ts'), 'utf8');
+  assert.match(ext, /renameSync\(filePath, claimed\)/, 'the claim must be an atomic rename');
+  assert.ok(
+    ext.indexOf('ownsWorkspace(record)') < ext.indexOf('renameSync(filePath, claimed)'),
+    'ownership must be checked BEFORE claiming, or a wrong window still steals the record'
+  );
+});
+
 test('the extension does not send a unit command into an uninitialised shell', () => {
   // sendText() immediately after createTerminal() is swallowed by a still-
   // initialising shell — observed live, cost a unit its entire timeout.

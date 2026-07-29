@@ -379,6 +379,39 @@ a vibe.
 
 ## Release notes
 
+### 1.13.0 — queue records belong to a window
+
+The last blocker on `--mux vscode`, and it was two bugs wearing one coat.
+
+`~/.vzt/vscode-mux/queue/` is one directory, but **every open VS Code window runs
+its own extension host and every one of them polls it**. Observed with 2 windows
+and 3 hosts:
+
+- **Wrong-window routing** — whichever host won the poll opened the terminal,
+  possibly in a window you were not looking at, possibly running a different
+  build. The likeliest explanation for identical runs behaving differently, and
+  for a reload refreshing one host while an older one kept serving the queue.
+- **Duplicate processing** — claiming was `readFileSync` then `unlinkSync`, two
+  steps, so two hosts could both read a record before either deleted it and both
+  open a terminal for the same unit.
+
+Now: the CLI stamps each record with `workspaceRoot`, and a host claims one only
+if that root matches an open workspace folder (containment either way, so a
+window opened on a subfolder or a parent still counts). The claim itself is an
+atomic `rename` — exactly one host wins, the loser gets ENOENT — which still
+matters when two windows legitimately have the same folder open.
+
+Records without `workspaceRoot` come from an older CLI and are claimed by anyone:
+a version mismatch degrades to the old behaviour, not to a dead queue. If no open
+window owns the project, nobody claims it — the CLI now says exactly that instead
+of blaming the extension, and deletes the record rather than leaving it for some
+later, unrelated window to launch after the run has ended.
+
+Proven with two competing stand-in hosts against one queue: the host owning an
+unrelated folder claimed nothing, the owning host claimed both units, 2/2 PASS
+and the integration gate merged. Extension 0.3.0 (the queue contract changed).
+103 tests.
+
 ### 1.12.0 — Orca reaches parity, and a failed unit says why
 
 **Orca can finally skip permission prompts.** `worktree create --agent claude`

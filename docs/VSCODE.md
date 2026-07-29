@@ -192,32 +192,39 @@ editor process.
 | `VZT_VSCODE_DRAIN_GRACE_MS` | `8000` | how long dispatch waits for the extension to consume a queue record |
 | `VZT_VSCODE_SKIP_PERMISSIONS` | `1` | set `0` to keep permission prompts in unit terminals |
 
-### 🔴 Known open issue — the queue is global, extension hosts are per window
+### Queue records are scoped to a window (fixed in 1.13.0)
 
 `~/.vzt/vscode-mux/queue/` is ONE directory, but **every open VS Code window runs
-its own extension host**, and each polls it. Observed on 2026-07-29: 2 windows,
-3 plugin hosts, all watching the same queue. Whichever host wins the race drains
-the record and opens the terminal — possibly in a window you are not looking at,
-possibly running a different build of the extension.
+its own extension host**, and each polls it. Observed 2026-07-29: 2 windows,
+3 plugin hosts, all watching the same queue. That was two bugs at once:
 
-Two consequences worth knowing before you debug anything else:
+- **Wrong-window routing.** Whichever host won the poll opened the terminal —
+  possibly in a window you were not looking at, possibly running a different
+  build of the extension. It is the likeliest reason identical runs behaved
+  differently, and why a reload could refresh one host while an older one kept
+  serving the queue.
+- **Duplicate processing.** The claim was `readFileSync` then `unlinkSync` — two
+  steps, so two hosts could both read a record before either deleted it and both
+  open a terminal for the same unit.
 
-- **Identical runs can behave differently** depending on which host drained them.
-- **A reload can refresh one host while an older one keeps serving the queue.**
-  On the machine this was written on, `Developer: Reload Window` *and*
-  `Developer: Restart Extension Host` both left all three plugin hosts at their
-  original start time, and `host.json` was never written — so none of the
-  extension fixes were ever loaded.
+Both are closed:
 
-**Check `host.json` before debugging code.** It records the version actually
-running; `vzt-agent doctor` compares it to the installed manifest. If it is
-absent or stale, the fix you are testing is not running.
+1. The CLI stamps each record with `workspaceRoot` (the spec's `root`), and a
+   host claims a record only when that root matches one of its open workspace
+   folders — containment in either direction, so a window opened on a subfolder
+   or a parent still counts. The unit lands in the window that has the project
+   open.
+2. The claim itself is an atomic `rename`. Exactly one host wins; the loser gets
+   ENOENT and moves on. This still matters when two windows legitimately have the
+   same folder open.
 
-⚠️ Reloading the window that hosts your Claude Code integrated terminal kills
-that session. `Developer: Restart Extension Host` is the right command in
-principle, since it leaves the window and its terminals alive.
+A record with no `workspaceRoot` came from a CLI older than 1.13.0 and is claimed
+by any host — a version mismatch must degrade to the old behaviour, not to a dead
+queue.
 
-Scoping the queue per window is the fix, and it is not done yet.
+If NO open window owns the project, nobody claims the record. The CLI says so
+explicitly instead of blaming the extension, and deletes the record rather than
+leaving it for some later, unrelated window to launch long after the run ended.
 
 ### Backend parity
 

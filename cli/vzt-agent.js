@@ -994,7 +994,26 @@ function vscodeBackend(/* args */) {
       const blockedFile = path.join(stateDir, `${k}.blocked`);
       const cmd = claudeCmd(promptFile);
       const queueFile = path.join(queueDir, `${k}.json`);
-      fs.writeFileSync(queueFile, JSON.stringify({ unitKey: k, cwd: wtPath, env: { VZT_VSCODE_MUX: '1', VZT_VSCODE_UNIT: k }, cmd }, null, 2));
+      // `workspaceRoot` is what SCOPES this record to a window.
+      //
+      // The queue directory is global, but every open VS Code window runs its
+      // own extension host and every one of them polls it. Observed 2026-07-29:
+      // 2 windows, 3 hosts, all watching the same directory. Without a scope the
+      // hosts race — the terminal opens in whichever window won, which may not
+      // be the one you are working in and may be running a different build of
+      // the extension. It also explains identical runs behaving differently.
+      //
+      // The host only claims a record whose workspaceRoot is one of its open
+      // folders, so the unit lands in the window that actually has the project
+      // open. If no window does, nobody claims it and the drain check below
+      // reports exactly that.
+      fs.writeFileSync(queueFile, JSON.stringify({
+        unitKey: k,
+        cwd: wtPath,
+        workspaceRoot: spec.root,
+        env: { VZT_VSCODE_MUX: '1', VZT_VSCODE_UNIT: k },
+        cmd,
+      }, null, 2));
       // Persistent twin for the tree view: survives the queue record's deletion
       // and a window reload, and carries the oracle so the tree can re-run it.
       fs.writeFileSync(
@@ -1013,8 +1032,16 @@ function vscodeBackend(/* args */) {
         sleepSync(200);
       }
       if (!launched) {
-        console.error(`  ${u.id}: VS Code companion extension isn't draining the queue (installed? window open?).`);
+        console.error(`  ${u.id}: no VS Code window claimed this unit.`);
+        console.error(`    A record is claimed only by a window that has ${spec.root} open —`);
+        console.error('    check that such a window exists, that the extension is installed, and that');
+        console.error("    the host has actually reloaded (vzt-agent doctor reports a stale one).");
         console.error(`  Manual fallback — open a terminal and run:\n    cd ${shq(wtPath)} && ${cmd}`);
+        // Don't leave an unclaimable record behind. Before scoping, every record
+        // was drained by someone; now one addressed to a window that is not open
+        // would sit in the queue forever and get picked up by a LATER, unrelated
+        // window — launching a stale unit long after its run ended.
+        try { fs.unlinkSync(queueFile); } catch { /* already claimed after all */ }
       }
       return { path: wtPath, ws: k, handle: { idleFile, startedFile, blockedFile, unitKey: k, launched } };
     },
