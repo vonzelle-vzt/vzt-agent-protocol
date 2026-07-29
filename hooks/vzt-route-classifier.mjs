@@ -19,6 +19,9 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import os from 'node:os';
+// Used only on the ship-block miss path (resolving a linked worktree back to its
+// primary checkout), never on the common no-active-run path.
+import { execFileSync } from 'node:child_process';
 
 const STATE_DIR = process.env.VZT_ROUTER_STATE_DIR || path.join(os.homedir(), '.claude', 'vzt-router');
 
@@ -66,7 +69,16 @@ export function suggestEffort(tier, confidence, kind) {
 // Deliberately absent from BUILD: "design", "plan", "refactor", "migrate" — the
 // first two are planning, and the last two describe work on an existing system
 // that Opus already handles inline without a spec ceremony.
-const HORIZON_SCOPE = /\b(entire (codebase|repo|app|system|product|platform)|whole (app|system|product|platform|thing)|from scratch|greenfield|ground[- ]up|across (all|every|multiple)|end[- ]to[- ]end|multi[- ](tenant|region|agent|repo)|overnight|every (screen|route|endpoint|page|model|service|table))\b/i;
+// NOTE the shared noun list across "entire"/"whole"/"across the". It used to
+// differ between them — `entire (codebase|repo|…)` but `whole (app|system|…)`
+// with repo and codebase MISSING — so "build every feature across the entire
+// repo" routed opus:horizon while "…across the whole repo" routed sonnet:build.
+// Same sentence, one synonym, two tiers apart. Keep the nouns in one place.
+const SCOPE_NOUNS = '(codebase|repo(sitory)?|app|system|product|platform|protocol|stack|project|monorepo|thing)';
+const HORIZON_SCOPE = new RegExp(
+  `\\b((entire|whole|across the) ${SCOPE_NOUNS}|from scratch|greenfield|ground[- ]up|across (all|every|multiple)|end[- ]to[- ]end|multi[- ](tenant|region|agent|repo)|overnight|every (screen|route|endpoint|page|model|service|table))\\b`,
+  'i'
+);
 const HORIZON_BUILD = /\b(build|implement|ship|create|write|stand up|scaffold|port|rewrite|deliver|generate)\b/i;
 
 // ——— FRONTIER_NOVEL: what still earns Fable on a PLAN ————————————————————
@@ -91,12 +103,31 @@ const SIGNALS = [
   { tier: 'fable', kind: 'plan', w: 3, re: /\b(architect(ure)?|system design|design (the|a|an) (system|schema|api|architecture)|tech(nical)? (spec|strategy|roadmap)|migration (plan|strategy)|plan (out|the)|prd|break (this|it) down|approach for)\b/i },
   { tier: 'fable', kind: 'debug', w: 3, re: /\b(root cause|race condition|deadlock|heisenbug|intermittent(ly)?|flaky|can'?t (figure|reproduce)|no idea why|impossible bug|corrupt(ed|ion)|memory leak|why (is|does|would|did).{0,40}(fail|break|crash|hang|wrong)|still (broken|failing) after)\b/i },
   { tier: 'fable', kind: 'plan', w: 2, re: /\b(trade-?offs?|evaluate (options|approaches)|compare (approaches|architectures|designs)|which (approach|architecture|design)|pros and cons)\b/i },
-  { tier: 'fable', kind: 'debug', w: 2, re: /\b(security (audit|review|hole)|vulnerab|exploit|threat model|pen(etration)? test)\b/i },
+  // A *security hole*, an exploit or a threat model is frontier reasoning.
+  // A routine "security review of the login flow" is NOT — it is exactly what
+  // vzt-reviewer (Opus) advertises itself for, and it used to land on Fable and
+  // stay there: the FRONTIER_NOVEL demotion is deliberately gated to kind==='plan',
+  // so a fable:debug verdict bypassed the opus@max rung entirely. That is a
+  // standing leak in the ≤10% Fable budget this release exists to hold.
+  // w3, matching the other fable:debug row. At w2 this lost outright to the
+  // haiku scout row (`find (all|the|every)`, w3), so "find the security hole in
+  // the auth token handling" routed to HAIKU at high confidence — a pre-existing
+  // bug, not introduced by the audit/review split above. Finding an exploitable
+  // hole is adversarial reasoning; it is never recon.
+  { tier: 'fable', kind: 'debug', w: 3, re: /\b(security hole|vulnerab|exploit|threat model|pen(etration)? test)\b/i },
 
   // ——— Opus 5: heavy implementation, deep review ———
   { tier: 'opus', kind: 'build', w: 3, re: /\b(refactor (the|this|our|across|everything)|large refactor|rewrite (the|this|our)|migrate (the|this|our|all|from)|overhaul|re-?architect|port (the|this|it) (to|from))\b/i },
   { tier: 'opus', kind: 'build', w: 2, re: /\b(performance|optimi[sz]e|concurren(t|cy)|parallel(ize)?|distributed|caching layer|algorithm)\b/i },
   { tier: 'opus', kind: 'review', w: 2, re: /\b(deep (review|dive)|thorough(ly)? (review|audit)|code review|review (the|this|my) (pr|diff|branch|change))\b/i },
+  // The INSPECTION family. Auditing, analysing and investigating an existing
+  // system is read-heavy synthesis over lots of evidence — Opus work. Until this
+  // row existed, "audit" only scored when preceded by "security" or "thorough":
+  // a bare "audit the protocol to see what needs updating" matched NOTHING and
+  // fell through to the sonnet default at low confidence. Verified against the
+  // live log: 48% of all decisions were sonnet+low+zero-signals.
+  // `security review` lands here too, by design (see the fable:debug row above).
+  { tier: 'opus', kind: 'review', w: 2, re: /\b(audit|analy[sz]e|analysis of|investigate|inspect|assess|diagnos(e|tic)|post-?mortem|retrospective|security (audit|review)|figure out (what|why|where|how))\b/i },
   { tier: 'opus', kind: 'build', w: 2, re: /\b(complex|tricky|gnarly|hairy|hard(est)? part|edge cases?)\b/i },
   // Scope language used to route to FABLE — i.e. to the SLOWER model — which is
   // the bug this release exists to fix. Long-horizon work fails on lost
@@ -135,10 +166,24 @@ export function classify(prompt) {
 
   // Length heuristics: long multi-requirement prompts trend up-tier;
   // very short prompts with a mechanical/scout hit stay down-tier.
+  // Length AMPLIFIES existing evidence; it is not evidence by itself.
+  //
+  // These used to be unconditional, and tie precedence is fable > opus > haiku >
+  // sonnet — so an 80-word prompt matching only the weak sonnet w1 row scored
+  // opus 1 / sonnet 1 and the tiebreak handed it to OPUS, with `matched:
+  // ["sonnet:build"]` as the sole evidence. A long-but-trivial prompt bought the
+  // expensive tier on word count alone. Requiring a real signal first keeps the
+  // heuristic as a nudge rather than a promotion.
   const words = prompt.trim().split(/\s+/).length;
-  if (words > 150) scores.fable += 1;
-  if (words > 60) scores.opus += 1;
-  if (words < 15 && scores.haiku > 0) scores.haiku += 1;
+  if (words > 150 && scores.fable > 0) scores.fable += 1;
+  if (words > 60 && scores.opus > 0) scores.opus += 1;
+  // Same rule in the other direction: the short-prompt nudge may only reinforce a
+  // haiku lead, never overturn a stronger tier. Unconditional, it did overturn
+  // one — "find the security hole in the auth token handling" and "find the race
+  // condition in the sync" are both under 15 words, so haiku's scout hit got +1
+  // and beat a TIED fable:debug signal that precedence would otherwise have won.
+  // Recon phrasing ("find the …") wraps plenty of genuinely hard questions.
+  if (words < 15 && scores.haiku > Math.max(scores.fable, scores.opus, scores.sonnet)) scores.haiku += 1;
 
   // Pin it. A long-horizon BUILD must never fall through to fable:plan (slower,
   // no more coherent) or to sonnet:build (which starts typing immediately —
@@ -184,15 +229,90 @@ export function classify(prompt) {
   return { tier: best, kind: kinds[best], confidence, effort: suggestEffort(best, confidence, kinds[best]), matched, scores, words };
 }
 
-function chairModel(sessionId) {
+function tierOf(raw) {
+  const s = (raw || '').toLowerCase();
+  for (const t of ['fable', 'opus', 'sonnet', 'haiku']) if (s.includes(t)) return t;
+  return null;
+}
+
+/**
+ * Which model is ACTUALLY in the chair right now.
+ *
+ * chair.json is stamped once, at SessionStart, and `/model` fires no hook — so a
+ * mid-session model switch could never propagate. That is not a missing
+ * directive, it is a CONFIDENTLY WRONG one, because directive() branches on
+ * RANK[chair]: believing an Opus chair is still seated while the user has
+ * switched to Fable makes every opus-tier task print "chair matches target tier
+ * — handle inline" when the correct advice is "delegate DOWN to conserve fable
+ * quota". The staleness therefore suppresses down-delegation on the single most
+ * expensive tier — the exact opposite of what the budget doctrine wants.
+ * Measured on the live log: 4+ hours of decisions after a switch still recorded
+ * the pre-switch chair.
+ *
+ * Sources, freshest first:
+ *   1. the hook payload — free and exactly right, IF the harness supplies it
+ *   2. settings.json `model` — `/model` rewrites this ("saved as your default"),
+ *      so it tracks the most recent switch
+ *   3. chair.json for this session, then `latest`
+ *
+ * Caveat, stated rather than hidden: (2) is a single global value, so with two
+ * concurrent sessions on different models it describes whichever switched last.
+ * That is still strictly better than a value that cannot update at all, and (1)
+ * makes it moot wherever the payload carries the model.
+ */
+function chairModel(sessionId, payloadModel) {
+  const fromPayload = tierOf(payloadModel);
+  if (fromPayload) {
+    rememberChair(sessionId, payloadModel);
+    return fromPayload;
+  }
+
+  // Read fresh every prompt, but deliberately NOT persisted.
+  //
+  // `/model` writes this key when you pick a NON-default model and REMOVES it
+  // when you pick the default again (verified: present while on Fable, absent
+  // after switching back to the default Opus). So its absence means "the default
+  // is in the chair", not "no information" — and caching a value derived from it
+  // would make chair.json sticky-stale in the other direction: switch away, we
+  // persist fable; switch back to default, the key vanishes and we would read
+  // our own stale fable instead of the SessionStart truth. Only the payload is
+  // authoritative enough to write down.
+  const fromSettings = tierOf(readSettingsModel());
+  if (fromSettings) return fromSettings;
+
   try {
     const state = JSON.parse(fs.readFileSync(path.join(STATE_DIR, 'chair.json'), 'utf8'));
-    const raw = (state[sessionId] || state.latest || '').toLowerCase();
-    for (const t of ['fable', 'opus', 'sonnet', 'haiku']) if (raw.includes(t)) return t;
+    return tierOf(state[sessionId]) || tierOf(state.latest) || 'unknown';
   } catch {
     /* no state yet */
   }
   return 'unknown';
+}
+
+function readSettingsModel() {
+  try {
+    const dir = process.env.CLAUDE_CONFIG_DIR || path.join(os.homedir(), '.claude');
+    return JSON.parse(fs.readFileSync(path.join(dir, 'settings.json'), 'utf8')).model || '';
+  } catch {
+    return '';
+  }
+}
+
+/** Self-heal chair.json when a fresher source disagrees with it. */
+function rememberChair(sessionId, model) {
+  if (!sessionId || !model) return;
+  try {
+    const file = path.join(STATE_DIR, 'chair.json');
+    let state = {};
+    try { state = JSON.parse(fs.readFileSync(file, 'utf8')); } catch { /* first write */ }
+    if (state[sessionId] === model && state.latest === model) return; // already current
+    state[sessionId] = model;
+    state.latest = model;
+    fs.mkdirSync(STATE_DIR, { recursive: true });
+    fs.writeFileSync(file, JSON.stringify(state, null, 2));
+  } catch {
+    /* never let bookkeeping break a prompt */
+  }
 }
 
 const RANK = { haiku: 0, sonnet: 1, opus: 2, fable: 3, unknown: 1 };
@@ -296,10 +416,47 @@ export function reduceLedgerInline(text) {
   return state;
 }
 
+/**
+ * The PRIMARY checkout for `dir`, or null.
+ *
+ * Mirrors `primaryCheckoutRoot` in cli/vzt-agent.js — deliberately duplicated
+ * because this hook installs to ~/.claude/hooks/vzt-router/ and cannot import
+ * from the CLI package. `test/ship.test.mjs` carries a drift guard for the
+ * reducer pair; the same reasoning applies here.
+ *
+ * Why it matters: `.vzt/ship/` is git-tracked, so every unit worktree gets its
+ * OWN copy of the ledger directory — and the CLI deliberately redirects all
+ * writes to the primary checkout so the run cannot fork. A chair working inside
+ * a unit worktree that resolved `.vzt/ship` relative to its own cwd therefore
+ * read a ledger nobody writes to, and rendered "units: (none reported yet)" for
+ * a run that was well underway.
+ */
+function primaryCheckoutRoot(dir) {
+  try {
+    const out = execFileSync('git', ['worktree', 'list', '--porcelain'], {
+      cwd: dir,
+      encoding: 'utf8',
+      stdio: ['ignore', 'pipe', 'ignore'],
+    });
+    const first = out.split('\n').find((l) => l.startsWith('worktree '));
+    return first ? first.slice('worktree '.length).trim() : null;
+  } catch {
+    return null; // git missing or not a repo — caller falls back to cwd
+  }
+}
+
 export function activeShipBlock(cwd) {
   try {
-    const base = path.join(cwd, '.vzt', 'ship');
-    if (!fs.existsSync(base)) return ''; // the common path: one syscall, then out
+    let base = path.join(cwd, '.vzt', 'ship');
+    if (!fs.existsSync(base)) {
+      // Not here — but we may be inside a linked worktree, where the real ledger
+      // lives in the primary checkout. Only pay for `git worktree list` when the
+      // cheap local check misses, so the common no-ship-run path stays one syscall.
+      const primary = primaryCheckoutRoot(cwd);
+      if (!primary || primary === cwd) return '';
+      base = path.join(primary, '.vzt', 'ship');
+      if (!fs.existsSync(base)) return '';
+    }
     let newest = null;
     for (const slug of fs.readdirSync(base)) {
       const file = path.join(base, slug, 'LEDGER.jsonl');
@@ -366,7 +523,7 @@ if (import.meta.url === `file://${process.argv[1]}`) {
   const result = override
     ? { tier: override, kind: 'build', confidence: 'high', effort: TIERS[override].effort, matched: ['user-override'], scores: {}, words: prompt.split(/\s+/).length }
     : classify(prompt);
-  const chair = chairModel(payload.session_id);
+  const chair = chairModel(payload.session_id, payload.model);
 
   logDecision({
     ts: new Date().toISOString(),

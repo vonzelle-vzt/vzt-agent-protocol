@@ -35,14 +35,24 @@ const TEMPLATES_DIR = path.join(PKG_ROOT, 'templates');
 // for. The script and its install wiring ship together or not at all.
 const WORKFLOWS_DIR = path.join(PKG_ROOT, 'workflows');
 const ORCA_SRC_DIR = path.join(PKG_ROOT, 'orca');
+// Doctrine surfaces the skills point at by relative path; see install().
+const DOCS_DIR = path.join(PKG_ROOT, 'docs');
 
 const HOOKS = [
   { event: 'UserPromptSubmit', basename: 'vzt-route-classifier.mjs', timeout: 10 },
   { event: 'SessionStart', basename: 'vzt-session-start.mjs', timeout: 10 },
-  // Idle sentinel for the native VS Code mux (--mux vscode). Fires on every Stop
-  // but no-ops unless VZT_VSCODE_MUX=1 is set in the env — i.e. only inside a unit
-  // terminal the vscode backend launched. See hooks/vzt-vscode-agent-state.sh.
-  { event: 'Stop', basename: 'vzt-vscode-agent-state.sh', timeout: 10, runner: 'bash' },
+  // Agent lifecycle sentinels for the native VS Code mux (--mux vscode). One
+  // script, three events, distinguished by the action argument. All three no-op
+  // unless VZT_VSCODE_MUX=1 is set in the env — i.e. only inside a unit terminal
+  // the vscode backend launched. See hooks/vzt-vscode-agent-state.sh.
+  //
+  // `started` is what lets waitIdle tell "still working" from "never launched".
+  // Without it a unit whose terminal swallowed its command burns the whole unit
+  // budget and is then graded FAIL against an empty worktree — herdr fixed this
+  // for its own backend long ago; observed live in vscode on 2026-07-28.
+  { event: 'SessionStart', basename: 'vzt-vscode-agent-state.sh', timeout: 10, runner: 'bash', args: 'started' },
+  { event: 'PermissionRequest', basename: 'vzt-vscode-agent-state.sh', timeout: 10, runner: 'bash', args: 'blocked' },
+  { event: 'Stop', basename: 'vzt-vscode-agent-state.sh', timeout: 10, runner: 'bash', args: 'idle' },
 ];
 const MANAGED_MARKER = 'vzt-agent-protocol';
 // The hooks honour VZT_ROUTER_STATE_DIR; the CLI used to hardcode ~/.claude,
@@ -107,13 +117,33 @@ function wireSettings(dotClaude, { portable = false } = {}) {
     // Project installs use $CLAUDE_PROJECT_DIR so the committed settings.json
     // works on any clone; global installs use the absolute ~/.claude path.
     const runner = h.runner || 'node';
+    // Trailing action argument, for scripts wired to several events (the vscode
+    // lifecycle sentinel is one script serving started/blocked/idle).
+    const suffix = h.args ? ` ${h.args}` : '';
     const cmd = portable
-      ? `${runner} "$CLAUDE_PROJECT_DIR/.claude/hooks/vzt-router/${h.basename}"`
-      : `${runner} "${path.join(dotClaude, 'hooks', 'vzt-router', h.basename)}"`;
-    const already = bucket.some((m) =>
-      (m.hooks || []).some((x) => typeof x.command === 'string' && x.command.includes(h.basename))
-    );
-    if (!already) {
+      ? `${runner} "$CLAUDE_PROJECT_DIR/.claude/hooks/vzt-router/${h.basename}"${suffix}`
+      : `${runner} "${path.join(dotClaude, 'hooks', 'vzt-router', h.basename)}"${suffix}`;
+    // Idempotent, but an UPGRADE must also rewrite a command that changed.
+    // The old check only asked "is this basename present?", so when the vscode
+    // sentinel gained its action argument, every already-installed machine kept
+    // the stale argument-less command forever and `install` reported success.
+    // A hook we manage is ours to keep current.
+    let found = false;
+    for (const m of bucket) {
+      for (const x of m.hooks || []) {
+        if (typeof x.command !== 'string' || !x.command.includes(h.basename)) continue;
+        // Only touch entries wired for THIS event's action — one script can be
+        // wired to several events with different arguments.
+        if (found) continue;
+        found = true;
+        if (x.command !== cmd) {
+          x.command = cmd;
+          x.timeout = h.timeout;
+          x._managedBy = MANAGED_MARKER;
+        }
+      }
+    }
+    if (!found) {
       bucket.push({ hooks: [{ type: 'command', command: cmd, timeout: h.timeout, _managedBy: MANAGED_MARKER }] });
     }
   }
@@ -171,6 +201,11 @@ function install(args) {
   const hooks = copyDirContents(HOOKS_DIR, path.join(dotClaude, 'hooks', 'vzt-router'));
   const templates = copyDirContents(TEMPLATES_DIR, path.join(dotClaude, 'templates'), { ext: '.md' });
   const workflows = copyDirContents(WORKFLOWS_DIR, path.join(dotClaude, 'workflows'), { ext: '.js' });
+  // The skills tell a running session to "see docs/VSCODE.md" and
+  // docs/ROUTING-MATRIX.md, but install() never copied docs/ — so from the
+  // INSTALLED location those references resolved to nothing. Same class as the
+  // v1.4.0 templates bug: doctrine pointing at a file the installer skipped.
+  const docs = copyDirContents(DOCS_DIR, path.join(dotClaude, 'docs'), { ext: '.md' });
   // Orca supervision helpers go to a FIXED home (~/.orca/vzt/), not .claude —
   // ship-dispatch/ship-watch point each unit's prompt at this absolute path, and
   // Orca worktree panes need it regardless of which project's .claude they inherit.
@@ -182,9 +217,10 @@ function install(args) {
 
   console.log(`  agents:   ${agents.length} installed (fable×2, opus×3, sonnet×1, haiku×2)`);
   console.log(`  skills:   ${skills.length} files installed (/vzt-route /vzt-design /vzt-plan /vzt-fix /vzt-build /vzt-quick /vzt-fable-mode /vzt-diagnose /vzt-ship)`);
-  console.log(`  hooks:    ${hooks.length} installed (SessionStart chair-profile + UserPromptSubmit classifier + Stop vscode-mux idle sentinel)`);
+  console.log(`  hooks:    ${hooks.length} installed (SessionStart chair-profile + UserPromptSubmit classifier + vscode-mux lifecycle sentinels on SessionStart/PermissionRequest/Stop)`);
   console.log(`  templates: ${templates.length} installed (worker-brief delegation contract, ship spec)`);
   console.log(`  workflows: ${workflows.length} installed (vzt-ship long-horizon orchestration)`);
+  console.log(`  docs:     ${docs.length} installed (VSCODE, ROUTING-MATRIX, CHAIR-PROFILES — the skills reference these by path)`);
   console.log(`  orca:     ${orca.length} helper(s) → ${ORCA_VZT_DIR} (worktree-bootstrap for ship-dispatch/ship-watch)`);
   console.log(`  settings: wired ${settingsPath}`);
   console.log('\nDone. Restart Claude Code to activate.');
@@ -211,6 +247,7 @@ function uninstall(args) {
   for (const [srcDir, destName] of [
     [TEMPLATES_DIR, 'templates'],
     [WORKFLOWS_DIR, 'workflows'],
+    [DOCS_DIR, 'docs'],
   ]) {
     if (!fs.existsSync(srcDir)) continue;
     for (const f of fs.readdirSync(srcDir)) {
@@ -226,6 +263,16 @@ function uninstall(args) {
     if (fs.existsSync(dir)) {
       fs.rmSync(dir, { recursive: true });
       removed++;
+    }
+  }
+  // install() places these at a FIXED ~/.orca/vzt/ home rather than inside
+  // .claude, and uninstall had no counterpart — so the helpers outlived every
+  // uninstall. Only remove on a global uninstall: the path is shared, and a
+  // project-level uninstall must not yank it out from under other checkouts.
+  if (args.global) {
+    for (const f of ['worktree-bootstrap.sh', 'README.md']) {
+      const p = path.join(ORCA_VZT_DIR, f);
+      if (fs.existsSync(p)) { fs.rmSync(p); removed++; }
     }
   }
   const unwired = unwireSettings(dotClaude);
@@ -254,14 +301,54 @@ function doctor(args) {
   const workflowsOk = workflowFiles.length > 0 && workflowFiles.every((f) => fs.existsSync(path.join(dotClaude, 'workflows', f)));
   checks.push([`workflows installed (${workflowFiles.join(', ')})`, workflowsOk]);
 
+  const docFiles = fs.existsSync(DOCS_DIR) ? fs.readdirSync(DOCS_DIR).filter((f) => f.endsWith('.md')) : [];
+  const docsOk = docFiles.length > 0 && docFiles.every((f) => fs.existsSync(path.join(dotClaude, 'docs', f)));
+  checks.push([`docs installed (${docFiles.join(', ')})`, docsOk]);
+
+  // EVERY unit prompt makes this file its hard-required STEP 0. If it is
+  // missing, every unit's first action fails, the worktree never gets its deps
+  // or env, and every MACHINE_CHECK then fails for reasons that have nothing to
+  // do with the unit. Same class as the v1.4.0 templates bug — doctrine pointing
+  // at an artifact the installer may not have placed — and it was the one such
+  // artifact doctor still did not check.
+  checks.push([`orca worktree-bootstrap.sh installed (${ORCA_VZT_DIR})`, fs.existsSync(path.join(ORCA_VZT_DIR, 'worktree-bootstrap.sh'))]);
+
   const settings = readJson(path.join(dotClaude, 'settings.json'), {});
-  for (const h of HOOKS) {
-    checks.push([`${h.basename} installed`, fs.existsSync(path.join(dotClaude, 'hooks', 'vzt-router', h.basename))]);
-    const wired = (settings.hooks?.[h.event] || []).some((m) =>
-      (m.hooks || []).some((x) => typeof x.command === 'string' && x.command.includes(h.basename))
-    );
-    checks.push([`${h.event} hook wired in settings.json`, wired]);
+  // Dedupe: one script serves several events, so keyed by basename alone this
+  // printed the same "installed" line three times and buried the real signal.
+  for (const basename of [...new Set(HOOKS.map((h) => h.basename))]) {
+    checks.push([`${basename} installed`, fs.existsSync(path.join(dotClaude, 'hooks', 'vzt-router', basename))]);
   }
+  for (const h of HOOKS) {
+    const cmds = (settings.hooks?.[h.event] || [])
+      .flatMap((m) => m.hooks || [])
+      .map((x) => x.command)
+      .filter((c) => typeof c === 'string' && c.includes(h.basename));
+    // Wired is not enough — the ACTION ARGUMENT has to be there too. An install
+    // predating the lifecycle sentinels leaves an argument-less command that
+    // silently collapses started/blocked/idle into idle, reinstating the
+    // empty-worktree grading while doctor reported all-green.
+    const wired = cmds.length > 0 && (!h.args || cmds.some((c) => c.trimEnd().endsWith(` ${h.args}`)));
+    checks.push([`${h.event} hook wired${h.args ? ` with "${h.args}"` : ''}`, wired]);
+  }
+
+  // The extension is half of the vscode backend; a stale one is a silent
+  // mismatch against the CLI's filesystem contract.
+  const extManifest = path.join(PKG_ROOT, 'vscode', 'package.json');
+  if (fs.existsSync(extManifest)) {
+    const want = readJson(extManifest, {}).version;
+    const installedDir = path.join(os.homedir(), '.vscode', 'extensions');
+    let found = null;
+    try {
+      found = fs.readdirSync(installedDir).filter((d) => d.startsWith('vzt.vzt-mux-'))
+        .map((d) => readJson(path.join(installedDir, d, 'package.json'), {}).version)
+        .filter(Boolean)
+        .sort()
+        .pop() || null;
+    } catch { /* no vscode extensions dir */ }
+    checks.push([`vscode extension ${want} installed${found ? ` (found ${found})` : ' (not found — --mux vscode degrades to manual)'}`, found === want]);
+  }
+
   const major = Number(process.versions.node.split('.')[0]);
   checks.push([`node >= 18 (found ${process.versions.node})`, major >= 18]);
 
@@ -283,33 +370,55 @@ function stats() {
   const lines = fs.readFileSync(file, 'utf8').trim().split('\n').filter(Boolean);
   const byTier = {};
   const ships = [];
-  let overrides = 0;
   let routed = 0;
+  let deduped = 0;
+
+  // DEDUP by (timestamp, session), keeping the LAST entry.
+  //
+  // A repo that registers the classifier at project level on top of the global
+  // registration routes every prompt TWICE, and the two copies can disagree —
+  // an older build logs the pre-demotion `fable` verdict while the current one
+  // logs the demoted `opus`. Those phantom fable rows land in this histogram.
+  //
+  // It is not a rounding curiosity: measured on the live log, the raw figure was
+  // 10.0147% against a ≤10% target — a ❌ — while the deduped truth was 9.88%,
+  // a ✅. The protocol's one headline KPI was being flipped by its own logging
+  // noise. Last-wins because the second writer is the up-to-date classifier.
+  const seen = new Map();
   for (const line of lines) {
-    try {
-      const d = JSON.parse(line);
-      if (d.kind === 'ship') {
-        ships.push(d);
-        continue;
-      }
-      if (!d.tier) continue;
-      byTier[d.tier] = (byTier[d.tier] || 0) + 1;
-      if (d.override) overrides++;
-      routed++;
-    } catch {
-      /* skip bad lines */
-    }
+    let d;
+    try { d = JSON.parse(line); } catch { continue; }
+    if (d.kind === 'ship') { ships.push(d); continue; }
+    if (!d.tier) continue;
+    const key = `${d.ts || ''}|${d.session || ''}`;
+    if (d.ts && seen.has(key)) deduped++;
+    seen.set(key, d);
   }
+  for (const d of seen.values()) {
+    byTier[d.tier] = (byTier[d.tier] || 0) + 1;
+    routed++;
+  }
+
   const total = routed;
-  console.log(`Routing decisions: ${total} (manual overrides: ${overrides})\n`);
+  console.log(`Routing decisions: ${total}${deduped ? ` (${deduped} duplicate double-routed prompts collapsed)` : ''}\n`);
   for (const tier of ['fable', 'opus', 'sonnet', 'haiku']) {
     const n = byTier[tier] || 0;
     const pct = total ? Math.round((n / total) * 100) : 0;
     const bar = '█'.repeat(Math.round(pct / 2));
     console.log(`  ${tier.padEnd(6)} ${String(pct).padStart(3)}%  ${bar} (${n})`);
   }
+  // One decimal, not Math.round: at 10.0147% the rounded form printed
+  // "❌ over (10%)" against a "≤10%" target — a message that contradicts itself
+  // on its face and gives you no way to tell a real overshoot from a rounding
+  // artefact.
   const fablePct = total ? ((byTier.fable || 0) / total) * 100 : 0;
-  console.log(`\nTarget: Fable ≤10% — ${fablePct <= 10 ? '✅ on target' : `❌ over (${Math.round(fablePct)}%) — tighten routing: routine planning belongs on opus@max (/vzt-design), execution on /vzt-build`}`);
+  console.log(
+    `\nTarget: Fable ≤10% — ${
+      fablePct <= 10
+        ? `✅ on target (${fablePct.toFixed(1)}%)`
+        : `❌ over (${fablePct.toFixed(1)}%) — tighten routing: routine planning belongs on opus@max (/vzt-design), execution on /vzt-build`
+    }`
+  );
 
   // /vzt-ship ships with the test that can delete it. If the spec is not buying
   // coherence, it is buying a document, and a document is a tax.
@@ -567,6 +676,23 @@ function envJson(bin, argv) {
 function orcaBackend(args) {
   const bin = args.orca || process.env.ORCA_CLI || DEFAULT_ORCA;
   const key = (spec, u) => `${spec.slug}-${u.id}`;
+  // ⚠️ KNOWN GAP, deliberately not papered over: orca units cannot skip
+  // permission prompts.
+  //
+  // Ship panes run UNSUPERVISED, so a unit that stops on its first tool
+  // permission prompt never goes idle and burns its whole budget before the
+  // oracle grades an empty worktree. herdr and vscode each pass
+  // `--dangerously-skip-permissions` to the claude they launch. Orca cannot:
+  // `orca worktree create` exposes only `--agent <id>` and `--prompt <text>`
+  // (verified against `orca worktree create --help`) with no way to forward
+  // arguments to the launched agent.
+  //
+  // The escape hatch orca documents is `orca terminal create --command "<cmd>"`,
+  // which WOULD allow a full `claude --dangerously-skip-permissions "<brief>"`.
+  // Restructuring dispatch onto create-worktree-then-create-terminal is the real
+  // fix, but it is untestable here (orca is not running on this machine) and
+  // shipping an unverified rewrite of the DEFAULT backend is worse than a
+  // documented gap. Tracked in docs/VSCODE.md's backend-parity table.
   const createArgv = (spec, u) => ['worktree', 'create', '--repo', `path:${spec.root}`,
     '--name', key(spec, u), '--no-parent', '--agent', 'claude', '--setup', 'run',
     '--prompt', unitPrompt(spec, u), '--json'];
@@ -578,6 +704,12 @@ function orcaBackend(args) {
       const wt = res.worktree || res;
       const handle = res.agentTerminalHandle || res.startupTerminal?.handle || wt.startupTerminal?.handle || null;
       const wpath = wt.path || (wt.id && String(wt.id).split('::')[1]) || null;
+      // A null handle means waitIdle has nothing to wait ON: it returns instantly
+      // and the oracle grades a worktree the agent may not have touched yet.
+      // herdr logs when `agent start` throws; orca said nothing at all.
+      if (!handle) {
+        console.error(`  ${u.id}: orca returned no agent terminal handle — cannot wait for idle, so the oracle may grade an unfinished worktree.`);
+      }
       return { path: wpath, ws: key(spec, u), handle };
     },
     waitIdle(handle, t) {
@@ -710,7 +842,12 @@ function vscodeBackend(/* args */) {
   const stateDir = path.join(VZT_VSCODE_DIR, 'state');
   const promptDir = path.join(VZT_VSCODE_DIR, 'prompts');
   const wtRoot = path.join(VZT_VSCODE_DIR, 'worktrees');
-  for (const d of [queueDir, stateDir, promptDir, wtRoot]) fs.mkdirSync(d, { recursive: true });
+  // `units/` is the PERSISTENT record the tree view reads. queue/ is transient
+  // by design (the extension deletes each record to guarantee exactly-once
+  // launch), so it cannot also be the source of truth for what a unit IS —
+  // reload the window and the whole run would vanish from the UI.
+  const unitDir = path.join(VZT_VSCODE_DIR, 'units');
+  for (const d of [queueDir, stateDir, promptDir, wtRoot, unitDir]) fs.mkdirSync(d, { recursive: true });
   // Unit terminals run UNSUPERVISED, so their claude must skip permission prompts
   // or it boots and blocks forever on the first tool call (same lesson as herdr).
   // Opt out per-run with VZT_VSCODE_SKIP_PERMISSIONS=0.
@@ -751,13 +888,30 @@ function vscodeBackend(/* args */) {
     dispatch(spec, u) {
       const k = key(spec, u);
       const wtPath = ensureWorktree(spec, u);
-      for (const f of [`${k}.idle`, `${k}.status`]) { try { fs.unlinkSync(path.join(stateDir, f)); } catch { /* none */ } }
+      // Clear EVERY sentinel from a prior run of this unit key, not just idle —
+      // a stale `.started` would satisfy the start phase instantly and put us
+      // right back to grading an empty worktree.
+      for (const f of [`${k}.idle`, `${k}.status`, `${k}.started`, `${k}.blocked`]) {
+        try { fs.unlinkSync(path.join(stateDir, f)); } catch { /* none */ }
+      }
       const promptFile = path.join(promptDir, `${k}.txt`);
       fs.writeFileSync(promptFile, unitPrompt(spec, u));
       const idleFile = path.join(stateDir, `${k}.idle`);
+      const startedFile = path.join(stateDir, `${k}.started`);
+      const blockedFile = path.join(stateDir, `${k}.blocked`);
       const cmd = claudeCmd(promptFile);
       const queueFile = path.join(queueDir, `${k}.json`);
       fs.writeFileSync(queueFile, JSON.stringify({ unitKey: k, cwd: wtPath, env: { VZT_VSCODE_MUX: '1', VZT_VSCODE_UNIT: k }, cmd }, null, 2));
+      // Persistent twin for the tree view: survives the queue record's deletion
+      // and a window reload, and carries the oracle so the tree can re-run it.
+      fs.writeFileSync(
+        path.join(unitDir, `${k}.json`),
+        JSON.stringify(
+          { unitKey: k, slug: spec.slug, id: u.id, title: u.title || u.id, cwd: wtPath, machineCheck: u.machineCheck || '', expect: u.expect || '', dispatchedAt: new Date().toISOString() },
+          null,
+          2
+        )
+      );
       // Wait briefly for the extension to consume the record (it deletes the file).
       let launched = false;
       const deadline = Date.now() + DRAIN_GRACE_MS;
@@ -769,13 +923,47 @@ function vscodeBackend(/* args */) {
         console.error(`  ${u.id}: VS Code companion extension isn't draining the queue (installed? window open?).`);
         console.error(`  Manual fallback — open a terminal and run:\n    cd ${shq(wtPath)} && ${cmd}`);
       }
-      return { path: wtPath, ws: k, handle: { idleFile, launched } };
+      return { path: wtPath, ws: k, handle: { idleFile, startedFile, blockedFile, unitKey: k, launched } };
     },
+    // TWO-PHASE, mirroring herdrBackend().waitIdle — see that function's comment
+    // for the original incident. Waiting on `.idle` ALONE cannot distinguish:
+    //   (a) the agent is still working            -> keep waiting
+    //   (b) the agent never launched at all       -> stop early, don't waste the budget
+    // Observed live 2026-07-28: two identical units dispatched together; one
+    // terminal swallowed its command (shell still initialising), never ran
+    // claude, produced no `.idle`, and was graded FAIL against an empty worktree
+    // only after the ENTIRE unit timeout expired. Phase 1 catches exactly that.
     waitIdle(handle, t) {
       if (!handle || !handle.idleFile) return;
-      // If the terminal never launched, don't burn the full unit budget on a
-      // sentinel that will never arrive — verify will run against the worktree.
-      const deadline = Date.now() + (handle.launched ? t : Math.min(t, 5000));
+      if (!handle.launched) {
+        // The extension never drained the queue record, so no sentinel is coming.
+        // Bounded wait; verify still runs against the worktree.
+        const d = Date.now() + Math.min(t, 5000);
+        while (Date.now() < d) { if (fs.existsSync(handle.idleFile)) return; sleepSync(500); }
+        return;
+      }
+
+      // Phase 1 — wait for evidence the agent actually STARTED. `blocked` counts
+      // as started (it is sitting on a prompt, which is a live agent), and so
+      // does `idle` itself for a unit that finished faster than we looked.
+      const startGrace = Number(process.env.VZT_START_GRACE_MS || 90_000);
+      const startDeadline = Date.now() + Math.min(t, startGrace);
+      let started = false;
+      while (Date.now() < startDeadline) {
+        if (fs.existsSync(handle.startedFile) || fs.existsSync(handle.blockedFile)) { started = true; break; }
+        if (fs.existsSync(handle.idleFile)) return; // finished already
+        sleepSync(500);
+      }
+      if (!started) {
+        // Never observed running inside the grace window. Don't spend the rest of
+        // the unit budget waiting on a sentinel that is not coming — the oracle
+        // is still the authority and will run against the worktree.
+        console.error(`  ${handle.unitKey}: no start signal within ${Math.round(Math.min(t, startGrace) / 1000)}s — terminal likely never ran its command; verifying anyway`);
+        return;
+      }
+
+      // Phase 2 — it is alive; now the full unit budget governs.
+      const deadline = Date.now() + t;
       while (Date.now() < deadline) {
         if (fs.existsSync(handle.idleFile)) return;
         sleepSync(1000);
@@ -804,7 +992,18 @@ function vscodeBackend(/* args */) {
 }
 
 function getBackend(args) {
-  const name = (args.mux || process.env.VZT_MUX || 'orca').toLowerCase();
+  const explicit = args.mux || process.env.VZT_MUX;
+  const name = (explicit || 'orca').toLowerCase();
+  // Orca is the historical default AND the least hardened backend: alone among
+  // the three it has no start-grace phase in waitIdle and cannot pass
+  // skip-permissions to its agent (see orcaBackend). Falling into it silently,
+  // because neither --mux nor VZT_MUX was set, is how someone ends up debugging
+  // "the oracle graded an empty worktree" without knowing which substrate they
+  // were on. Say it out loud; do not change the default under them.
+  if (!explicit) {
+    console.error('note: no --mux and no VZT_MUX — defaulting to orca, the least-hardened backend.');
+    console.error('      prefer `--mux herdr` or `--mux vscode`, or export VZT_MUX, unless you mean orca.');
+  }
   if (name === 'herdr') return herdrBackend(args);
   if (name === 'orca') return orcaBackend(args);
   if (name === 'vscode') return vscodeBackend(args);
@@ -893,14 +1092,102 @@ function verifyAndRecord(be, spec, u, specPath, info, via) {
   return r.pass;
 }
 
-function runIntegrationGate(spec) {
+/**
+ * Capture a unit worktree's ENTIRE divergence from HEAD as a patch — committed,
+ * uncommitted, and untracked alike.
+ *
+ * `git diff HEAD` alone is not enough: a unit that creates a new file leaves it
+ * UNTRACKED, and the smoke run proved that is the common case (agents write the
+ * file, they do not necessarily commit it). Diffing by branch name is also out —
+ * orca names worktrees rather than branches, so there is no branch to name.
+ *
+ * Uses a THROWAWAY index (GIT_INDEX_FILE) so staging everything here never
+ * touches the unit's own index. Returns '' when the unit changed nothing.
+ */
+function captureWorktreePatch(wt) {
+  const idx = path.join(os.tmpdir(), `vzt-idx-${process.pid}-${Math.abs(hashString(wt))}`);
+  const env = { ...process.env, GIT_INDEX_FILE: idx };
+  try {
+    execFileSync('git', ['-C', wt, 'read-tree', 'HEAD'], { env, stdio: 'ignore' });
+    execFileSync('git', ['-C', wt, 'add', '-A'], { env, stdio: 'ignore' });
+    const tree = execFileSync('git', ['-C', wt, 'write-tree'], { env, encoding: 'utf8' }).trim();
+    return execFileSync('git', ['-C', wt, 'diff', 'HEAD', tree, '--binary'], {
+      env, encoding: 'utf8', maxBuffer: 64 * 1024 * 1024,
+    });
+  } finally {
+    try { fs.unlinkSync(idx); } catch { /* never existed */ }
+  }
+}
+
+function hashString(s) {
+  let h = 0;
+  for (let i = 0; i < s.length; i++) h = (Math.imul(31, h) + s.charCodeAt(i)) | 0;
+  return h;
+}
+
+/**
+ * Run the integration check against HEAD + every passed unit's work combined.
+ *
+ * It used to run against `spec.root` — the PRIMARY checkout, which by
+ * construction contains NONE of the unit work (every unit lives in its own
+ * worktree). So it printed "units verified and integrated" after testing a tree
+ * with zero unit changes in it. That PASS was vacuous, and it was the last gate
+ * before a human was told the run was ready to merge.
+ *
+ * Because ship-check enforces pairwise-disjoint FILES_IN_SCOPE, the unit patches
+ * cannot conflict with each other unless a unit wrote outside its declared
+ * scope — so a failed `git apply` is itself a real finding, not noise.
+ *
+ * @returns {{ok: boolean, status: string, output?: string}}
+ */
+function runIntegrationGate(spec, be, units) {
   const check = spec.integration && spec.integration.machineCheck;
-  if (!check) { console.log('\nintegration gate: (none declared)'); return true; }
+  if (!check) { console.log('\nintegration gate: (none declared)'); return { ok: true, status: 'NONE' }; }
   process.stdout.write('\nintegration gate … ');
-  const r = runOracle(check, spec.root);
-  console.log(r.pass ? 'PASS ✅ — units verified and integrated; ready for your review + merge.' : 'FAIL ❌');
-  if (!r.pass && r.output) console.log(r.output.split('\n').map((l) => `    ${l}`).join('\n'));
-  return r.pass;
+
+  const tmp = path.join(os.tmpdir(), `vzt-integration-${spec.slug}-${process.pid}`);
+  const cleanup = () => {
+    try { execFileSync('git', ['-C', spec.root, 'worktree', 'remove', '--force', tmp], { stdio: 'ignore' }); } catch { /* best effort */ }
+    try { fs.rmSync(tmp, { recursive: true, force: true }); } catch { /* gone */ }
+  };
+
+  try {
+    execFileSync('git', ['-C', spec.root, 'worktree', 'add', '--detach', tmp, 'HEAD'], { stdio: ['ignore', 'ignore', 'pipe'] });
+  } catch (e) {
+    console.log('SKIPPED ⚠️');
+    console.log(`    could not create an integration worktree: ${e.message.trim().split('\n')[0]}`);
+    console.log('    (the gate is only meaningful against merged unit work — not falling back to the primary checkout)');
+    return { ok: false, status: 'NO_WORKTREE' };
+  }
+
+  try {
+    const applied = [];
+    for (const u of units) {
+      const ref = be.resolve(spec, u);
+      if (!ref || !ref.path || !fs.existsSync(ref.path)) continue;
+      let patch = '';
+      try { patch = captureWorktreePatch(ref.path); } catch { /* unreadable worktree */ }
+      if (!patch.trim()) continue;
+      try {
+        execFileSync('git', ['-C', tmp, 'apply', '--index', '--whitespace=nowarn'], { input: patch, stdio: ['pipe', 'ignore', 'pipe'] });
+        applied.push(u.id);
+      } catch (e) {
+        console.log('MERGE_CONFLICT ❌');
+        console.log(`    ${u.id}'s changes do not apply on top of ${applied.join(' + ') || 'HEAD'}.`);
+        console.log('    Units have disjoint file scopes, so this means a unit wrote OUTSIDE its declared scope.');
+        const detail = `${e.stderr || ''}`.trim();
+        if (detail) console.log(detail.split('\n').slice(0, 5).map((l) => `    ${l}`).join('\n'));
+        return { ok: false, status: 'MERGE_CONFLICT', output: detail.slice(-500) };
+      }
+    }
+
+    const r = runOracle(check, tmp);
+    console.log(r.pass ? `PASS ✅ — ${applied.length} unit(s) merged and verified together; ready for your review + merge.` : 'FAIL ❌');
+    if (!r.pass && r.output) console.log(r.output.split('\n').map((l) => `    ${l}`).join('\n'));
+    return { ok: r.pass, status: r.pass ? 'PASS' : 'FAIL', output: r.output };
+  } finally {
+    cleanup();
+  }
 }
 
 function shipSupervise(args) {
@@ -943,19 +1230,46 @@ function shipWatch(args) {
   // Open the ledger.
   try { execFileSync(process.execPath, [fileURLToPath(import.meta.url), 'ship-start', specPath], { stdio: ['ignore', 'ignore', 'ignore'] }); } catch {}
 
+  // Append one ledger line. Every terminal path below MUST go through this —
+  // a run that never records `run_complete`/`aborted` stays `active` forever in
+  // reduceLedger, and the router hook then re-injects a stale "[VZT-SHIP] ACTIVE
+  // RUN" block into every prompt in that repo, with no TTL to ever clear it.
+  const note = (obj) => {
+    try {
+      execFileSync(process.execPath, [fileURLToPath(import.meta.url), 'ship-note', specPath, JSON.stringify(obj)],
+        { stdio: ['ignore', 'ignore', 'ignore'] });
+    } catch { /* best-effort: never let bookkeeping kill a run */ }
+  };
+
   const dispatch = (u) => {
-    const info = be.dispatch(spec, u);
-    console.log(`  dispatched ${u.id} → ${info.path || '(worktree)'}${info.handle ? '' : '  (no agent handle — will resolve on verify)'}`);
-    return { u, info };
+    // ship-dispatch guards this; ship-watch did not — so a worktree/branch
+    // collision on a re-run threw straight out of the loop and killed the whole
+    // run mid-flight, after the barrier had already been paid for, with nothing
+    // recorded in the ledger at all.
+    try {
+      const info = be.dispatch(spec, u);
+      console.log(`  dispatched ${u.id} → ${info.path || '(worktree)'}${info.handle ? '' : '  (no agent handle — will resolve on verify)'}`);
+      return { u, info };
+    } catch (e) {
+      const msg = (e && e.message ? e.message : String(e)).trim().split('\n')[0];
+      console.error(`  ${u.id}: DISPATCH FAILED — ${msg}`);
+      note({ kind: 'unit_result', unit: u.id, status: 'FAIL', via: 'ship-watch', mux: be.name, code: -1, output: `dispatch failed: ${msg}` });
+      return { u, info: null, dispatchFailed: true };
+    }
   };
 
   // Phase 1 — barrier gates everything.
   if (spec.barrier) {
     console.log('\n## barrier (runs first; its oracle grades every unit)');
     const b = dispatch(spec.barrier);
-    be.waitIdle(b.info.handle, timeoutMs);
-    if (!verifyAndRecord(be, spec, spec.barrier, specPath, b.info, 'ship-watch')) {
-      console.error('\n❌ barrier oracle FAILED — aborting before dispatching units. Fix the barrier worktree, then re-run.');
+    let barrierOk = false;
+    if (!b.dispatchFailed) {
+      be.waitIdle(b.info.handle, timeoutMs);
+      barrierOk = verifyAndRecord(be, spec, spec.barrier, specPath, b.info, 'ship-watch');
+    }
+    if (!barrierOk) {
+      console.error('\n❌ barrier FAILED — aborting before dispatching units. Fix the barrier worktree, then re-run.');
+      note({ kind: 'aborted', reason: b.dispatchFailed ? 'barrier dispatch failed' : 'barrier oracle failed' });
       process.exit(1);
     }
   }
@@ -965,14 +1279,41 @@ function shipWatch(args) {
   const workers = spec.units.map(dispatch);
   console.log('\n## verifying as each finishes …');
   let passed = 0;
+  const passedUnits = [];
   for (const w of workers) {
+    if (w.dispatchFailed) continue; // already recorded FAIL; nothing to wait on
     be.waitIdle(w.info.handle, timeoutMs); // by the time earlier ones idle, later ones often already have
-    if (verifyAndRecord(be, spec, w.u, specPath, w.info, 'ship-watch')) passed++;
+    if (verifyAndRecord(be, spec, w.u, specPath, w.info, 'ship-watch')) {
+      passed++;
+      passedUnits.push(w.u);
+    }
   }
 
   console.log(`\n${passed}/${workers.length} unit oracle(s) PASS.`);
-  const gateOk = passed === workers.length ? runIntegrationGate(spec) : (console.log('\nintegration gate skipped — not all units passed.'), false);
-  if (!gateOk) process.exitCode = 1;
+
+  let integration = { ok: false, status: 'SKIPPED' };
+  if (passed === workers.length) {
+    integration = runIntegrationGate(spec, be, [spec.barrier, ...passedUnits].filter(Boolean));
+  } else {
+    console.log('\nintegration gate skipped — not all units passed.');
+  }
+  note({ kind: 'integration', status: integration.status, output: integration.output || null });
+
+  // The falsification record for `vzt-agent stats`. This used to depend on the
+  // chair hand-typing a printf from the skill doc, so in practice it was never
+  // written and the /vzt-ship kill-switch had no data to fire on. `corrections`
+  // is honestly 0 here: the supervised path dispatches once and verifies once —
+  // it has no repair loop (that lives in the headless workflow path).
+  note({
+    kind: 'ship',
+    units: workers.length + (spec.barrier ? 1 : 0),
+    passed: passed + (spec.barrier ? 1 : 0),
+    blocked: workers.length - passed,
+    corrections: 0,
+  });
+
+  note({ kind: 'run_complete', integration: integration.status });
+  if (!integration.ok) process.exitCode = 1;
 }
 
 const args = parseArgs(process.argv.slice(2));

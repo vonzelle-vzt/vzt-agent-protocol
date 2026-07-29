@@ -14,14 +14,34 @@ integrated terminal instead of a tmux pane.
   `FAIL`) the CLI writes as units finish, and reflects them into:
   - the **"VZT Ship"** output channel (`[PASS] <unitKey>` / `[FAIL] <unitKey>`)
   - a status bar item showing a running tally, e.g. `VZT ship: 2 ✓  1 ✗`
-- Ignores `~/.vzt/vscode-mux/idle/*` entirely — those sentinel files are
-  written by a separate shell hook, not this extension.
+- Reports each `.status` file per WRITE (keyed on mtime), so re-running a unit
+  in the same window reports again instead of being silently skipped.
+- Ignores the lifecycle sentinels in `~/.vzt/vscode-mux/state/`
+  (`<unit>.started` / `.blocked` / `.idle`) — those are written by the shell
+  hook `hooks/vzt-vscode-agent-state.sh` and consumed by `ship-watch`, not by
+  this extension.
+- Contributes a **Ship Run tree** (activity bar → *VZT Ship*) listing every
+  unit with live status, driven by the persistent unit records the CLI writes
+  to `~/.vzt/vscode-mux/units/`.
 
 ### Known VS Code constraint
 
 A terminal's tab title **cannot be renamed** after creation, so this
-extension never attempts it. Status is surfaced only via the output channel
-and status bar described above, not via tab renames.
+extension never attempts it. Status lives in the Ship Run tree, the output
+channel and the status bar — not on the tab.
+
+## Install
+
+```bash
+cd vscode
+npm install
+npm run package          # → vzt-mux-<version>.vsix
+code --install-extension vzt-mux-0.2.0.vsix
+```
+
+Then **Developer: Reload Window**. The extension host caches its code, so a
+freshly built `out/` does not take effect until the window reloads — a stale
+host silently running an older build is an easy hour to lose.
 
 ## Local development
 
@@ -41,10 +61,22 @@ Then in VS Code, either:
 Once active, the extension creates `~/.vzt/vscode-mux/{queue,state,prompts}`
 if they don't already exist, then starts polling.
 
-## Command
+## Commands
 
 - **VZT: Watch Ship Run** (`vzt-mux.watchShipRun`) — reveals all known ship
   unit terminals. If none are active, shows an info message instead.
+- **VZT: Refresh Ship Run** (`vzt-mux.refresh`) — force a tree refresh (it
+  also polls every second).
+
+Per-unit, from the Ship Run tree:
+
+- **Focus Terminal** (`vzt-mux.focusTerminal`) — jump to that unit's terminal.
+- **Open Worktree Diff** (`vzt-mux.openWorktree`) — add the unit's git
+  worktree as a workspace folder and open the SCM view, so you can read what
+  the agent is writing *while it is still running*.
+- **Re-run Oracle** (`vzt-mux.rerunOracle`) — run that unit's recorded
+  `machineCheck` in its own worktree. The command comes from the unit record,
+  so it is byte-identical to what `ship-watch` graded with.
 
 ## Pairing with the CLI
 

@@ -1,8 +1,8 @@
 {
   "name": "vzt-mux",
   "displayName": "VZT Ship Mux",
-  "description": "Runs VZT Agent Protocol ship units as native VS Code integrated terminals via a filesystem queue.",
-  "version": "0.1.0",
+  "description": "Runs VZT Agent Protocol ship units as native VS Code integrated terminals, with a live Ship Run tree \u2014 per-unit status, worktree diffs mid-run, and one-click oracle re-runs.",
+  "version": "0.2.0",
   "publisher": "vzt",
   "engines": {
     "vscode": "^1.85.0"
@@ -15,16 +15,87 @@
   ],
   "main": "./out/extension.js",
   "contributes": {
+    "viewsContainers": {
+      "activitybar": [
+        {
+          "id": "vztShip",
+          "title": "VZT Ship",
+          "icon": "$(rocket)"
+        }
+      ]
+    },
+    "views": {
+      "vztShip": [
+        {
+          "id": "vztShipRun",
+          "name": "Ship Run",
+          "contextualTitle": "VZT Ship Run"
+        }
+      ]
+    },
+    "viewsWelcome": [
+      {
+        "view": "vztShipRun",
+        "contents": "No ship run yet.\n\nStart one with:\n[vzt-agent ship-watch <SPEC.md> --mux vscode]()\n\nEach unit opens as its own integrated terminal, and appears here with live status."
+      }
+    ],
     "commands": [
       {
         "command": "vzt-mux.watchShipRun",
         "title": "VZT: Watch Ship Run"
+      },
+      {
+        "command": "vzt-mux.refresh",
+        "title": "VZT: Refresh Ship Run",
+        "icon": "$(refresh)"
+      },
+      {
+        "command": "vzt-mux.focusTerminal",
+        "title": "Focus Terminal",
+        "icon": "$(terminal)"
+      },
+      {
+        "command": "vzt-mux.openWorktree",
+        "title": "Open Worktree Diff",
+        "icon": "$(git-compare)"
+      },
+      {
+        "command": "vzt-mux.rerunOracle",
+        "title": "Re-run Oracle",
+        "icon": "$(play)"
       }
-    ]
+    ],
+    "menus": {
+      "view/title": [
+        {
+          "command": "vzt-mux.refresh",
+          "when": "view == vztShipRun",
+          "group": "navigation"
+        }
+      ],
+      "view/item/context": [
+        {
+          "command": "vzt-mux.focusTerminal",
+          "when": "view == vztShipRun && viewItem == vztUnit",
+          "group": "inline@1"
+        },
+        {
+          "command": "vzt-mux.openWorktree",
+          "when": "view == vztShipRun && viewItem == vztUnit",
+          "group": "inline@2"
+        },
+        {
+          "command": "vzt-mux.rerunOracle",
+          "when": "view == vztShipRun && viewItem == vztUnit",
+          "group": "inline@3"
+        }
+      ]
+    }
   },
   "scripts": {
     "compile": "tsc -p ./",
-    "vscode:prepublish": "npm run compile"
+    "vscode:prepublish": "npm run compile",
+    "package": "npm run compile && npx --yes @vscode/vsce package --no-dependencies -o vzt-mux-$npm_package_version.vsix"
   },
   "devDependencies": {
     "@types/vscode": "^1.85.0",

@@ -1,7 +1,9 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
+import os from 'node:os';
 import path from 'node:path';
+import { execFileSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { classify, suggestEffort, directive, TIERS } from '../hooks/vzt-route-classifier.mjs';
 
@@ -248,26 +250,138 @@ test('docs mirror the TIERS model names (currency guard — fails on the next mo
   }
 });
 
+// ——— Regressions found by auditing the live decision log (2026-07-28) ————————
+// 48% of 2,037 real decisions were sonnet + low-confidence + ZERO matched
+// signals. These are the specific holes behind that number.
+
+test('the INSPECTION family routes up — auditing an existing system is Opus work', () => {
+  // Until this landed, bare "audit"/"analyze"/"investigate" matched NOTHING and
+  // fell to the sonnet default. The audit prompt that FOUND this bug is the
+  // first case: the classifier could not route a request to audit itself.
+  const cases = [
+    'audit the protocol to see what else needs to be optimized, updated, added',
+    'analyze the failure modes of this design',
+    'investigate why the deploy keeps timing out',
+    'inspect the migration for anything that could lose data',
+  ];
+  for (const p of cases) {
+    const r = classify(p);
+    assert.equal(r.tier, 'opus', `"${p}" → ${r.tier} (inspection belongs on opus)`);
+    assert.ok(r.matched.length > 0, `"${p}" matched no signals at all`);
+  }
+});
+
+test('a ROUTINE security review is opus; a security HOLE is still fable', () => {
+  // `security (audit|review)` used to score fable:debug, and the FRONTIER_NOVEL
+  // demotion is gated to kind==='plan' — so routine pre-merge security review
+  // bypassed the opus@max rung entirely and burned frontier quota every time.
+  assert.equal(classify('do a security audit of the login flow').tier, 'opus');
+  assert.equal(classify('security review of the new payout endpoint').tier, 'opus');
+  assert.equal(classify('find the security hole in the auth token handling').tier, 'fable');
+  assert.equal(classify('write a threat model for the webhook receiver').tier, 'fable');
+});
+
+test('HORIZON scope nouns are symmetric across entire/whole/across-the', () => {
+  // The noun lists diverged: `entire (codebase|repo|…)` vs `whole (app|system|…)`
+  // with repo and codebase missing. One synonym, two tiers apart.
+  for (const scope of ['entire', 'whole', 'across the']) {
+    for (const noun of ['repo', 'codebase', 'system', 'platform']) {
+      const r = classify(`build every feature across the ${scope === 'across the' ? '' : scope + ' '}${noun}`.replace('across the across the', 'across the'));
+      assert.equal(r.kind, 'horizon', `"${scope} ${noun}" → ${r.tier}:${r.kind}, expected horizon`);
+    }
+  }
+});
+
+test('length and brevity AMPLIFY evidence — they never overturn it', () => {
+  // (a) A long prompt with zero opus evidence used to score opus+1 and win the
+  //     fable>opus>haiku>sonnet tiebreak on word count alone.
+  const longTrivial = 'just tweak the copy on this page a bit ' + 'and also adjust the spacing '.repeat(12);
+  const r = classify(longTrivial);
+  assert.equal(r.tier, 'sonnet', `long-but-trivial → ${r.tier}; length must not buy a tier`);
+
+  // (b) The short-prompt haiku nudge used to fire unconditionally, so a sub-15-word
+  //     prompt carrying a TIED fable signal lost to recon phrasing.
+  assert.equal(classify('find the race condition in the sync').tier, 'fable');
+  // …while genuine recon stays down-tier.
+  assert.equal(classify('find all the callers of loadDashboard').tier, 'haiku');
+  assert.equal(classify('where is the payout handler').tier, 'haiku');
+});
+
+test('the chair follows a mid-session /model switch, in BOTH directions', () => {
+  // chair.json is stamped only at SessionStart and `/model` fires no hook, so the
+  // chair could never update mid-session. That is worse than no directive:
+  // directive() branches on RANK[chair], so a stale "opus" seat makes every
+  // opus-tier task print "handle inline" when the truth is "delegate DOWN to
+  // conserve fable quota". Measured live: 4+ hours of post-switch decisions all
+  // recorded the pre-switch chair.
+  //
+  // Driven as a subprocess because chairModel is module-internal — this exercises
+  // the real hook exactly as Claude Code invokes it.
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'vzt-chair-'));
+  const state = path.join(dir, 'state');
+  const cfg = path.join(dir, 'cfg');
+  fs.mkdirSync(state); fs.mkdirSync(cfg);
+  const chairFile = path.join(state, 'chair.json');
+  fs.writeFileSync(chairFile, JSON.stringify({ 'sess-1': 'claude-opus-5[1m]', latest: 'claude-opus-5[1m]' }));
+
+  const hook = path.join(REPO_ROOT, 'hooks', 'vzt-route-classifier.mjs');
+  const chairFor = (settings, payloadExtra = {}) => {
+    fs.writeFileSync(path.join(cfg, 'settings.json'), JSON.stringify(settings));
+    const out = execFileSync(process.execPath, [hook], {
+      input: JSON.stringify({ prompt: 'refactor the entire payment module', session_id: 'sess-1', cwd: '/tmp', ...payloadExtra }),
+      env: { ...process.env, VZT_ROUTER_STATE_DIR: state, CLAUDE_CONFIG_DIR: cfg },
+      encoding: 'utf8',
+    });
+    const ctx = JSON.parse(out).hookSpecificOutput.additionalContext;
+    return (/chair:\s*(\w+)/.exec(ctx) || [])[1];
+  };
+
+  // `/model` writes settings.model for a NON-default model and REMOVES it when
+  // you return to the default — so absence means "default is seated".
+  assert.equal(chairFor({}), 'opus', 'default model → SessionStart truth from chair.json');
+  assert.equal(chairFor({ model: 'claude-fable-5[1m]' }), 'fable', 'switch away must be seen');
+  assert.equal(chairFor({}), 'opus', 'switch BACK to default must be seen too');
+
+  // The settings-derived reads must NOT be persisted — caching them is what would
+  // make the switch-back above return a stale "fable".
+  assert.deepEqual(
+    JSON.parse(fs.readFileSync(chairFile, 'utf8')),
+    { 'sess-1': 'claude-opus-5[1m]', latest: 'claude-opus-5[1m]' },
+    'settings.json reads must not write chair.json'
+  );
+
+  // The payload, when the harness supplies it, IS authoritative and self-heals.
+  assert.equal(chairFor({}, { model: 'claude-haiku-4-5' }), 'haiku');
+  assert.equal(JSON.parse(fs.readFileSync(chairFile, 'utf8'))['sess-1'], 'claude-haiku-4-5');
+});
+
 test('no retired model version survives anywhere in the shipped protocol', () => {
   // Add a row here whenever a model is superseded; the value is the replacement.
   const RETIRED = [
     [/Opus 4\.8/g, 'Opus 5'],
     [/opus-4-8/g, 'claude-opus-5 (or the `opus` alias)'],
   ];
+  // Enumerating files by hand is how the guard grows holes: the audit found it
+  // was missing vzt-design and vzt-plan (the two NEWEST skills), CLAUDE-snippet,
+  // docs/VSCODE.md, the planner/oracle agents and all of vscode/ — so a retired
+  // model name could sit in the newest surface and this test would pass.
+  // Glob every shipped doctrine surface instead, so new files are covered on the
+  // day they land.
   const files = [
     'README.md',
     'package.json',
     'cli/vzt-agent.js',
-    'docs/ROUTING-MATRIX.md',
-    'docs/CHAIR-PROFILES.md',
-    'hooks/vzt-route-classifier.mjs',
-    'hooks/vzt-session-start.mjs',
-    'skills/vzt-route/SKILL.md',
-    'skills/vzt-fable-mode/SKILL.md',
-    'agents/vzt-heavy-builder.md',
-    'agents/vzt-reviewer.md',
-    'agents/vzt-architect.md',
-  ];
+    'cli/ship-lib.mjs',
+    ...fs.readdirSync(path.join(REPO_ROOT, 'docs')).filter((f) => f.endsWith('.md')).map((f) => `docs/${f}`),
+    ...fs.readdirSync(path.join(REPO_ROOT, 'hooks')).map((f) => `hooks/${f}`),
+    ...fs.readdirSync(path.join(REPO_ROOT, 'skills')).map((d) => `skills/${d}/SKILL.md`).filter((f) => fs.existsSync(path.join(REPO_ROOT, f))),
+    ...fs.readdirSync(path.join(REPO_ROOT, 'agents')).filter((f) => f.endsWith('.md')).map((f) => `agents/${f}`),
+    ...fs.readdirSync(path.join(REPO_ROOT, 'templates')).filter((f) => f.endsWith('.md')).map((f) => `templates/${f}`),
+    'vscode/README.md',
+    'vscode/package.json',
+    'vscode/src/extension.ts',
+  ].filter((f) => fs.existsSync(path.join(REPO_ROOT, f)));
+  assert.ok(files.length >= 25, `expected to scan the whole doctrine surface, only found ${files.length} files`);
   for (const rel of files) {
     const text = fs.readFileSync(path.join(REPO_ROOT, rel), 'utf8');
     for (const [pattern, replacement] of RETIRED) {
@@ -307,25 +421,37 @@ test('every file path the doctrine references is actually installed', () => {
     const contents = fs.readFileSync(file, 'utf8');
     // Generalized past the v1.4.0 bug: ANY shipped directory the doctrine points
     // at must be copied by install(), not just templates/.
-    for (const m of contents.matchAll(/(templates|workflows)\/[A-Za-z0-9._-]+\.(md|js)/g)) referenced.add(m[0]);
+    // `docs` and `orca` were NOT in this alternation, which is why
+    // skills/vzt-ship/SKILL.md could point at `docs/VSCODE.md` and
+    // skills/vzt-route at `orca/README.md` — neither of which install() copies —
+    // and this guard stayed green. A doctrine reference that does not resolve
+    // from the INSTALLED location is the v1.4.0 bug wearing a different hat.
+    for (const m of contents.matchAll(/(templates|workflows|docs|orca)\/[A-Za-z0-9._-]+\.(md|js|sh)/g)) referenced.add(m[0]);
   }
   const cli = fs.readFileSync(path.join(REPO_ROOT, 'cli', 'vzt-agent.js'), 'utf8');
   assert.ok(referenced.size > 0, 'expected the doctrine to reference at least one shipped file');
 
-  const DIR_VARS = { templates: 'TEMPLATES_DIR', workflows: 'WORKFLOWS_DIR' };
+  // Each shipped directory declares HOW install() places it and how uninstall()
+  // takes it back. orca/ is the odd one out — it goes to a fixed ~/.orca/vzt/
+  // home rather than into .claude, so it has its own installer.
+  const INSTALLERS = {
+    templates: { install: /copyDirContents\(TEMPLATES_DIR/, uninstall: /\[TEMPLATES_DIR,/ },
+    workflows: { install: /copyDirContents\(WORKFLOWS_DIR/, uninstall: /\[WORKFLOWS_DIR,/ },
+    docs: { install: /copyDirContents\(DOCS_DIR/, uninstall: /\[DOCS_DIR,/ },
+    orca: { install: /installOrcaHelpers\(\)/, uninstall: /ORCA_VZT_DIR/ },
+  };
   for (const ref of referenced) {
     // (a) the file exists in the repo …
     assert.ok(fs.existsSync(path.join(REPO_ROOT, ref)), `doctrine references ${ref}, which does not exist in the repo`);
-    // (b) … and install() actually copies the directory it lives in, and
+    // (b) … and install() actually places the directory it lives in, and
     //     uninstall() actually removes it. A doctrine pointing at a file the
-    //     installer never copied is exactly the v1.4.0 bug.
+    //     installer never copied is exactly the v1.4.0 bug — and it recurred
+    //     with docs/ (skills say "see docs/VSCODE.md"; install never copied it).
     const dir = ref.split('/')[0];
-    const v = DIR_VARS[dir];
-    assert.ok(
-      new RegExp(`copyDirContents\\(${v}`).test(cli),
-      `doctrine references ${ref} but cli/vzt-agent.js never installs ${dir}/ (no copyDirContents(${v}...))`
-    );
-    assert.ok(new RegExp(`\\[${v},`).test(cli), `cli/vzt-agent.js install()s ${dir}/ but uninstall() never removes it`);
+    const rules = INSTALLERS[dir];
+    assert.ok(rules, `doctrine references ${ref} from an unrecognised directory "${dir}/" — teach this test how it installs`);
+    assert.ok(rules.install.test(cli), `doctrine references ${ref} but cli/vzt-agent.js never installs ${dir}/`);
+    assert.ok(rules.uninstall.test(cli), `cli/vzt-agent.js installs ${dir}/ but uninstall() never removes it`);
   }
 });
 

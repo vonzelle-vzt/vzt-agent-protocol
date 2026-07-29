@@ -18,6 +18,11 @@
 /** The agents install() ships. A spec may not name an agentType that does not exist. */
 export const AGENT_TYPES = [
   'vzt-planner',
+  // The opus@max planning rung. install() ships agents/vzt-architect.md and the
+  // router demotes routine `fable/plan` decisions onto it, so omitting it here
+  // meant ship-check REJECTED any spec naming the very agent the doctrine tells
+  // you to plan with.
+  'vzt-architect',
   'vzt-oracle',
   'vzt-heavy-builder',
   'vzt-reviewer',
@@ -25,6 +30,20 @@ export const AGENT_TYPES = [
   'vzt-mechanic',
   'vzt-scout',
 ];
+
+/**
+ * Unit statuses that mean "this unit did not succeed".
+ *
+ * There are TWO producers writing unit_result lines and they speak different
+ * dialects: the supervised path (`ship-watch` → verifyAndRecord) writes
+ * `PASS`/`FAIL`, while the headless workflow path writes
+ * `PASS`/`BLOCKED`/`ORACLE_FAIL`/`SCOPE_BREACH`. Until this set existed the
+ * reducer knew only the workflow's dialect, so a `FAIL` matched nothing and a
+ * run with a failing unit reported "all reported units passed" — a false green
+ * delivered at exactly the moment (post-compaction rehydration) when the chair
+ * has no other source of truth. Every consumer must go through this set.
+ */
+export const FAILED_STATUSES = new Set(['FAIL', 'ORACLE_FAIL', 'SCOPE_BREACH']);
 
 const SPEC_MARKER = '<!-- vzt-spec';
 
@@ -158,6 +177,7 @@ export function reduceLedger(text) {
     active: false,
     passed: 0,
     blocked: 0,
+    failed: 0,
     corrections: 0,
   };
   if (typeof text !== 'string' || !text.trim()) return state;
@@ -210,6 +230,7 @@ export function reduceLedger(text) {
   for (const u of Object.values(state.units)) {
     if (u.status === 'PASS') state.passed++;
     else if (u.status === 'BLOCKED') state.blocked++;
+    else if (FAILED_STATUSES.has(u.status)) state.failed++;
     state.corrections += u.round || 0;
   }
   state.active = Boolean(state.runId) && !sawTerminal;
@@ -223,7 +244,7 @@ export function nextAction(state) {
   const entries = Object.entries(state.units);
   if (entries.length === 0) return 'spec gated, no units reported yet — launch the workflow';
   const blocked = entries.filter(([, u]) => u.status === 'BLOCKED').map(([id]) => id);
-  const failed = entries.filter(([, u]) => u.status === 'ORACLE_FAIL' || u.status === 'SCOPE_BREACH').map(([id]) => id);
+  const failed = entries.filter(([, u]) => FAILED_STATUSES.has(u.status)).map(([id]) => id);
   if (blocked.length)
     return `${blocked.join(', ')} BLOCKED after correction rounds → escalate exactly ONE tier (vzt-heavy-builder) carrying the verbatim oracle output`;
   if (failed.length) return `${failed.join(', ')} failed their oracle → correct (≤2 rounds), do not re-brief from scratch`;

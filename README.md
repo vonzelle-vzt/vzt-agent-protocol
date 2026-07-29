@@ -379,6 +379,87 @@ a vibe.
 
 ## Release notes
 
+### 1.11.0 — the VS Code mux grows a lifecycle, and the ledger learns to close
+
+An audit of the protocol against its own live data. Every item below was
+reproduced before it was fixed.
+
+**Ship runs now terminate.** `ship-watch` wrote only 3 of the 7 ledger line
+kinds its own reducer understands — no `integration`, no `run_complete`, no
+`aborted`. `reduceLedger` therefore reported every completed run as `active`
+**forever**, and the router hook re-injected a stale `[VZT-SHIP] ACTIVE RUN`
+block into every prompt in that repo with no TTL to clear it. All terminal
+lines are now written, including on the barrier-abort path.
+
+**A failing unit no longer reports as a pass.** Two producers wrote
+`unit_result` in different dialects: the supervised path `PASS`/`FAIL`, the
+workflow path `PASS`/`BLOCKED`/`ORACLE_FAIL`/`SCOPE_BREACH`. `FAIL` matched
+nothing, so a run containing a failed unit told the rehydrating chair "all
+reported units passed" — a false green at exactly the moment, post-compaction,
+when the chair has no other source of truth. Both dialects now go through one
+exported `FAILED_STATUSES` set.
+
+**The integration gate stopped grading an empty tree.** It ran against the
+primary checkout, which by construction contains none of the unit work — every
+unit lives in its own unmerged worktree. It now builds a temp worktree from
+HEAD and applies each passed unit's full divergence (committed, uncommitted
+*and* untracked — agents frequently do not commit) via a throwaway index, then
+runs the check there. Because ship-check enforces disjoint file scopes, a
+failed apply means a unit wrote outside its declared scope, and is reported as
+`MERGE_CONFLICT`.
+
+**The VS Code backend got herdr's state model.** One hook script now serves
+three events — `SessionStart→started`, `PermissionRequest→blocked`,
+`Stop→idle` — and `waitIdle` is two-phase: wait for life, then wait for idle.
+Without a start signal a unit whose terminal never ran its command was
+indistinguishable from one still working, so it burned the entire unit budget
+before being graded against an empty worktree. Also fixed: `sendText()` into a
+still-initialising shell is silently discarded (now gated on shell integration,
+with a delay fallback), a `.status` rewrite was skipped on re-runs, and a throw
+during launch silently lost the unit.
+
+**A Ship Run tree** (activity bar → *VZT Ship*): per-unit live status, focus
+its terminal, open its worktree diff *while it is still being written*, re-run
+its recorded oracle. Extension `0.2.0`.
+
+**Routing fixes, each found in the live log** (2,037 real decisions, 56% of
+them low-confidence):
+
+- The inspection family — `audit`, `analyze`, `investigate`, `inspect` —
+  scored **nothing**. The audit prompt that found this could not be routed by
+  the classifier it was auditing. Now `opus:review`.
+- `security audit|review` was an unconditional Fable escape hatch, bypassing
+  the `opus@max` rung entirely (the demotion is gated to `kind === 'plan'`).
+  Routine security review is Opus; a security *hole* stays Fable.
+- `entire repo` routed `opus:horizon` while `whole repo` routed
+  `sonnet:build` — the scope nouns had diverged between the two alternations.
+- Length and brevity nudges overrode evidence instead of amplifying it: a long
+  trivial prompt bought Opus on word count alone, and a sub-15-word prompt with
+  a tied `fable:debug` signal lost to recon phrasing.
+- **The chair follows a mid-session `/model` switch.** `chair.json` was stamped
+  only at SessionStart, so a switch never propagated — and because `directive()`
+  branches on the chair's rank, a stale seat actively *suppressed*
+  down-delegation on the most expensive tier.
+- `vzt-agent stats` de-duplicates double-routed prompts. A repo registering the
+  classifier on top of the global one logged each prompt twice with divergent
+  verdicts; the phantom rows pushed the Fable figure to 10.01% against a ≤10%
+  target. Deduped: 9.9%. It also prints one decimal, so the gate stops
+  contradicting itself at the boundary.
+
+**Install/guard fixes.** `install()` now copies `docs/` — the skills referenced
+`docs/VSCODE.md` by path and nothing ever installed it. Re-running `install`
+refreshes a managed hook whose *command* changed rather than leaving the stale
+one wired. The retired-model guard globs the whole doctrine surface instead of a
+hand-listed dozen (it was missing the two newest skills), and the
+doctrine-reference guard now covers `docs/` and `orca/`.
+
+**Known gap, stated rather than papered over:** orca units still cannot skip
+permission prompts — `orca worktree create` exposes no way to pass flags to the
+agent it launches. Orca also remains the implicit default, and the CLI now says
+so out loud when it falls through to it.
+
+99 tests.
+
 ### 1.10.0 — Opus 5: the `opus@max` rung
 
 Opus 5 launched, and the fleet had **already moved** — `model: opus` is an alias for

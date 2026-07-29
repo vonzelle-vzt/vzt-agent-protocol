@@ -114,10 +114,100 @@ How it works: the `vscode` backend creates one git worktree per unit, then
 writes a launch record to a filesystem queue at `~/.vzt/vscode-mux/queue/`.
 The extension watches that queue and opens one integrated terminal per unit,
 running `claude --dangerously-skip-permissions "$(cat <promptfile>)"` in the
-unit's worktree with `VZT_VSCODE_MUX=1` set. When the unit's turn ends, the
-`Stop`-event hook (`hooks/vzt-vscode-agent-state.sh`) writes an idle sentinel
-to `~/.vzt/vscode-mux/state/`, which `ship-watch` polls before running the
-unit's oracle. PASS/FAIL is written back to the same `state/` dir.
+unit's worktree with `VZT_VSCODE_MUX=1` and `VZT_VSCODE_UNIT=<slug>-<id>` set.
+
+### The agent lifecycle (three sentinels, not one)
+
+One hook script (`hooks/vzt-vscode-agent-state.sh`) is wired to three events,
+each passing an action. All three no-op instantly outside a ship unit, so they
+cost nothing in your normal sessions:
+
+| event | action | writes | means |
+|---|---|---|---|
+| `SessionStart` | `started` | `state/<unit>.started` | claude actually booted |
+| `PermissionRequest` | `blocked` | `.blocked` (+ `.started`) | parked on a prompt, waiting for a human |
+| `Stop` | `idle` | `.idle` (clears `.blocked`) | the turn finished |
+
+`ship-watch` then waits in **two phases**, mirroring the herdr backend: first
+for `started` *or* `blocked` within `VZT_START_GRACE_MS`, then for `idle`
+within the unit budget.
+
+**Why two phases.** Polling `.idle` alone cannot tell "the agent is still
+working" from "the agent never launched at all". On 2026-07-28 two identical
+units were dispatched together; one terminal's command was swallowed by a
+still-initialising shell, so claude never ran, no `.idle` ever appeared, and
+the run burned the **entire** unit timeout before grading that unit FAIL
+against an empty worktree. The `started` sentinel is what makes those two
+cases distinguishable — without it the failure is silent and slow. A unit that
+never signals now bails at the start-grace with a diagnostic naming the cause.
+
+### 🔴 Why the command is sent after a plain delay
+
+`sendText()` immediately after `createTerminal()` is silently discarded by a
+shell that is still initialising — that is the original swallow, and it cost a
+unit its entire timeout.
+
+The obvious fix is VS Code's shell-integration signal
+(`onDidChangeTerminalShellIntegration`), which reports when the shell is ready.
+**Do not use it here.** A unit runs `claude` as an interactive **TUI**, and
+shell integration activates before the PTY has settled — the TUI then fails to
+initialise and the unit does nothing at all: no session, no sentinel, silence
+until the start-grace expires. It is a *worse* failure than the swallow,
+because every unit fails rather than an occasional one.
+
+Falsified directly: the same command queued twice through the extension, once
+with stdout on the TTY and once redirected to a file. The redirected run
+(claude in headless mode) completed; the TTY run never did. A bare `sendText`
+sent immediately ran the TUI fine, which rules the TUI itself out.
+
+So: a plain `VZT_VSCODE_SEND_DELAY_MS` delay (default 1200ms). Raise it on a
+slow machine; do not replace it with a readiness event.
+
+PASS/FAIL is written back to the same `state/` dir as `<unit>.status`.
+
+### The Ship Run tree
+
+The extension contributes a **VZT Ship** activity-bar view listing every unit
+of the current run with live status, backed by a persistent record the CLI
+writes to `~/.vzt/vscode-mux/units/` (the queue record is deleted on launch to
+guarantee exactly-once, so it cannot also be the tree's source of truth).
+
+Per unit: **Focus Terminal**, **Open Worktree Diff** — which adds the unit's
+worktree as a workspace folder so you can read its diff *while it is still
+being written* — and **Re-run Oracle**, which runs the unit's recorded
+`machineCheck` verbatim, never a retyped approximation.
+
+Reading a running agent's diff in the editor is the thing an external
+multiplexer structurally cannot offer, because its panes live outside the
+editor process.
+
+### Environment
+
+| variable | default | what it does |
+|---|---|---|
+| `VZT_MUX` | `orca` | default backend when `--mux` is omitted |
+| `VZT_VSCODE_DIR` | `~/.vzt/vscode-mux` | root of the filesystem contract |
+| `VZT_START_GRACE_MS` | `90000` | how long to wait for a unit to show life before giving up on it |
+| `VZT_VSCODE_SEND_DELAY_MS` | `1200` | fallback delay before sending, when shell integration is unavailable |
+| `VZT_VSCODE_DRAIN_GRACE_MS` | `8000` | how long dispatch waits for the extension to consume a queue record |
+| `VZT_VSCODE_SKIP_PERMISSIONS` | `1` | set `0` to keep permission prompts in unit terminals |
+
+### Backend parity
+
+| | orca | herdr | vscode |
+|---|---|---|---|
+| two-phase wait (start → idle) | ❌ | ✅ | ✅ |
+| `blocked` visible | ❌ | ✅ | ✅ |
+| skip-permissions for unsupervised panes | ❌ ¹ | ✅ | ✅ |
+| in-editor worktree diff / tree | ❌ | ❌ | ✅ |
+
+¹ `orca worktree create` exposes only `--agent <id>` and `--prompt <text>`,
+with no way to forward flags to the launched agent. The documented escape
+hatch is `orca terminal create --command "<cmd>"`; moving dispatch onto it is
+the real fix and is not yet done. Until then an orca unit that hits a
+permission prompt will hang. Orca is also still the default when neither
+`--mux` nor `VZT_MUX` is set — the CLI now says so out loud when it falls
+through to it.
 
 ### Setup
 
@@ -133,14 +223,18 @@ Then load it either via the **Extension Development Host** (open the
 Palette. Keep a VS Code window open while a ship run is in flight — the
 extension watches `~/.vzt/vscode-mux/queue/` globally, not per-workspace.
 
-The `Stop` idle-sentinel hook is wired automatically by `vzt-agent install`
-(verify with `vzt-agent doctor` — look for `Stop hook wired in settings.json`).
+All three lifecycle hooks are wired automatically by `vzt-agent install`.
+Verify with `vzt-agent doctor` — you should see the sentinel wired on
+**`SessionStart`, `PermissionRequest` and `Stop`**. Seeing only `Stop` means an
+install that predates the lifecycle sentinels: re-run `vzt-agent install`,
+which now refreshes a managed hook whose command changed instead of leaving the
+stale one in place.
 
 ### Known constraint (by design, not a bug)
 
 VS Code doesn't let extensions rename a terminal tab after it's created, so
-per-unit PASS/FAIL does **not** show up on the tab itself. Status is surfaced
-instead in a dedicated **"VZT Ship" output channel** plus a **status-bar
+per-unit PASS/FAIL does **not** show up on the tab itself. Status lives in the
+**Ship Run tree**, the **"VZT Ship" output channel**, and a **status-bar
 tally** (`VZT ship: 2 ✓  1 ✗`) — check those, not the tab labels.
 
 ### Graceful degrade

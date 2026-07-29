@@ -77,8 +77,12 @@ including over SSH/mobile:
 vzt-agent ship-watch .vzt/ship/<slug>/SPEC.md      # dispatch → idle-wait → independent oracle → integration gate
 ```
 
-`export VZT_MUX=herdr` makes Herdr the mux, so **omit `--mux`** (default is Herdr;
-pass `--mux orca` for Orca, or `--mux vscode` for native VS Code integrated terminals).
+The built-in default is **orca** — `--mux` beats `VZT_MUX`, which beats orca. Export
+`VZT_MUX=herdr` (or `vscode`) to change it, or pass `--mux herdr|vscode|orca` per run.
+`--mux vscode` opens each unit as a native VS Code integrated terminal and adds a Ship
+Run tree — per-unit status, the unit's worktree diff readable mid-run, and one-click
+oracle re-runs. The CLI warns when it falls through to orca implicitly, because orca is
+the least-hardened backend (no start-grace, no skip-permissions).
 This STOPS at the green integration gate — **never auto-merge**; Phase 4 LAND stays
 human. Small/inline work never comes here: a single-file edit, a quick fix, or a one-off
 script is normal in-session work, not a ship run. See `orca/README.md` for the mux

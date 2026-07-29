@@ -68,6 +68,26 @@ test('every agentType named in the workflow is an agent install() actually ships
   }
 });
 
+// The test above checks workflow -> AGENT_TYPES. This checks the OTHER
+// direction, which is the one that actually drifted: agents/vzt-architect.md
+// shipped, the router demoted routine planning onto it, and AGENT_TYPES never
+// learned about it — so ship-check rejected every spec naming the agent the
+// doctrine told you to plan with. An agent you ship must be an agent a spec
+// may name.
+test('every agent install() ships is accepted by validateSpec (AGENT_TYPES has no drift)', () => {
+  const shipped = fs
+    .readdirSync(path.join(REPO_ROOT, 'agents'))
+    .filter((f) => f.endsWith('.md'))
+    .map((f) => f.replace(/\.md$/, ''));
+  assert.ok(shipped.length > 0, 'expected install() to ship at least one agent');
+  for (const a of shipped) {
+    assert.ok(AGENT_TYPES.includes(a), `agents/${a}.md ships but AGENT_TYPES omits it — ship-check would reject a spec naming it`);
+  }
+  for (const a of AGENT_TYPES) {
+    assert.ok(shipped.includes(a), `AGENT_TYPES lists "${a}" but agents/${a}.md is not shipped`);
+  }
+});
+
 test('the workflow verifies with a DIFFERENT agent than the one that built (no self-grading)', () => {
   const src = fs.readFileSync(WORKFLOW, 'utf8');
   assert.ok(/verifyPrompt/.test(src), 'workflow must have a separate verify step');
