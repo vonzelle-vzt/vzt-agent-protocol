@@ -16,8 +16,8 @@ can do it well. This skill is the canonical decision procedure; the
 |------|-------|------|--------------|------|--------------|-------|
 | 4 | **Fable 5** | Planning with **no prior art**: novel/greenfield architecture, from-scratch design, one-way-door sharding/replication/consensus/multi-tenancy. Impossible bugs, root-cause, security analysis | `vzt-planner`, `vzt-oracle` | 10× | 10 | 10 |
 | 3+ | **Opus 5** @ `max` | **Routine planning** — architecture, tech specs, roadmaps, migration plans, PRD breakdown, approach selection (the `opus@max` rung) | `vzt-architect` | 5× | 9 | 9 |
-| 3 | **Opus 5** | Large refactors, migrations, dense algorithms, performance/concurrency surgery, load-bearing review | `vzt-heavy-builder`, `vzt-reviewer` | 5× | 9 | 9 |
-| 2 | **Sonnet 5** | Standard implementation, features, bug fixes, tests, endpoints, components — the default | `vzt-builder` | 3× | 8 | 8 |
+| 3 | **Opus 5** | Large refactors, migrations, dense algorithms, performance/concurrency surgery, load-bearing review, **authoring visual taste** | `vzt-heavy-builder`, `vzt-reviewer`, `vzt-art-director` | 5× | 9 | 9 |
+| 2 | **Sonnet 5** | Standard implementation, features, bug fixes, tests, endpoints, components — the default. **Applying visual taste** | `vzt-builder`, `vzt-stylist` | 3× | 8 | 8 |
 | 1 | **Haiku 4.5** | Search/recon, summaries, renames, typos, formatting, version bumps, commit messages, file moves | `vzt-scout`, `vzt-mechanic` | 1× | 5 | 4 |
 
 ## Decision procedure
@@ -37,7 +37,15 @@ can do it well. This skill is the canonical decision procedure; the
    `HORIZON` — spec-first via `/vzt-ship`, never routine inline execution.
    Scope language *without* a build verb is still a planning question — it
    goes to `opus@max`, or Tier 4 if genuinely novel.
-5. **Everything else** → Tier 2. When unsure between two tiers, take the lower
+5. **Is it visual** (restyle, retheme, spacing, typography, palette, brand,
+   dark mode, "make it look right")? → the `ui` lane, where **a file picks the
+   tier, not the prompt**. A real `DESIGN.md` at the repo root → Tier 2
+   (`vzt-stylist` applies it). No `DESIGN.md` and the ask carries taste
+   language → Tier 3 (`vzt-art-director` writes it once, then everything after
+   routes down). Surface-only tweaks with no cache stay Tier 2.
+   → **Not** technical design: `design the <system|schema|api|architecture>` is
+   step 2, not this. See **Visual work** below.
+6. **Everything else** → Tier 2. When unsure between two tiers, take the lower
    one — the escalation ladder exists precisely so under-routing is cheap.
 
 ## Escalate the process, not the model
@@ -61,6 +69,30 @@ the run ledger live on disk specifically so a compaction mid-run loses
 nothing: `vzt-agent ship-status` reconstructs state, and the classifier hook
 re-injects a `[VZT-SHIP]` block on every prompt because compaction does not
 re-fire `SessionStart`.
+
+## Visual work — the taste cache
+
+A **`DESIGN.md` at the repo root** moves visual taste off the model tier and onto
+disk, exactly as a SPEC on disk does for long-horizon work. Once the taste is
+written down, applying it is execution rather than judgement — so it routes down.
+
+- **The gate is two-factor**, like HORIZON, except the second factor is a **file**
+  rather than a second regex. The classifier `statSync`s only after the `ui` lane
+  has already won, so routine turns pay nothing.
+- **The lane splits by who has to decide.** TASTE language ("look and feel",
+  "make it feel premium", "design system", "off-brand") → Opus; someone must
+  invent an answer. SURFACE language ("spacing", "dark mode", "the hero",
+  "contrast ratio") → Sonnet; it says what to change, not what it should become.
+  Surface-on-Sonnet is the safety property — a visual false positive can never
+  buy a costlier tier.
+- **Cache hit** → `vzt-stylist` (Sonnet). Every value traces to a token; a
+  missing token is a **gap it reports**, never a value it invents.
+- **Cache miss + taste** → `vzt-art-director` (Opus). Write `DESIGN.md` once from
+  the repo's real token layer, apply it to the one screen asked for, and stop.
+- **A stub is not a cache** — under 400 bytes counts as absent. A placeholder
+  would down-route every visual request forever while holding no taste to apply.
+- **No rung above it.** Visual work never escalates to Fable. Taste is not
+  frontier reasoning; every product ever shipped is prior art.
 
 ## Effort routing
 

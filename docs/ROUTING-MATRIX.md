@@ -11,8 +11,8 @@ burns the quota this protocol exists to protect.
 |------|-------|-------|------|--------------|------------|------|--------------|-------|
 | 4 | Claude Fable 5 | `fable` | Planning with **no prior art**: novel/greenfield architecture, from-scratch system design, one-way-door sharding/replication/consensus/multi-tenancy calls. Impossible bugs, root-cause analysis, security analysis | `vzt-planner`, `vzt-oracle` | `/vzt-plan`, `/vzt-fix` | 10× | 10 | 10 |
 | 3+ | Claude Opus 5 @ `max` | `opus@max` | **Routine planning** — architecture, tech specs, roadmaps, migration plans, PRD breakdown, approach selection | `vzt-architect` | `/vzt-design` | 5× | 9 | 9 |
-| 3 | Claude Opus 5 | `opus` | Large refactors, migrations, dense algorithms, performance/concurrency surgery, load-bearing review | `vzt-heavy-builder`, `vzt-reviewer` | — | 5× | 9 | 9 |
-| 2 | Claude Sonnet 5 | `sonnet` | Standard implementation: features, bug fixes, tests, endpoints, components, integration — **the default tier** | `vzt-builder` | `/vzt-build` | 3× | 8 | 8 |
+| 3 | Claude Opus 5 | `opus` | Large refactors, migrations, dense algorithms, performance/concurrency surgery, load-bearing review. **Authoring visual taste** when no `DESIGN.md` exists | `vzt-heavy-builder`, `vzt-reviewer`, `vzt-art-director` | `/vzt-ui` | 5× | 9 | 9 |
+| 2 | Claude Sonnet 5 | `sonnet` | Standard implementation: features, bug fixes, tests, endpoints, components, integration — **the default tier**. **Applying visual taste** from an existing `DESIGN.md` | `vzt-builder`, `vzt-stylist` | `/vzt-build` | 3× | 8 | 8 |
 | 1 | Claude Haiku 4.5 | `haiku` | Search/recon, summaries, renames, typo fixes, formatting, lint, version bumps, commit messages, file moves | `vzt-scout`, `vzt-mechanic` | `/vzt-quick` | 1× | 5 | 4 |
 
 ## Decision procedure
@@ -26,6 +26,12 @@ burns the quota this protocol exists to protect.
      (sharding, replication, consensus, multi-tenancy). Or if it has beaten a
      lower rung twice.
 3. Implementation with tight coupling, algorithms, or blast radius? → **Tier 3**.
+3b. **Visual work** — restyle, retheme, spacing, typography, palette, brand,
+   "make it look right"? → **the `ui` lane**, and the tier is decided by a FILE,
+   not by the prompt: a real `DESIGN.md` at the repo root → **Tier 2**
+   (`vzt-stylist`, apply it); no `DESIGN.md` and the ask carries taste language →
+   **Tier 3** (`vzt-art-director`, write it once). Surface-only tweaks with no
+   cache stay Tier 2. See **VISUAL** below.
 4. Scope language (entire codebase / from scratch / greenfield / end-to-end /
    multi-tenant / ...) **plus a build verb** (build/implement/ship/create/
    scaffold/rewrite/...)? → **Tier 3, kind `HORIZON`** — spec-first via
@@ -53,6 +59,43 @@ MODEL.**
 - **Explicitly not HORIZON**: scope language with no build verb. That stays a
   planning question — the work being *asked for* is a plan, not a shipped
   artifact. It routes to `opus@max`, or to Fable if it is genuinely novel.
+
+## VISUAL — the taste cache
+
+Visual work is the one kind the classifier used to be blind to: *"restyle the
+dashboard"*, *"the spacing is off"*, *"the palette is wrong"* matched nothing and
+fell into the zero-signal default, done from whatever the model imagined the
+product looked like.
+
+A **`DESIGN.md` at the repo root** fixes it by moving taste **off the model tier
+and onto disk** — the same move `/vzt-ship` makes for long-horizon plans. Once
+the taste is written down, applying it is execution, not judgement, so it routes
+down a tier.
+
+- **Two-factor gate**, structurally identical to HORIZON — except the second
+  factor is a **file**, not a second regex. The classifier does a cheap
+  `statSync` *only* after the `ui` lane has already won, so routine turns pay
+  nothing.
+- **The lane splits by who has to decide.** TASTE language (*"look and feel"*,
+  *"make it feel premium"*, *"design system"*, *"off-brand"*) scores on Opus —
+  somebody has to invent an answer. SURFACE language (*"spacing"*, *"dark mode"*,
+  *"the hero"*, *"contrast ratio"*) scores on Sonnet — it says what to change,
+  not what it should become. Surface-on-Sonnet is the safety property: a visual
+  false positive can never buy a more expensive tier.
+- **Cache hit → Tier 2.** `vzt-stylist` applies the file. Every value must trace
+  to a token; a missing token is a **gap it reports**, never a value it invents.
+- **Cache miss + taste → Tier 3.** `vzt-art-director` writes `DESIGN.md` **once**,
+  derived from the repo's real token layer, then applies it to the one screen
+  asked for. Everything after that routes down automatically.
+- **A stub is not a cache.** Under 400 bytes counts as absent — a placeholder
+  would down-route every visual request forever while containing no taste to
+  apply.
+- **Explicitly not VISUAL**: technical design. `design the <system|schema|api|
+  architecture>` stays `plan` and routes to `opus@max` or Fable. The word
+  "design" is overloaded; this lane is entered by taste nouns and restyle verbs,
+  never by "design" standing alone.
+- **No rung above it.** Visual work never escalates to Fable — taste is not
+  frontier reasoning, and every product ever shipped is prior art.
 
 ## Hard rules
 

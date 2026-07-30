@@ -20,7 +20,7 @@ test('install → doctor → uninstall round-trip in a temp target', () => {
   const target = fs.mkdtempSync(path.join(os.tmpdir(), 'vzt-agent-test-'));
   try {
     const out = run(['install', '--target', target]);
-    assert.match(out, /agents:\s+8 installed/);
+    assert.match(out, /agents:\s+10 installed/);
     assert.match(out, /hooks:\s+3 installed/);
 
     const dotClaude = path.join(target, '.claude');

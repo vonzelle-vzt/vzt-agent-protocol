@@ -215,10 +215,10 @@ function install(args) {
   // install (~/.claude) uses the absolute path.
   const settingsPath = wireSettings(dotClaude, { portable: !args.global });
 
-  console.log(`  agents:   ${agents.length} installed (fable×2, opus×3, sonnet×1, haiku×2)`);
-  console.log(`  skills:   ${skills.length} files installed (/vzt-route /vzt-design /vzt-plan /vzt-fix /vzt-build /vzt-quick /vzt-fable-mode /vzt-diagnose /vzt-ship)`);
+  console.log(`  agents:   ${agents.length} installed (fable×2, opus×4, sonnet×2, haiku×2)`);
+  console.log(`  skills:   ${skills.length} files installed (/vzt-route /vzt-design /vzt-plan /vzt-fix /vzt-build /vzt-quick /vzt-fable-mode /vzt-diagnose /vzt-ship /vzt-ui)`);
   console.log(`  hooks:    ${hooks.length} installed (SessionStart chair-profile + UserPromptSubmit classifier + vscode-mux lifecycle sentinels on SessionStart/PermissionRequest/Stop)`);
-  console.log(`  templates: ${templates.length} installed (worker-brief delegation contract, ship spec)`);
+  console.log(`  templates: ${templates.length} installed (worker-brief delegation contract, ship spec, DESIGN.md taste cache)`);
   console.log(`  workflows: ${workflows.length} installed (vzt-ship long-horizon orchestration)`);
   console.log(`  docs:     ${docs.length} installed (VSCODE, ROUTING-MATRIX, CHAIR-PROFILES — the skills reference these by path)`);
   console.log(`  orca:     ${orca.length} helper(s) → ${ORCA_VZT_DIR} (worktree-bootstrap for ship-dispatch/ship-watch)`);
@@ -412,9 +412,15 @@ function stats() {
     if (d.ts && seen.has(key)) deduped++;
     seen.set(key, d);
   }
+  let uiTotal = 0;
+  let uiHits = 0;
   for (const d of seen.values()) {
     byTier[d.tier] = (byTier[d.tier] || 0) + 1;
     routed++;
+    if (d.kind === 'ui') {
+      uiTotal++;
+      if (d.designDoc) uiHits++;
+    }
   }
 
   const total = routed;
@@ -437,6 +443,23 @@ function stats() {
         : `❌ over (${fablePct.toFixed(1)}%) — tighten routing: routine planning belongs on opus@max (/vzt-design), execution on /vzt-build`
     }`
   );
+
+  // The ui lane ships with the test that can delete it, same as /vzt-ship below.
+  // Its entire economic claim is that DESIGN.md moves taste onto disk so visual
+  // work routes DOWN to Sonnet. If the cache is never written, the lane is buying
+  // an Opus turn per visual prompt and nothing else — strictly worse than the
+  // zero-signal default it replaced.
+  if (uiTotal) {
+    const hitPct = (uiHits / uiTotal) * 100;
+    console.log(`\nvisual (ui): ${uiTotal} decisions, ${uiHits} taste-cache hits (${hitPct.toFixed(0)}%)`);
+    if (uiTotal >= 20) {
+      console.log(
+        hitPct < 20
+          ? '  ❌ falsified: almost nothing is reading a DESIGN.md — the lane is buying an Opus turn per prompt. Run /vzt-ui extract on the repos you actually work in, or delete the lane.'
+          : '  ✅ holding: taste is on disk and visual work is routing DOWN as designed.'
+      );
+    }
+  }
 
   // /vzt-ship ships with the test that can delete it. If the spec is not buying
   // coherence, it is buying a document, and a document is a tax.

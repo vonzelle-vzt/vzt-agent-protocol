@@ -527,3 +527,98 @@ test('vzt-route skill references the worker-brief template', () => {
   const skill = fs.readFileSync(path.join(REPO_ROOT, 'skills', 'vzt-route', 'SKILL.md'), 'utf8');
   assert.ok(skill.includes('worker-brief'), 'skills/vzt-route/SKILL.md missing reference to "worker-brief"');
 });
+
+// ——— The ui lane: the taste cache ————————————————————————————————————————
+
+test('the ui lane never cannibalizes the technical design lane', () => {
+  // "design" is the most overloaded word in this protocol: /vzt-design and
+  // vzt-architect mean TECHNICAL design. If the visual regexes ever start
+  // eating these, routine architecture silently becomes a styling task.
+  for (const p of [
+    'Design the system architecture for the internal admin tool',
+    'Design the architecture for the whole system from scratch',
+    'analyze the failure modes of this design',
+    'Design a novel architecture for the multi-tenant billing platform',
+  ]) {
+    assert.notEqual(classify(p).kind, 'ui', `"${p}" was eaten by the visual lane`);
+  }
+});
+
+test('no legacy case becomes a ui task', () => {
+  for (const [p] of cases) assert.notEqual(classify(p).kind, 'ui', `"${p}" wrongly became visual`);
+});
+
+test('taste with NO cache routes UP to opus and never returns max', () => {
+  for (const p of [
+    'make the dashboard look more premium and less cramped',
+    'design the look and feel of the marketing site',
+    'establish a design system with design tokens',
+  ]) {
+    const r = classify(p, undefined);
+    assert.equal(r.tier, 'opus', `"${p}" should author taste on Opus`);
+    assert.equal(r.kind, 'ui');
+    assert.equal(r.designDoc, null);
+    assert.notEqual(r.effort, 'max', 'max is the opus@max PLAN rung, not a visual setting');
+  }
+});
+
+test('a real DESIGN.md routes visual work DOWN to sonnet (the taste cache)', () => {
+  const repo = fs.mkdtempSync(path.join(os.tmpdir(), 'vzt-design-'));
+  try {
+    fs.writeFileSync(path.join(repo, 'DESIGN.md'), 'x'.repeat(600));
+    const r = classify('make the dashboard look more premium and less cramped', repo);
+    assert.equal(r.tier, 'sonnet', 'taste on disk must not buy a premium tier');
+    assert.equal(r.kind, 'ui');
+    assert.equal(r.designDoc, 'DESIGN.md');
+    assert.ok(directive(r, 'opus').includes('DESIGN.md'), 'the directive must name the file to read');
+    assert.ok(directive(r, 'opus').includes(TIERS.sonnet.agents.ui), 'cache-hit directive must name the applier');
+  } finally {
+    fs.rmSync(repo, { recursive: true, force: true });
+  }
+});
+
+test('a STUB DESIGN.md is not a taste cache (size floor)', () => {
+  // A placeholder would down-route every visual request in the repo forever
+  // while containing no taste to apply — a cache that lies.
+  const repo = fs.mkdtempSync(path.join(os.tmpdir(), 'vzt-stub-'));
+  try {
+    fs.writeFileSync(path.join(repo, 'DESIGN.md'), '# Design\n\nTODO\n');
+    const r = classify('make the dashboard look more premium', repo);
+    assert.equal(r.tier, 'opus', 'an empty placeholder must not down-route visual work');
+    assert.equal(r.designDoc, null);
+  } finally {
+    fs.rmSync(repo, { recursive: true, force: true });
+  }
+});
+
+test('surface work without a cache stays on sonnet — visual FPs never buy a tier', () => {
+  for (const p of [
+    'add dark mode to the settings page',
+    'fix the contrast ratio on the buttons',
+    'make the pricing table responsive on mobile',
+  ]) {
+    assert.equal(classify(p, undefined).tier, 'sonnet', `"${p}" over-routed`);
+  }
+});
+
+test('engineering prose that merely SOUNDS visual does not enter the ui lane', () => {
+  // Each of these caught a naive form of the regexes during design.
+  for (const p of [
+    'add a brand new endpoint for webhooks',
+    'the premium plan users cannot see the export button',
+    'contrast the two caching approaches',
+    'grid search the hyperparameters',
+    'handle the transition from Postgres to MySQL',
+  ]) {
+    assert.notEqual(classify(p, undefined).kind, 'ui', `"${p}" wrongly entered the visual lane`);
+  }
+});
+
+test('the ui directives name the right agent and explain why not the other tier', () => {
+  const miss = directive(classify('design the look and feel of the marketing site'), 'sonnet');
+  assert.ok(miss.includes('/vzt-ui'), 'cache-miss directive must offer the skill');
+  assert.ok(miss.includes('DESIGN.md'), 'cache-miss directive must name the artifact to write');
+  assert.ok(miss.includes(TIERS.opus.agents.ui), 'cache-miss directive must name the author agent');
+  assert.ok(miss.includes('why NOT Sonnet') && miss.includes('why NOT Fable'), 'must justify the tier both ways');
+  assert.ok(miss.includes('fable-mode gates'), 'an Opus surface must carry the gates');
+});

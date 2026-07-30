@@ -13,6 +13,11 @@ reasoning at half Fable's cost, so `/vzt-plan` (Fable) is reserved for planning
 with no prior art — a novel or greenfield architecture, or a one-way-door
 distributed-systems call. Everything else lands here.
 
+This is **technical** design — architecture, schemas, APIs, migration plans.
+*Visual* design (look and feel, tokens, palette, brand) is a different lane:
+`/vzt-ui`. The word is overloaded; if the ask is about how something looks rather
+than how it is built, use that instead.
+
 Produce an **execution-ready plan** for the requested task:
 
 1. Read the actual code/config the plan touches before deciding anything. A plan

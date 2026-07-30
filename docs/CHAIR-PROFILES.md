@@ -46,6 +46,12 @@ protocol push routine work *down* so your all-models bucket lasts the week.
   **here**, at `max` effort — the `opus@max` rung, inline or via `vzt-architect`
   / `/vzt-design`. Opus 5 is a step change on deep reasoning at half Fable's
   cost, so this band no longer earns the frontier tier.
+- **Visual work** → a lane, not a build task. With a `DESIGN.md` on disk it goes
+  **down** to `vzt-stylist` (Sonnet) — the taste is in the file, so applying it
+  is execution. With **no** `DESIGN.md` it stays **here**: write the file once
+  (`vzt-art-director` / `/vzt-ui`) from the repo's real token layer, rather than
+  hand-styling one screen from imagination. Same doctrine as `/vzt-ship`, one
+  axis over — put the judgement on disk and a cheaper tier can carry it.
 - **Genuinely hard reasoning** (planning with *no prior art* — novel or
   greenfield architecture, one-way-door sharding/consensus/multi-tenancy calls —
   and impossible bugs) → escalated **up** to Fable via `/vzt-plan`, `/vzt-fix`,
@@ -101,6 +107,11 @@ the Sonnet-only bucket; the protocol escalates *up* only when a task earns it.
   `vzt-reviewer` (Opus 5).
 - **Planning / architecture** → up to `vzt-architect` (Opus 5 @ `max`) or
   `/vzt-design`. Stop at this rung; it handles almost all planning.
+- **Visual work** → this chair is the right tier **when `DESIGN.md` exists**:
+  read it first, and make every value trace to a token (a missing token is a gap
+  you report, never a value you invent). With **no** `DESIGN.md`, escalate up
+  exactly once to `vzt-art-director` (Opus) or `/vzt-ui` to write it — after
+  which visual work routes back here permanently.
 - **No-prior-art architecture / impossible bugs** → up to `vzt-planner` /
   `vzt-oracle` (Fable), or the `/vzt-plan` / `/vzt-fix` turn skills when the
   work needs full conversation context.

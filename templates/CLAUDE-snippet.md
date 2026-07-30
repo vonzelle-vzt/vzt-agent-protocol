@@ -25,6 +25,13 @@ Route every piece of work to the cheapest tier that can do it well:
   impossible bugs** → `vzt-planner`/`vzt-oracle` (Fable), or `/vzt-plan` /
   `/vzt-fix` when full conversation context matters. This is the last rung —
   routine architecture does not belong here.
+- **Visual work** (restyle, retheme, spacing, typography, palette, brand, dark
+  mode, "make it look right") → read `DESIGN.md` at the repo root FIRST, then
+  delegate to `vzt-stylist` (Sonnet) and make every value trace to a token. If
+  there is no `DESIGN.md`, the first move is to WRITE one — `/vzt-ui` /
+  `vzt-art-director` (Opus), once — not to hand-style a single screen. Taste on
+  disk is what lets visual work run on a cheap tier. This is *visual* design;
+  technical design is the `vzt-architect` bullet above.
 - **Long-horizon work** (scope language — entire codebase, from scratch,
   greenfield, end-to-end, multi-tenant — combined with a build verb) →
   `/vzt-ship` (Opus, spec-first). It writes a SPEC to

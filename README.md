@@ -7,7 +7,7 @@
 Part of the [VZT Tech Consulting Protocol](https://github.com/vonzelle-vzt/VZT-Tech-Consulting-Protocol) ecosystem.
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
-[![Version](https://img.shields.io/badge/Version-1.9.1-purple.svg)](#)
+[![Version](https://img.shields.io/badge/Version-1.14.0-purple.svg)](#)
 [![Tiers](https://img.shields.io/badge/Tiers-Fable%205%20%7C%20Opus%205%20%7C%20Sonnet%205%20%7C%20Haiku%204.5-green.svg)](docs/ROUTING-MATRIX.md)
 
 ---
@@ -100,7 +100,7 @@ doctrine to match**:
 - **Haiku chair** → dispatcher mode: delegate almost everything
 
 ### 3. Model-pinned agent fleet (`.claude/agents/`)
-Seven agents with `model:` + `effort:` frontmatter — Claude Code runs each on
+Ten agents with `model:` + `effort:` frontmatter — Claude Code runs each on
 its pinned model regardless of your session model:
 
 | Agent | Model | Effort | Role |
@@ -110,7 +110,9 @@ its pinned model regardless of your session model:
 | `vzt-architect` | opus | max | **The `opus@max` rung** — routine planning, with a **step-routing table** (each step tagged with its cheapest sufficient tier) |
 | `vzt-heavy-builder` | opus | high | Tightly-coupled multi-file surgery, algorithms, migrations |
 | `vzt-reviewer` | opus | high | Reviews **only the load-bearing seam** the plan flags |
+| `vzt-art-director` | opus | high | **Authors `DESIGN.md`** — visual taste, when none is written down yet |
 | `vzt-builder` | sonnet | medium | The workhorse — all routine implementation |
+| `vzt-stylist` | sonnet | medium | **Applies `DESIGN.md`** — restyles, spacing, palette, dark mode |
 | `vzt-scout` | haiku | low | Recon: find/count/summarize, read-only |
 | `vzt-mechanic` | haiku | low | Mechanical edits: renames, formatting, bumps |
 
@@ -125,6 +127,9 @@ start fresh), these switch the *current turn's* model in place:
 - `/vzt-fix <bug>` — root-cause this turn on **Fable 5**
 - `/vzt-build <step>` — execute this turn on **Sonnet 5**
 - `/vzt-quick <task>` — mechanical turn on **Haiku 4.5**
+- `/vzt-ui [extract|apply]` — the **visual lane**: author a repo's `DESIGN.md`
+  from its real token layer, then apply it. (No model pin — the tier depends on
+  whether the taste cache exists; see below.)
 - `/vzt-fable-mode` — run this turn under the five frontier working gates
   (scope, evidence, attack, verify, report) (no model pin — runs on the
   active model)
@@ -150,6 +155,8 @@ you: "build feature X"  (a non-trivial, multi-part feature)
          ├─ steps tagged sonnet → vzt-builder        (parallel)
          ├─ steps tagged haiku  → vzt-mechanic/scout (parallel)
          ├─ steps tagged opus   → vzt-heavy-builder
+         ├─ steps tagged ui     → vzt-stylist  (Sonnet, applies DESIGN.md)
+         │                        └─ no DESIGN.md yet? → vzt-art-director (Opus) writes it ONCE
          └─ seam review         → vzt-reviewer (Opus, only the risky seam)
 ```
 
@@ -228,6 +235,43 @@ build), and the ledger resolves to the **primary checkout** so parallel worker w
 are never lost or conflicted. This is *not* the fan-out that `vzt-route` rejects — the
 units are pairwise-disjoint, not a race. Full guide: [`orca/README.md`](orca/README.md).
 
+## Visual work — `DESIGN.md` is a taste cache
+
+Visual work was the one kind this protocol was blind to. *"Restyle the dashboard"*,
+*"fix the spacing"*, *"the palette is off"* matched no signal and fell into the
+zero-signal default bucket, where they got done from whatever the model imagined
+the product looked like. That is how one org ends up with thirty repos and thirty
+palettes.
+
+The fix is not a better model. It is a file.
+
+A **`DESIGN.md` at the repo root** moves visual taste off the model tier and onto
+disk — the same move `/vzt-ship` makes for long-horizon plans, for the same reason.
+Once the taste is written down, applying it is not judgement; it is execution:
+
+| | taste comes from | tier | agent |
+|---|---|---|---|
+| **No `DESIGN.md`** | the model | Opus | `vzt-art-director` — decide once, write it down |
+| **`DESIGN.md` exists** | the file | Sonnet | `vzt-stylist` — apply it faithfully |
+
+The classifier gates on this with a **filesystem check**, structurally identical to
+the two-factor HORIZON gate except the second factor is a file rather than a second
+regex. So the routing control is a `git`-diffable artifact: create `DESIGN.md` and
+visual work routes down forever; delete it and taste work routes back up.
+
+Two properties keep it honest. A `DESIGN.md` under **400 bytes doesn't count** — a
+placeholder would down-route every visual request in the repo while containing no
+taste to apply, and a cache that lies is worse than no cache. And every generated
+`DESIGN.md` carries a **`## Compliance`** section with a runnable check, recorded as
+a baseline and ratcheted, because a design doc nothing enforces is decorative: the
+repos that already carry 300-line design systems also carry a thousand-plus raw
+palette classes.
+
+Start with `/vzt-ui extract`. Template: [`templates/DESIGN.md`](templates/DESIGN.md).
+
+> This is **visual** design. Technical design — architecture, schemas, APIs,
+> migration plans — is a different lane: `/vzt-design` and `vzt-architect`.
+
 ## Guardrails
 
 - **Escalation ladder** — two failures at a rung escalates exactly one rung
@@ -258,7 +302,7 @@ units are pairwise-disjoint, not a race. Full guide: [`orca/README.md`](orca/REA
 vzt-agent install [--global] [--target <dir>]   # install + wire settings.json
 vzt-agent uninstall [--global] [--target <dir>] # clean removal
 vzt-agent doctor [--global]                     # health check
-vzt-agent stats                                 # routing decision distribution
+vzt-agent stats                                 # routing distribution + Fable budget, /vzt-ship and ui taste-cache falsification
 vzt-agent matrix                                # print the routing matrix
 vzt-agent ship-check <SPEC.md>                  # gate a /vzt-ship spec — disjoint scopes, an oracle per unit
 vzt-agent ship-start <SPEC.md>                  # open the run ledger for a gated spec
@@ -374,10 +418,75 @@ a vibe.
 
 - [Chair profiles — Opus-first, Sonnet-first, Fable, Haiku](docs/CHAIR-PROFILES.md)
 - [Routing matrix + decision procedure](docs/ROUTING-MATRIX.md)
+- [DESIGN.md template — the visual taste cache](templates/DESIGN.md)
 - [Orca supervision layer — watch a /vzt-ship run in Orca](orca/README.md)
 - [CLAUDE.md snippet for manual installs](templates/CLAUDE-snippet.md)
 
 ## Release notes
+
+### 1.14.0 — the visual lane: `DESIGN.md` is a taste cache
+
+The protocol was blind to visual work. Eight agents, all tier-shaped; a grep for
+`design system|ui|theme|brand|visual|css|tailwind` across the whole repo matched
+nothing but two VS Code mux strings. So *"restyle the dashboard"*, *"fix the
+spacing"* and *"the palette is off"* scored **zero signals** and fell into the
+default bucket — the same 48%-of-decisions hole the 1.9.1 audit found — where
+they got done from whatever the model imagined the product looked like.
+
+This release adds the lane, and the interesting part is what decides its tier:
+**a file, not the prompt.**
+
+- **`templates/DESIGN.md`** — the artifact. Follows the `awesome-design-md`
+  convention (YAML frontmatter a machine can parse, markdown an agent can read),
+  with three sections that convention lacks: `## Token source of truth`,
+  `## Compliance`, `## Known gaps`. It also adds a **`variants:`** dimension the
+  reference format has no room for — that frontmatter is flat because it
+  describes marketing sites, and a flat file cannot express a scoped admin skin
+  without silently flattening it into the global brand.
+- **`/vzt-ui`**, **`vzt-art-director`** (Opus, authors) and **`vzt-stylist`**
+  (Sonnet, applies). An art director decides; a stylist executes the decision.
+- **A two-factor gate in the classifier**, structurally identical to HORIZON
+  except the second factor is a `statSync` rather than a second regex. A real
+  `DESIGN.md` routes visual work **DOWN** to Sonnet; its absence keeps taste work
+  on Opus. The routing control is therefore a git-diffable artifact.
+
+**The doctrine: a `DESIGN.md` is a taste cache.** It moves visual judgement off
+the model tier and onto disk — the same move `/vzt-ship` makes for long-horizon
+plans, and for the same reason. Escalate the PROCESS, not the MODEL; one axis over.
+
+Three details that are load-bearing rather than decorative:
+
+- **TASTE scores on Opus, SURFACE on Sonnet.** The split is by *who has to
+  decide*: "make it feel premium" needs someone to invent an answer; "fix the
+  spacing" says what to change, not what it should become. Surface-on-Sonnet is
+  the safety property — a visual false positive can never buy a costlier tier.
+  Measured, not assumed: the existing `longTrivial` regression case contains
+  "adjust the spacing" and asserts `tier === 'sonnet'`. Scoring SURFACE on Opus
+  turns that test red on precisely the failure it exists to prevent.
+- **A stub is not a cache.** Under 400 bytes counts as absent. A placeholder
+  would down-route every visual request in the repo forever while containing no
+  taste to apply, and a cache that lies is worse than no cache.
+- **`## Compliance` ships a runnable oracle, baseline-and-ratchet.** A design doc
+  nothing enforces is decorative, and the audit that prompted this release found
+  exactly that: repos carrying 300-line design systems *and* 1,197 raw Tailwind
+  palette classes. The hex half of the check is filtered on purpose —
+  `var(--token, #hex)` fallbacks are the *correct* defensive pattern and email
+  templates genuinely cannot use CSS custom properties, so an unfiltered rule
+  flags the best code in the repo and gets switched off within a week.
+
+`taste` stays **documentation**. Deriving control flow from a column whose 10/9/8/4
+values were assigned by feel would be a fake derivation, and it would let someone
+tidying a docs table silently re-tier the whole lane. `TASTE_TIER` is a named
+constant citing the column instead.
+
+`vzt-agent stats` gains a **visual (ui)** line carrying the lane's own kill-switch,
+matching the one `/vzt-ship` already ships with: at ≥20 ui decisions, a cache-hit
+rate under 20% means nothing is reading a DESIGN.md, the lane is buying an Opus
+turn per prompt, and it should be deleted rather than defended.
+
+Also fixed: `AGENT_TYPES` omitted the two new agents, so `ship-check` would have
+rejected any spec whose unit does UI work — the same drift that once hid
+`vzt-architect`. And the README claimed "Seven agents" while listing eight.
 
 ### 1.13.0 — queue records belong to a window
 

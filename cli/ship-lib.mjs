@@ -29,6 +29,11 @@ export const AGENT_TYPES = [
   'vzt-builder',
   'vzt-mechanic',
   'vzt-scout',
+  // The visual lane. Same failure shape as vzt-architect above: install() ships
+  // both, and the router hands visual units to them, so omitting them here meant
+  // ship-check REJECTED any spec whose unit does UI work.
+  'vzt-art-director',
+  'vzt-stylist',
 ];
 
 /**
