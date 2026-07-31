@@ -18,6 +18,7 @@ import * as fs from "fs";
 import * as os from "os";
 import * as path from "path";
 import { ShipTreeProvider, UnitItem } from "./shipTree";
+import { registerHerdrFleet } from "./herdr/fleet";
 
 // Shape of a queue file written by the CLI.
 interface QueueRecord {
@@ -435,6 +436,16 @@ export function activate(context: vscode.ExtensionContext): void {
       }
     })
   );
+
+  // --- Herdr Fleet ---------------------------------------------------------
+  // A second, independent view: the agents herdr is running, live. Registered
+  // here but deliberately NOT connected — see registerHerdrFleet, which waits
+  // for the view to actually become visible before opening a socket.
+  //
+  // It shares nothing with the ship-run machinery above: different daemon,
+  // different transport, different lifecycle. A herdr outage must not touch the
+  // ship queue, and vice versa.
+  registerHerdrFleet(context, outputChannel);
 
   context.subscriptions.push(
     vscode.commands.registerCommand("vzt-mux.watchShipRun", () => {

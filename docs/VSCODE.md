@@ -305,3 +305,179 @@ its dry-run), so you can open one terminal per unit by hand. In that case
 full unit timeout, then verifies against the worktree. `--mux herdr`
 ([Part 2](#part-2--dock-existing-herdr-in-the-integrated-terminal-works-today-zero-build))
 remains available as the mature alternative.
+
+## Part 4 — The Herdr Fleet view (herdr as a headless daemon)
+
+Part 2 docks Herdr *inside* VS Code so you can look at it. Part 4 inverts
+that: Herdr stops being something you look at and becomes a background
+service, like `dockerd` or the `git` binary. You don't work out of `git` —
+you use the Source Control panel and `git` does the work underneath.
+
+Herdr does two jobs today: it **runs** your agents (a long-lived server that
+owns the PTYs) and it **is the thing you look at** (panes, tabs, layout). The
+Fleet view takes the second job away. A sidebar lists the same agents Herdr
+is running, badged `working` / `blocked` / `idle` / `done`, with
+`N working · N blocked` in the status bar.
+
+**The blocked count is the product.** A working agent needs nothing from you;
+a blocked one is stopped dead waiting on a human and will stay stopped until
+someone notices. This exists so noticing costs a glance.
+
+### The one architectural rule
+
+**The extension is a CLIENT. Herdr stays the daemon and keeps owning every
+agent process.** VS Code windows reload on every extension update and die
+with the app; an agent parented to the extension host would die with them.
+If a design decision makes the extension the parent process, it is the wrong
+decision. The only write the Fleet view makes to Herdr is `pane.focus`.
+
+Three methods are ever invoked: `ping`, `session.snapshot`, `pane.focus`.
+
+### The API, as measured — not as documented
+
+Verified by direct socket calls against a live **herdr 0.7.5, protocol 17**.
+Four things that are widely assumed and are wrong:
+
+| Assumption | Reality |
+|---|---|
+| ~147 methods | **89** (`schemas.request.oneOf.length`) |
+| `agent.attach` is a socket method | **It is not.** `herdr agent attach <TARGET> [--takeover]` is CLI-only. A per-agent pseudoterminal must spawn the binary. |
+| request/response is multiplexed | **One request per connection.** The server closes after answering: a second write throws `EPIPE`, a second read returns empty. |
+| subscribe to `pane_agent_status_changed` | That subscription **requires a `pane_id`** — there is no global form. Subscribing per pane races every `pane.created`. |
+
+**The finding the whole view rests on:** the global `pane.updated`
+subscription takes no `pane_id` and carries the complete `PaneInfo` on every
+change, `agent_status` included. One subscription is the entire live-status
+mechanism. `events.subscribe` acks with `subscription_started` and then holds
+the connection open, streaming newline-delimited `{event, data}` frames.
+
+So the client has two connection modes, and this is protocol, not preference:
+a fresh connection per RPC, and one long-lived connection for events.
+
+The socket is `$HERDR_SOCKET_PATH`, default `~/.config/herdr/herdr.sock`,
+mode `srw-------`. Note Herdr also has `HERDR_CLIENT_SOCKET_PATH` /
+`herdr-client.sock` — a **different** socket that answers none of these
+methods.
+
+### Types are generated, never hand-written
+
+Herdr is pre-1.0 and the wire protocol moves. `scripts/gen-herdr-types.mjs`
+runs as part of `npm run compile` and regenerates `src/herdr/types.gen.ts`
+from `herdr api schema --json`, emitting a `HERDR_PROTOCOL` constant. The
+client pings on connect and **refuses to run** against a daemon reporting a
+different number, naming both. A protocol bump breaks the build, not your
+Tuesday.
+
+Two things make the generator non-trivial, both asserted on every build
+rather than assumed:
+
+1. `herdr api schema --json` is **not a JSON Schema** — it is a container of
+   five sibling schemas with no top-level `type`, whose `$ref`s point at
+   `#/schemas/<name>/$defs/X`. Each must be hoisted to its own root and its
+   refs localised.
+2. Those five sub-schemas **repeat 27 shared `$defs`** between them
+   (`AgentStatus`, `PaneInfo`, `LayoutNode`, …). Emitting them separately
+   yields ~40 `TS2300: Duplicate identifier` errors. At protocol 17 all 27
+   repeats are structurally identical, so they collapse into one flat
+   namespace — and the generator *proves* that each build instead of trusting
+   it. If two same-named defs ever diverge it fails loudly with both
+   sub-schemas named.
+
+### Two bugs worth remembering
+
+**`pane_created` is not authoritative about agents.** Herdr emits
+`pane_created` for a pane that *already exists*, carrying `agent: null,
+agent_status: "unknown"` — agent detection runs afterwards and arrives via
+`pane_agent_detected` / `pane_updated`. A reducer that treats it like
+`pane_updated` and replaces wholesale silently drops a live agent out of the
+tree until its next status change. It failed on the same pane every run,
+which is what identified it as ordering rather than a race. The rule:
+`pane_created` may never downgrade an agent already seen; `pane_updated`
+still may, so a finished agent doesn't linger forever.
+
+**Herdr's snapshot and its event stream can disagree, persistently.**
+Measured: seed said `idle`, the stream then pushed `working` twice, and
+`session.snapshot` reported `idle` continuously for 12s afterwards with no
+corrective event. The model follows the **stream**, which is right for a live
+view, but a badge can sit `working` after the daemon considers the pane idle.
+Two corrections exist that are not polling: hiding and re-showing the view
+(disconnect/reconnect always re-seeds), and the explicit **Herdr: Refresh
+Fleet** command. Do **not** "fix" this with a `setInterval` snapshot — that is
+the polling the design exists to avoid.
+
+### Laziness is load-bearing
+
+The extension activates on `onStartupFinished` because the ship queue
+requires it. The Fleet layer has no such excuse, so the tree provider is
+registered at activation but **nothing touches the socket** until the view
+first becomes visible; the held connection is dropped again when it is
+hidden. A fleet panel nobody opened costs nothing.
+
+### Settings
+
+| Key | Default | Meaning |
+|---|---|---|
+| `vztMux.herdr.enabled` | `true` | When off, no connection to the daemon is made at all. |
+| `vztMux.herdr.socketPath` | `""` | Empty = auto (`$HERDR_SOCKET_PATH`, else the default path). |
+
+### Verifying it works
+
+```bash
+herdr api snapshot | python3 -c "
+import sys,json; s=json.load(sys.stdin)['result']['snapshot']
+ag=[a for a in s['agents'] if a.get('agent')]
+print(len(s['workspaces']),'workspaces,',len(ag),'agents')
+[print(' ',a['pane_id'],a['agent'],a['agent_status']) for a in ag]"
+```
+
+The tree must show the same workspaces and agents with the same badges, and a
+state change must update a badge **with no manual refresh** — that is what
+proves you are on events rather than a timer. The only timers in
+`src/herdr/` are a 50 ms redraw coalescer, a request timeout, and reconnect
+backoff; a `grep -rn setInterval src/herdr/` hit anywhere else means someone
+reintroduced polling.
+
+### 🔴 A reload is not always a reload
+
+`code --install-extension …vsix --force` updates the registry but does **not**
+hot-swap code in a running extension host. With several VS Code windows open
+there are several hosts, and reloading one leaves the others serving the old
+build from the main process's extension cache — so the version *on disk*
+differs from the version *running*, with no outward sign.
+
+`activate()` writes `~/.vzt/vscode-mux/host.json` with the running version and
+pid for exactly this reason. If it disagrees with `vscode/package.json`,
+**quit VS Code entirely (`Cmd+Q`) and reopen** — reloading a single window is
+not enough.
+
+```bash
+cat ~/.vzt/vscode-mux/host.json    # what is actually running
+```
+
+### Reference material
+
+- **[`herdr-api-schema.protocol-17.json`](herdr-api-schema.protocol-17.json)** —
+  a pinned snapshot of `herdr api schema --json` at protocol 17 (89 methods).
+  This is a **reference for diffing**, not a source: the generator always calls
+  the installed binary, so the types track the daemon you actually talk to.
+  When Herdr bumps the protocol, diff the new schema against this one to see
+  exactly what moved.
+- **[`herdr-fleet-vscode-PLAN.md`](herdr-fleet-vscode-PLAN.md)** — the original
+  build plan, kept for its staging and its "what NOT to build" discipline, both
+  of which held up.
+
+  ⚠️ **It is wrong on four points of fact**, each corrected in the table above
+  and each caught by measurement rather than review: it claims 147 methods
+  (there are 89), claims `agent.attach` is a socket method (it is CLI-only),
+  implies multiplexed request/response (the server closes after every answer),
+  and recommends subscribing to `pane_agent_status_changed` (which cannot be
+  subscribed globally). Read this doc's Part 4 first; treat the plan as
+  historical.
+
+### Not built, deliberately
+
+No Problems panel, test runner, search, debugger, git UI or file tree. VS Code
+wins all of those and rebuilding them is how a two-week project becomes a
+two-month one that never ships. Also not built yet: the diff + Comments API
+review loop, per-agent pseudoterminals, and the `spiceedit`
+`active.json` / `open-request.json` interop.

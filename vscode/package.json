@@ -1,8 +1,8 @@
 {
   "name": "vzt-mux",
   "displayName": "VZT Ship Mux",
-  "description": "Runs VZT Agent Protocol ship units as native VS Code integrated terminals, with a live Ship Run tree \u2014 per-unit status, worktree diffs mid-run, and one-click oracle re-runs.",
-  "version": "0.3.0",
+  "description": "Runs VZT Agent Protocol ship units as native VS Code integrated terminals, with a live Ship Run tree — per-unit status, worktree diffs mid-run, and one-click oracle re-runs.",
+  "version": "0.4.0",
   "publisher": "vzt",
   "engines": {
     "vscode": "^1.85.0"
@@ -21,6 +21,11 @@
           "id": "vztShip",
           "title": "VZT Ship",
           "icon": "$(rocket)"
+        },
+        {
+          "id": "herdrFleet",
+          "title": "Herdr Fleet",
+          "icon": "$(server-process)"
         }
       ]
     },
@@ -31,12 +36,23 @@
           "name": "Ship Run",
           "contextualTitle": "VZT Ship Run"
         }
+      ],
+      "herdrFleet": [
+        {
+          "id": "herdrFleet.agents",
+          "name": "Agents",
+          "contextualTitle": "Herdr Fleet"
+        }
       ]
     },
     "viewsWelcome": [
       {
         "view": "vztShipRun",
         "contents": "No ship run yet.\n\nStart one with:\n[vzt-agent ship-watch <SPEC.md> --mux vscode]()\n\nEach unit opens as its own integrated terminal, and appears here with live status."
+      },
+      {
+        "view": "herdrFleet.agents",
+        "contents": "No herdr server running.\n\nStart one with:\n[herdr]()\n\nThe agents it runs will appear here, badged working / blocked / idle. herdr keeps owning them — closing this window does not stop them."
       }
     ],
     "commands": [
@@ -63,13 +79,46 @@
         "command": "vzt-mux.rerunOracle",
         "title": "Re-run Oracle",
         "icon": "$(play)"
+      },
+      {
+        "command": "vzt-mux.herdr.focusAgent",
+        "title": "Herdr: Focus Agent"
+      },
+      {
+        "command": "vzt-mux.herdr.refresh",
+        "title": "Herdr: Refresh Fleet",
+        "icon": "$(refresh)"
+      },
+      {
+        "command": "vzt-mux.herdr.revealBlocked",
+        "title": "Herdr: Reveal Blocked Agent"
       }
     ],
+    "configuration": {
+      "title": "VZT Ship Mux",
+      "properties": {
+        "vztMux.herdr.enabled": {
+          "type": "boolean",
+          "default": true,
+          "description": "Show the Herdr Fleet view. When off, no connection to the herdr daemon is made at all."
+        },
+        "vztMux.herdr.socketPath": {
+          "type": "string",
+          "default": "",
+          "description": "Path to the herdr server socket. Empty means auto: $HERDR_SOCKET_PATH, else ~/.config/herdr/herdr.sock. Note this is the server socket, not herdr-client.sock."
+        }
+      }
+    },
     "menus": {
       "view/title": [
         {
           "command": "vzt-mux.refresh",
           "when": "view == vztShipRun",
+          "group": "navigation"
+        },
+        {
+          "command": "vzt-mux.herdr.refresh",
+          "when": "view == herdrFleet.agents",
           "group": "navigation"
         }
       ],
@@ -93,13 +142,15 @@
     }
   },
   "scripts": {
-    "compile": "tsc -p ./",
+    "gen:types": "node scripts/gen-herdr-types.mjs",
+    "compile": "node scripts/gen-herdr-types.mjs && tsc -p ./",
     "vscode:prepublish": "npm run compile",
     "package": "npm run compile && npx --yes @vscode/vsce package --no-dependencies -o vzt-mux-$npm_package_version.vsix"
   },
   "devDependencies": {
-    "@types/vscode": "^1.85.0",
     "@types/node": "^20.0.0",
+    "@types/vscode": "^1.85.0",
+    "json-schema-to-typescript": "^15.0.4",
     "typescript": "^5.4.0"
   }
 }
