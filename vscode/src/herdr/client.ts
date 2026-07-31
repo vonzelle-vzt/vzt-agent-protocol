@@ -207,9 +207,28 @@ export class HerdrClient implements vscode.Disposable {
    *
    * Note this does not start, own or parent an agent: herdr owns the process,
    * we hand it text. That invariant is intact.
+   *
+   * 🔴 `agent.prompt` DOES NOT SUBMIT MULTI-LINE TEXT, and reports success
+   * anyway. Measured on herdr 0.7.5 against a live Claude Code agent:
+   *
+   *   - single line  -> submitted; the agent goes idle -> working within 2s
+   *   - multi line   -> arrives in the composer as "[Pasted text #1 +13 lines]"
+   *                     and SITS THERE. Still idle 30s later. The call returned
+   *                     ok in 153ms.
+   *
+   * A review is always multi-line, so without the explicit `enter` below the
+   * whole surface silently does nothing: we would report "sent", discard the
+   * threads, and leave the review parked in an input box. Verified by sending
+   * `enter` to a pane holding exactly that stuck paste — it submitted at once.
+   *
+   * The `enter` is unconditional rather than conditional-on-still-idle. Polling
+   * for a status change is both slower and a race (a fast agent can finish
+   * before we look), while an extra `enter` on an already-submitted prompt hits
+   * an empty composer and does nothing.
    */
   async prompt(paneId: string, text: string): Promise<void> {
     await this.request("agent.prompt", { target: paneId, text });
+    await this.request("agent.send_keys", { target: paneId, keys: ["enter"] });
   }
 
   // --- event stream --------------------------------------------------------

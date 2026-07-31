@@ -160,11 +160,48 @@ test('client.prompt puts the PANE ID on the wire as target, and nothing else', a
     const client = new HerdrClient({ appendLine() {}, show() {} });
     await client.prompt('w5G:p1', 'Code review on myrepo — 2 comments across 2 files.');
 
-    assert.equal(seen.length, 1, 'a review batch must be exactly ONE request, not one per file');
-    assert.equal(seen[0].method, 'agent.prompt');
-    assert.equal(seen[0].params.target, 'w5G:p1', 'target must be the pane id');
-    assert.ok(seen[0].params.text.includes('2 comments across 2 files'), 'the whole batch must be in one text field');
-    assert.ok(!('pane_id' in seen[0].params), 'agent.prompt takes `target`, not `pane_id`');
+    const prompts = seen.filter((f) => f.method === 'agent.prompt');
+    assert.equal(prompts.length, 1, 'a review batch must be exactly ONE prompt, not one per file');
+    assert.equal(prompts[0].params.target, 'w5G:p1', 'target must be the pane id');
+    assert.ok(prompts[0].params.text.includes('2 comments across 2 files'), 'the whole batch must be in one text field');
+    assert.ok(!('pane_id' in prompts[0].params), 'agent.prompt takes `target`, not `pane_id`');
+  } finally {
+    if (prev === undefined) delete process.env.HERDR_SOCKET_PATH;
+    else process.env.HERDR_SOCKET_PATH = prev;
+    server.close();
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('the prompt is SUBMITTED — multi-line text otherwise sits in the composer', async () => {
+  // The defect this pins, measured on herdr 0.7.5 against a live Claude Code
+  // agent: agent.prompt returns ok in ~150ms for multi-line text, which arrives
+  // as "[Pasted text #1 +13 lines]" and is NEVER SUBMITTED. Still idle 30s
+  // later. Single-line text submits fine, so every cheap probe passes and the
+  // one shape this feature actually sends is the broken one.
+  //
+  // Without the trailing `enter` the whole review loop silently does nothing:
+  // we report "sent", discard the threads, and the review is parked in an input
+  // box. Sending `enter` to a pane holding exactly that stuck paste submitted
+  // it immediately — that is where this fix comes from.
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'herdr-fake-'));
+  const sockPath = path.join(dir, 'herdr.sock');
+  const seen = [];
+  const server = await fakeDaemon(sockPath, (f) => seen.push(f));
+
+  const prev = process.env.HERDR_SOCKET_PATH;
+  process.env.HERDR_SOCKET_PATH = sockPath;
+  try {
+    const { HerdrClient } = load('client.js');
+    await new HerdrClient({ appendLine() {}, show() {} }).prompt('w5G:p1', 'line one\nline two\nline three');
+
+    assert.deepEqual(
+      seen.map((f) => f.method),
+      ['agent.prompt', 'agent.send_keys'],
+      'the prompt must be followed by an explicit submit, in that order'
+    );
+    assert.deepEqual(seen[1].params.keys, ['enter'], 'the submit is an enter key');
+    assert.equal(seen[1].params.target, 'w5G:p1', 'the submit must go to the SAME pane as the prompt');
   } finally {
     if (prev === undefined) delete process.env.HERDR_SOCKET_PATH;
     else process.env.HERDR_SOCKET_PATH = prev;
