@@ -2,7 +2,7 @@
   "name": "vzt-paste-image",
   "displayName": "VZT: Paste & Drop Files into Terminal",
   "description": "Drag a zip, PDF, doc or screenshot anywhere onto the editor area — or Cmd+V a file or screenshot — and its path lands on the prompt line of the Claude Code session in the integrated terminal. Falls through to normal text paste otherwise.",
-  "version": "1.3.0",
+  "version": "1.3.1",
   "publisher": "vzt",
   "private": true,
   "license": "MIT",

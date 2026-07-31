@@ -213,6 +213,47 @@ function resolveSendPath(fsPath, kind) {
   }
 }
 
+/**
+ * Which terminal gets the path.
+ *
+ * `activeTerminal` goes null the moment focus leaves the panel — and dragging a file is
+ * exactly that: you grab it in Finder, the VS Code window loses focus, you drop on the
+ * editor. So at the instant we need it, the one reliable-looking answer is often gone, and
+ * the old fallback was `terminals[0]` — creation order, not intent.
+ *
+ * Observed: four terminals open, the user working in "BlackOps Trading", the screenshot
+ * typed into "Tradescriptai" because it happened to be created first. The path was
+ * delivered, to a session nobody was looking at, which reads as the feature not working.
+ *
+ * So remember the last terminal that WAS active and prefer it. Creation order is kept only
+ * as the final resort, for the case where no terminal has ever been focused this session.
+ */
+let lastActiveTerminal = null;
+
+function registerTerminalTracking(context) {
+  context.subscriptions.push(
+    vscode.window.onDidChangeActiveTerminal((term) => {
+      // Ignore the null edge — that IS focus leaving, and forgetting on it defeats the point.
+      if (term) lastActiveTerminal = term;
+    }),
+    vscode.window.onDidCloseTerminal((term) => {
+      if (term === lastActiveTerminal) lastActiveTerminal = null;
+    }),
+  );
+  lastActiveTerminal = vscode.window.activeTerminal || null;
+}
+
+function targetTerminal() {
+  const open = vscode.window.terminals || [];
+  const active = vscode.window.activeTerminal;
+  if (active) return { term: active, why: 'active' };
+  // A closed terminal can linger in the variable if the close event was missed.
+  if (lastActiveTerminal && open.includes(lastActiveTerminal)) {
+    return { term: lastActiveTerminal, why: 'last-active' };
+  }
+  return { term: open[0] || null, why: 'first-open' };
+}
+
 // Guards against the same drop being forwarded twice. VS Code reports one tab as BOTH
 // `opened` and `changed` roughly 1ms apart, which typed the path in twice.
 const recentlyForwarded = new Map();
@@ -300,7 +341,7 @@ function registerDroppedTabCapture(context) {
 
           // No terminal means no one is waiting for this path — leave the file alone
           // so ordinary viewing still works when you are not in a session.
-          const term = vscode.window.activeTerminal || (vscode.window.terminals || [])[0];
+          const { term, why } = targetTerminal();
           if (!term) {
             trace('  SKIP:', kind, 'tab but NO terminal open ->', uri.fsPath);
             continue;
@@ -316,6 +357,11 @@ function registerDroppedTabCapture(context) {
             staged,
             '| terminal =',
             JSON.stringify(term.name),
+            `(via ${why})`,
+            '| active =',
+            JSON.stringify(vscode.window.activeTerminal && vscode.window.activeTerminal.name),
+            '| lastActive =',
+            JSON.stringify(lastActiveTerminal && lastActiveTerminal.name),
             '| all =',
             JSON.stringify((vscode.window.terminals || []).map((t) => t.name)),
           );
@@ -339,7 +385,8 @@ function registerDroppedTabCapture(context) {
 }
 
 function activate(context) {
-  trace('=== activate() v1.3.0 | terminals =', (vscode.window.terminals || []).length);
+  trace('=== activate() v1.3.1 | terminals =', (vscode.window.terminals || []).length);
+  registerTerminalTracking(context);
   registerDroppedTabCapture(context);
 
   context.subscriptions.push(
