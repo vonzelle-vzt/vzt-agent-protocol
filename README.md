@@ -7,7 +7,7 @@
 Part of the [VZT Tech Consulting Protocol](https://github.com/vonzelle-vzt/VZT-Tech-Consulting-Protocol) ecosystem.
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
-[![Version](https://img.shields.io/badge/Version-1.14.0-purple.svg)](#)
+[![Version](https://img.shields.io/badge/Version-1.16.0-purple.svg)](#)
 [![Tiers](https://img.shields.io/badge/Tiers-Fable%205%20%7C%20Opus%205%20%7C%20Sonnet%205%20%7C%20Haiku%204.5-green.svg)](docs/ROUTING-MATRIX.md)
 
 ---
@@ -423,6 +423,141 @@ a vibe.
 - [CLAUDE.md snippet for manual installs](templates/CLAUDE-snippet.md)
 
 ## Release notes
+
+### 1.16.0 — review a diff in VS Code, and prove the agent got it
+
+A herdr pane has no cursor, so every terminal review tool makes you retype
+`path:line` by hand to say which line you mean. VS Code's native diff editor and
+Comments API do it for free, and one command ships the whole batch back as a
+single `agent.prompt`. **This is the differentiator; the tree view is table
+stakes** — every rival plugin is read-only.
+
+What the surface refuses to guess is the interesting part. The plan said to open
+*"the agent's diff"*, and herdr cannot tell you what that is: measured on the
+live five-workspace fleet, every agent reports `cwd` **and** `foreground_cwd` as
+`$HOME`, because herdr's `new_cwd` is `$HOME` and the agent `cd`s afterwards.
+`WorkspaceInfo.worktree` was unset on all five. So the diff is **this window's
+repo** — which VS Code knows exactly — and the agent is chosen explicitly.
+Nothing inferred, nothing inferred wrong.
+
+- **`agent.prompt`'s target is a PANE ID and nothing else.** Probed read-only
+  with `agent.get`, which takes the same target string: `w5G:p1` resolves, while
+  the workspace label, the workspace id and the terminal title each come back
+  `agent_not_found`. `pane_id` travels end to end and no display name is ever
+  resolved — a review landing in a different agent than the one you picked is
+  the one failure this surface must not have.
+- **Comments are grouped by file and ordered by line, never by click order.** An
+  agent handed comments in click order has to reconstruct the diff and will
+  interleave two files while editing. Each comment carries its anchored source
+  line, so "this" has a referent without re-reading the file.
+- **A failed send keeps the comments.** Losing a written review to a transport
+  error is unforgivable, and a retry is one click away.
+
+🔴 **The review loop shipped broken, and every cheap probe passed.** Measured on
+live herdr 0.7.5 against a real Claude Code agent: a single line submits
+(`idle` → `working` within 2s), while multi-line text lands in the composer as
+`[Pasted text #1 +13 lines]` and **sits there** — still idle 30s later, after a
+call that returned `ok` in 153ms. A review is always multi-line, so the surface
+reported "sent 2 comments", discarded the threads, and parked the review in an
+input box nobody was looking at. Fixed with an unconditional `agent.send_keys`
+`enter` after the prompt: polling for a status change is slower and races a fast
+agent, while a spare `enter` hits an empty composer and does nothing.
+
+**That bug is why this release also ships a live gate.** `npm run test:live`
+stages its own throwaway project, splits a pane, starts a real agent, and runs
+two phases — a **CONTROL** that sends a bare `agent.prompt` with no `enter` and
+must stay stuck, then the real client which must leave idle within ~2s and be
+*visible in the pane*. The order is the point: a green FIXED phase alone is
+equally what a daemon that submits everything would give you, or an assertion
+reading the wrong field. It is deliberately not named `*.test.mjs`, so `npm test`
+cannot pick it up — an automated suite that silently needs a staged agent goes
+red for the wrong reason — and with no daemon it exits **2 / CANNOT RUN**, never
+0. **The lesson generalises past herdr: a fake-daemon test asserts the bytes you
+wrote, not that anything happened.** The bytes were correct in the broken
+version too.
+
+Four traps found by making that gate stage its own agent, every one of them
+invisible from the daemon's side:
+
+- **A pane read is a *rendering*, so its text is hard-wrapped at the pane
+  width** — a multi-word regex can straddle a newline and silently never match.
+  A trust-dialog matcher written from how the dialog *looks* never fired,
+  because the pane holds `…you created or\none you trust?`.
+- **Readiness must be positive** ("the composer is on screen"), never an absence
+  ("no dialog is on screen"). A fresh agent draws a startup screen *before* its
+  trust dialog, so an absence check passes in the gap. herdr reports `idle`
+  throughout and `agent.wait --until idle` returns happily: from the daemon's
+  side nothing is running, and a modal is just a program drawing characters.
+- **`pane.read` over the socket needs `source` and answers `result.read.text`**,
+  both of which the CLI hides. Read a guessed field and you get `undefined`,
+  which contains no marker — so the assertion passes while looking at nothing.
+- **A freshly split pane is not yet at a shell prompt**; `agent.start` answers
+  `agent_pane_busy`, which reads as "in use" rather than "not ready yet".
+
+**The review body carries markers, never instructions.** An earlier probe asked
+the agent to reply `ACKNOWLEDGED` as a delivery signal, and the agent refused —
+on the grounds that anyone able to file a review comment could otherwise steer
+the session. It is right: `formatReview` output is attacker-influenced whenever
+the review is not yours, and a gate must never depend on an agent choosing to
+obey injected text.
+
+Also in this release: the two fleet defects the 1.15.0 notes *claimed* were
+pinned by tests, which did not exist — nothing under `test/` referenced
+`FleetModel`, `pane_created` or `pane_updated`, so both fixes shipped unguarded
+while the suite stayed green at 113. Seven tests now run the real compiled model
+against a stubbed `vscode`, rather than grepping source: `model.ts` carries a
+long comment explaining each defect, so a source grep matches the *explanation*
+and passes on broken code. Suite is 131 and the reconnect half is covered too —
+the spin oracle runs in a child process on a hard deadline, because mutating the
+backoff to `0` starves the event loop and **hangs** the suite instead of failing
+it.
+
+### 1.15.0 — a snapshot is a source, not the source
+
+Adds a Herdr Fleet view to the `vzt-mux` extension: workspaces → tabs → agents,
+badged working / blocked / idle / done, with "N working · N blocked" in the
+status bar. Herdr stops being something you look at and becomes a daemon you
+query.
+
+**The extension is a CLIENT and must stay one.** herdr owns every agent process;
+a VS Code window reloads on every extension update and dies with the app, so an
+agent parented to the extension host dies with it.
+
+Four things everyone assumes about the herdr API, measured against a live 0.7.5
+rather than read:
+
+- **89 methods, not 147.**
+- **`agent.attach` is CLI-only** — there is no such socket method.
+- **One request per connection.** The server closes after answering, so a second
+  write is `EPIPE`. Only `events.subscribe` holds the socket open.
+- **`pane_agent_status_changed` cannot be subscribed globally**; it requires a
+  `pane_id`. The global `pane.updated` carries the whole `PaneInfo` including
+  `agent_status`, and is the entire live-status mechanism.
+
+Types are generated from `herdr api schema --json` on every compile, emitting
+`HERDR_PROTOCOL`; the client refuses to run against a daemon reporting a
+different number. That schema is **not** a JSON Schema — it is a container of
+five sibling schemas with refs rooted at the container, whose sub-schemas repeat
+27 shared `$defs` — so the generator hoists, localises refs and collapses the
+repeats, asserting on every build that they are still structurally identical
+rather than trusting it.
+
+Two defects found by measurement:
+
+- **`pane_created` fires for a pane that ALREADY EXISTS with `agent:null`**, and
+  treating it like `pane_updated` silently drops a live agent from the tree until
+  its next status change. Creation may no longer downgrade an agent already seen;
+  `pane_updated` still may, or a finished agent lingers forever. The two are
+  asserted to differ **on purpose** — closing the first defect by making both
+  non-downgrading opens the second.
+- **herdr's snapshot and its event stream disagree persistently.** The stream
+  pushed `working` twice while `session.snapshot` reported `idle` for 12s with no
+  corrective event. The model follows the stream; the corrections are a re-seed
+  on view visibility and an explicit Refresh, not a poll loop.
+
+Nothing polls. The only timers under `src/herdr/` are a 50ms redraw coalescer, a
+request timeout and reconnect backoff, and the view opens no socket at all until
+it first becomes visible.
 
 ### 1.14.0 — the visual lane: `DESIGN.md` is a taste cache
 
