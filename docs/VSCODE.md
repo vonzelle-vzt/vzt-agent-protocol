@@ -466,18 +466,178 @@ cat ~/.vzt/vscode-mux/host.json    # what is actually running
   build plan, kept for its staging and its "what NOT to build" discipline, both
   of which held up.
 
-  ⚠️ **It is wrong on four points of fact**, each corrected in the table above
-  and each caught by measurement rather than review: it claims 147 methods
-  (there are 89), claims `agent.attach` is a socket method (it is CLI-only),
-  implies multiplexed request/response (the server closes after every answer),
-  and recommends subscribing to `pane_agent_status_changed` (which cannot be
-  subscribed globally). Read this doc's Part 4 first; treat the plan as
-  historical.
+  ⚠️ **It is wrong on five points of fact**, each caught by measurement rather
+  than review: it claims 147 methods (there are 89), claims `agent.attach` is a
+  socket method (it is CLI-only), implies multiplexed request/response (the
+  server closes after every answer), recommends subscribing to
+  `pane_agent_status_changed` (which cannot be subscribed globally) — all four
+  corrected in the table above — and instructs you to open *the agent's* diff,
+  which Herdr does not expose enough state to identify (see Part 5). Read Parts
+  4 and 5 first; treat the plan as historical.
 
 ### Not built, deliberately
 
 No Problems panel, test runner, search, debugger, git UI or file tree. VS Code
 wins all of those and rebuilding them is how a two-week project becomes a
-two-month one that never ships. Also not built yet: the diff + Comments API
-review loop, per-agent pseudoterminals, and the `spiceedit`
-`active.json` / `open-request.json` interop.
+two-month one that never ships. Also not built yet: per-agent pseudoterminals,
+and the `spiceedit` `active.json` / `open-request.json` interop.
+
+---
+
+## Part 5 — The review loop (line comments → an agent)
+
+Part 4 is table stakes: a list of what's running. Part 5 is the reason to
+review an agent's work from VS Code instead of from a terminal.
+
+**A Herdr pane has no cursor.** Every terminal-based review tool therefore
+makes you retype `path:line` by hand to say which line you mean. VS Code's
+native diff editor and its Comments API — the same API the GitHub PR extension
+uses — do that for free, and one command ships the whole batch back into an
+agent as a single prompt.
+
+### Using it
+
+1. **Herdr Fleet** title bar → **Review Changes**. Opens the working-tree diff
+   for this window's repo — staged *and* unstaged, because an agent's work is
+   often half-staged and a review that silently skips the staged half reviews
+   the wrong thing.
+2. Click the **+** in the diff gutter and leave line comments. Both sides of
+   the diff accept them; a comment on the original side is labelled as such so
+   the agent doesn't edit the wrong one.
+3. Right-click an agent in the tree → **Send Review Comments to Agent**.
+
+| Command | ID | Where |
+|---|---|---|
+| Herdr: Review Changes | `vzt-mux.herdr.reviewChanges` | Fleet view title bar |
+| Herdr: Send Review Comments to Agent | `vzt-mux.herdr.sendReview` | Agent row, inline + context menu |
+| Herdr: Discard Review Comments | `vzt-mux.herdr.discardReview` | Command palette |
+
+Invoked from the palette rather than an agent row, **Send** offers a QuickPick
+of running agents. There is deliberately **no** "the obvious agent" fallback —
+sending a review to a guess is the one failure this surface must not have.
+
+### Which diff — and why it is not "the agent's"
+
+The build plan says to open *the agent's* diff. Herdr cannot tell us what that
+is, and this is a measured fact rather than a limitation of the code:
+
+| What we hoped | What the live daemon reports |
+|---|---|
+| `agent.cwd` locates the repo | **`$HOME` for every agent.** Herdr's `new_cwd` is `$HOME`; the agent `cd`s on its own afterwards. |
+| `agent.foreground_cwd` is better | **Also `$HOME`.** |
+| `WorkspaceInfo.worktree.checkout_path` | Exists in the schema, **unset on every workspace** not created as a worktree workspace — all five on the fleet this was built against. |
+
+So there is no field to derive a repo from, and inferring one from terminal
+scrollback is exactly the guessing this stack keeps getting burned by. The diff
+is **this window's repo**, which VS Code already knows exactly, and the agent is
+chosen explicitly. Nothing is inferred, so nothing can be inferred wrong.
+
+### The target is a `pane_id`, and nothing else
+
+`agent.prompt` takes `{target, text, wait?}`. `target` is a string, which
+invites passing something readable. Probed read-only with `agent.get` — which
+takes the *same* target string, so you can test resolution without sending
+anything to anyone:
+
+```bash
+herdr agent get w5G:p1              # resolves
+herdr agent get "BlackOps Trading"  # agent_not_found  (workspace label)
+herdr agent get w5G                 # agent_not_found  (workspace id)
+herdr agent get "admin-ui-rebuild"  # agent_not_found  (terminal title)
+```
+
+A pane id is the only form that resolves. `pane_id` therefore travels from the
+tree node to the wire untouched and no display name is ever resolved into a
+target — a miss would deliver someone's review to the wrong agent.
+
+### 🔴 `agent.prompt` does not SUBMIT multi-line text
+
+This shipped broken and every cheap test passed. Measured on herdr 0.7.5
+against a live Claude Code agent:
+
+| Text | Result |
+|---|---|
+| single line | Submitted. `idle` → `working` within 2s. |
+| **multi-line** | Arrives in the composer as `[Pasted text #1 +13 lines]` and **sits there.** Still `idle` 30s later. The call returned `ok` in 153ms. |
+
+A review is always multi-line, so without a fix the surface reported "sent 2
+comments", discarded the threads, and parked the review in an input box nobody
+was watching.
+
+`HerdrClient.prompt` therefore follows every `agent.prompt` with
+`agent.send_keys {keys:["enter"]}`. That fix came from sending `enter` to a pane
+holding exactly that stuck paste — it submitted at once. The `enter` is
+**unconditional**, not conditional on the agent still being idle: polling for a
+status change is slower and races a fast agent, while a spare `enter` on an
+already-submitted prompt hits an empty composer and does nothing.
+
+**Why no offline test could catch this.** Single-line probes all pass, so every
+cheap check is green. A byte-level test against a fake daemon can't see it
+either — the bytes we write are correct. Only firing one at a real agent and
+then **reading the pane** shows it. When something in this stack reports success
+and produces no visible effect, read the pane before believing the return value.
+
+### What the agent actually receives
+
+One prompt for the whole batch. Per-file sends would arrive as separate turns
+and the agent would start acting on file 1 while file 2 was still in flight.
+
+```
+Code review on vzt-agent-protocol — 2 comments across 2 files.
+
+src/herdr/client.ts
+  src/herdr/client.ts:7
+    > export class HerdrClient {
+    HERDR-PROBE-B: comment on file two.
+src/herdr/review.ts
+  src/herdr/review.ts:42
+    > export function formatReview(
+    HERDR-PROBE-A: comment on file one.
+
+Please address these.
+```
+
+Grouped by file and sorted by line, because that is the order someone reads a
+diff in; an agent handed comments in click-order has to reconstruct it and will
+interleave two files while editing. Each comment carries its anchored source
+line so "this" has a referent without re-reading the file. `CommentThread.range`
+is optional — a file-level thread renders as `path (whole file)`, never
+`path:0`, which would be a reference that resolves nowhere.
+
+**A failed send keeps the comments.** Losing a written review to a transport
+error is unforgivable, and a retry is one click away.
+
+### Verifying it works
+
+The acceptance check, and both halves matter: *comments left on two different
+files arrive as ONE message, and the target is the agent whose diff you
+reviewed, never a different one.*
+
+```bash
+node --test test/herdr-review.test.mjs      # 9 oracles, incl. a real socket to a fake daemon
+node --test test/herdr-reconnect.test.mjs   # daemon death + recovery
+```
+
+Live, end to end — and this is the check that found the submit bug:
+
+```bash
+herdr agent get <pane_id>          # note agent_status before
+# ...send a review from the UI...
+herdr agent get <pane_id>          # must leave idle within ~2s
+herdr pane read <pane_id>          # the review must be VISIBLE, not pending in the composer
+```
+
+Omit `--lines` on `pane read` — it is tail-like and will happily show you blank
+rows above the content you're looking for.
+
+Every oracle in both suites was confirmed RED by mutation before being trusted
+green: target swapped to a label, `pane_id` sent instead of `target`, the submit
+`enter` removed, only the first file reaching the message, the catch branch
+discarding threads, reconnect backoff set to zero, reconnect disabled entirely.
+
+🔴 **The spin oracle runs in a child process on a hard deadline, and that is the
+design.** Mutating the backoff to `const delay = 0` does not merely raise a
+transition count — the reconnect loop starves its own event loop, so an
+in-process assertion never runs and the suite **hangs** instead of failing. A
+hanging gate is no better than one never run. Same rule as everywhere else in
+this stack: bound any oracle that guards a hang.
