@@ -33,6 +33,19 @@ REPORT: <what to include in the report back: diff summary, MACHINE_CHECK output
   disjoint FILES_IN_SCOPE cannot collide.
 - **MACHINE_CHECK is decided by the orchestrator, before dispatch.** A check the
   worker invents after the fact tests what was built, not what was asked.
+- **Run the MACHINE_CHECK once against the UNFINISHED state before dispatching.**
+  Deciding a check early does not make it correct — it only makes it early. A
+  check that has never been observed failing may be measuring nothing, and it
+  will report the same green whether the worker succeeded or never started.
+  If it does not go red before the work, it is not a check.
+  *Worked example, from a real 33-worker run:* every brief shipped
+  `printf '{"prompt":"restyle the header",...} | node …/vzt-route-classifier.mjs
+  | grep -q 'ui:cache-hit(DESIGN.md)'`. The classifier bypasses classification
+  entirely below four words (`prompt.split(/\s+/).length < 4` → `process.exit(0)`,
+  zero output), so `"restyle the header"` — three words — could never pass, for
+  any repo, with or without the artifact. Eight workers each burned part of a
+  turn rediscovering that the orchestrator's own gate was broken. One run of the
+  check beforehand would have caught it.
 - **Reporting ≠ persistence.** The orchestrator verifies the artifacts exist on
   disk (git diff/status, re-run MACHINE_CHECK) before accepting the report.
   A worker saying "written" is a claim, not evidence.

@@ -111,3 +111,21 @@ typecheck/test/build.
 - **A stub does not count.** The router treats a `DESIGN.md` under 400 bytes as absent. A
   three-line placeholder would down-route every visual request in the repo forever while
   containing no taste to apply — a cache that lies is worse than no cache.
+
+## Proving the cache is live
+
+The oracle is the router, not `test -f` — a file the router cannot see buys nothing:
+
+```bash
+printf '{"prompt":"restyle the dashboard header","cwd":"<repo>"}' \
+  | node ~/.claude/hooks/vzt-router/vzt-route-classifier.mjs \
+  | grep -q 'ui:cache-hit(DESIGN.md)'
+```
+
+⚠️ **The probe must be four or more words.** The classifier bypasses classification
+entirely below that (`prompt.split(/\s+/).length < 4` → `process.exit(0)`), emitting zero
+bytes — so a three-word probe reports a miss for a repo whose cache is perfectly fine, and
+does it identically for every repo. Falsify it too: the same prompt against a repo with no
+`DESIGN.md` must return `ui:cache-miss`, or the signal is always-on and proves nothing.
+
+`~/.claude/scripts/vzt-design-md-audit.sh [repo ...]` runs this across a whole portfolio.
