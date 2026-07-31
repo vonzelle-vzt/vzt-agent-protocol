@@ -477,7 +477,7 @@ test('every file path the doctrine references is actually installed', () => {
 // correctly on disk gets reported as "missing" on every retrofit.
 //
 // Installation guarded, resolution not — the v1.4.0 bug one level deeper.
-test('doctrine names templates by a path that RESOLVES from the agent cwd', () => {
+test('doctrine names shipped files by a path that RESOLVES from the agent cwd', () => {
   // Static surfaces must carry the .claude/ prefix. Runtime surfaces (the hooks)
   // must not carry a literal path at all — they interpolate installedTemplate(),
   // which is the only form that is correct for BOTH a global and a project
@@ -494,14 +494,35 @@ test('doctrine names templates by a path that RESOLVES from the agent cwd', () =
   ];
   assert.ok(surfaces.length >= 20, `expected the whole doctrine surface, found ${surfaces.length}`);
 
-  // A `templates/x.md` NOT already prefixed by `.claude/`.
-  const BARE = /(?<!\.claude\/)templates\/[A-Za-z0-9._-]+\.(?:md|js|sh)/g;
+  // templates/ and docs/ install INTO .claude/ and must carry that prefix.
+  // orca/ does not: install() sends it to a FIXED ~/.orca/vzt/ home, so its
+  // correct written form is that absolute path, never a .claude/ one.
+  //
+  // docs/ is the nastier of the two .claude ones. A bare `templates/x.md` fails
+  // loudly because no repo has a root templates/ dir — but plenty of repos DO
+  // have docs/, so a bare `docs/ROUTING-MATRIX.md` can resolve to the USER's
+  // unrelated file and be read as ours. Wrong beats missing, so it is gated too.
+  const RULES = [
+    { re: /(?<!\.claude\/)templates\/[A-Za-z0-9._-]+\.(?:md|js|sh)/g, fix: (m) => `".claude/${m}", or interpolate templateRef() in a hook` },
+    { re: /(?<!\.claude\/)docs\/[A-Za-z0-9._-]+\.(?:md|js|sh)/g, fix: (m) => `".claude/${m}", or interpolate docRef() in a hook` },
+    { re: /(?<!\.orca\/vzt\/)\borca\/[A-Za-z0-9._-]+\.(?:md|js|sh)/g, fix: (m) => `"~/.orca/vzt/${m.slice('orca/'.length)}", or interpolate orcaRef() — orca does NOT install into .claude` },
+  ];
+  // A `//` line comment is read by maintainers of THIS repo, where the bare
+  // repo-relative path is the correct thing to write. Only text that can reach
+  // an agent is gated.
+  const isComment = (line) => /^\s*(\/\/|\*|\/\*)/.test(line);
   const offenders = [];
   for (const rel of surfaces) {
-    const text = fs.readFileSync(path.join(REPO_ROOT, rel), 'utf8');
-    for (const m of text.matchAll(BARE)) {
-      offenders.push(`${rel}: "${m[0]}" — write ".claude/${m[0]}", or interpolate installedTemplate() in a hook`);
-    }
+    const lines = fs.readFileSync(path.join(REPO_ROOT, rel), 'utf8').split('\n');
+    lines.forEach((line, i) => {
+      if (isComment(line)) return;
+      for (const { re, fix } of RULES) {
+        re.lastIndex = 0;
+        for (const m of line.matchAll(re)) {
+          offenders.push(`${rel}:${i + 1}: "${m[0]}" — write ${fix(m[0])}`);
+        }
+      }
+    });
   }
   assert.deepEqual(
     offenders,

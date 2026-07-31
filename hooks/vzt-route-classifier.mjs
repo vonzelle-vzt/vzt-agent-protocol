@@ -504,7 +504,7 @@ export function directive(result, chair) {
       `  step 1: write DESIGN.md at the project root — inline at effort high if this chair is Opus or Fable, otherwise delegate to the "${t.agents.ui}" subagent, or invoke /vzt-ui when the look needs the conversation. Start from ${templateRef('DESIGN.md')}, and derive every value by READING the repo's real token layer (tokens.css / globals.css @theme / theme.ts) — a DESIGN.md naming tokens the code does not have is worse than none.`,
       '  step 2: apply it to the screen that was actually asked for — that one, and no others. A cache is proved by being applied once, not by being long. An unapplied DESIGN.md is a document, and a document is a tax.',
       `  step 3: everything after this routes DOWN, automatically. Once DESIGN.md exists the classifier sends visual work to "${TIERS.sonnet.agents.ui}" (Sonnet) on its own, because the judgement is on disk instead of in the tier. This turn is the only expensive one — spend it properly.`,
-      '  why NOT Sonnet: this is a taste question with no answer written down yet, and taste is the one axis where the tiers genuinely differ (see the Taste column in docs/ROUTING-MATRIX.md). Sonnet APPLYING a written spec is indistinguishable from Opus applying it; Sonnet INVENTING the spec is not, and the difference compounds across every screen built afterwards.',
+      `  why NOT Sonnet: this is a taste question with no answer written down yet, and taste is the one axis where the tiers genuinely differ (see the Taste column in ${docRef('ROUTING-MATRIX.md')}). Sonnet APPLYING a written spec is indistinguishable from Opus applying it; Sonnet INVENTING the spec is not, and the difference compounds across every screen built afterwards.`,
       '  why NOT Fable: taste is not frontier reasoning. There is no no-prior-art problem here — every product ever shipped is prior art. Fable would cost twice as much and pick the same greys.'
     );
   } else if (result.kind === 'ui') {
@@ -656,6 +656,44 @@ export function installedTemplate(name) {
 /** The same path, phrased for injection: either a real path or an honest repair instruction. */
 export function templateRef(name) {
   return installedTemplate(name) || `${name} (NOT INSTALLED — run \`vzt-agent install\`)`;
+}
+
+// docs/ has the same problem as templates/, and a NASTIER failure mode: plenty of
+// real repos DO have a docs/ directory, so a bare `docs/ROUTING-MATRIX.md` does
+// not fail loudly — it can resolve to the USER's unrelated file and be read as
+// ours. Silence beats a wrong answer, so this resolves or returns null too.
+const DOCS_HOME = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..', 'docs');
+const DOCS_FALLBACK = path.join(os.homedir(), '.claude', 'docs');
+
+/** Absolute path to a shipped doc, or null. */
+export function installedDoc(name) {
+  for (const dir of [DOCS_HOME, DOCS_FALLBACK]) {
+    const p = path.join(dir, name);
+    try {
+      if (fs.statSync(p).isFile()) return p;
+    } catch { /* try the fallback */ }
+  }
+  return null;
+}
+
+/** Injection-ready doc path. */
+export function docRef(name) {
+  return installedDoc(name) || `${name} (NOT INSTALLED — run \`vzt-agent install\`)`;
+}
+
+// orca/ is the odd one out: install() sends it to a FIXED ~/.orca/vzt/ home
+// rather than into .claude, because ship-dispatch points each unit's prompt at
+// an absolute path and worktree panes inherit whichever project's .claude they
+// happen to land in. So it is never `.claude/`-prefixed — it is its own root.
+const ORCA_VZT_DIR = path.join(os.homedir(), '.orca', 'vzt');
+
+/** Injection-ready path to an orca helper. */
+export function orcaRef(name) {
+  const p = path.join(ORCA_VZT_DIR, name);
+  try {
+    if (fs.statSync(p).isFile()) return p;
+  } catch { /* not installed */ }
+  return `${p} (NOT INSTALLED — run \`vzt-agent install\`)`;
 }
 
 // ——— DESIGN.md: the taste cache ————————————————————————————————————————

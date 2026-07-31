@@ -184,7 +184,7 @@ already pairwise-disjoint (not a race — each unit owns different files and is 
 its own oracle). Three backends behind `--mux orca|herdr|vscode` (default `orca`):
 [Orca](https://github.com/stablyai/orca) (desktop ADE), [Herdr](https://herdr.dev)
 (terminal-native, persistent over SSH/mobile), and `vscode` (native VS Code integrated
-terminals via the companion extension — see [`docs/VSCODE.md`](../../docs/VSCODE.md)). All three
+terminals via the companion extension — see `.claude/docs/VSCODE.md`). All three
 now carry the two-phase wait (prove the agent STARTED before waiting for it to stop) and
 pass skip-permissions to unsupervised units; a failed unit reports its oracle output and
 whether the agent ever ran, on every backend. Wired via `orca/` in this package:
@@ -196,7 +196,7 @@ whether the agent ever ran, on every backend. Wired via `orca/` in this package:
   Workflow (background subagents), OR `vzt-agent ship-dispatch <SPEC>` → one
   `orca worktree create --agent claude` per unit (Orca panes you supervise).
 - **The worktree objection is closed here** (it still stands for fan-out): each unit
-  pane runs `orca/worktree-bootstrap.sh` first, symlinking `node_modules`/`.env*`
+  pane runs `~/.orca/vzt/worktree-bootstrap.sh` first, symlinking `node_modules`/`.env*`
   from the primary checkout — so a supervised unit *can* build and run its oracle.
 - **`vzt-agent ship-supervise <SPEC>`** runs each unit's MACHINE_CHECK in its worktree
   and records PASS/FAIL to the shared LEDGER (which resolves to the **primary
@@ -204,7 +204,7 @@ whether the agent ever ran, on every backend. Wired via `orca/` in this package:
 - **Chair pane in the primary checkout; worker panes in worktrees.** Pick the model
   each worker pane launches with — every pane is its own routed session.
 
-See `orca/README.md` for the full loop and the `orca` CLI verbs.
+See `~/.orca/vzt/README.md` for the full loop and the `orca` CLI verbs.
 
 ## Parallel waves — the mechanism
 

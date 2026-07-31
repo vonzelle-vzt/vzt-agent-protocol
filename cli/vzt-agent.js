@@ -643,7 +643,7 @@ function shipStatus(args) {
 function matrix() {
   const file = path.join(PKG_ROOT, 'docs', 'ROUTING-MATRIX.md');
   if (fs.existsSync(file)) console.log(fs.readFileSync(file, 'utf8'));
-  else console.log('docs/ROUTING-MATRIX.md not found');
+  else console.log(`${file} not found — run \`vzt-agent install\``);
 }
 
 // ——— /vzt-ship: Orca supervision — dispatch units as worktree panes ————————

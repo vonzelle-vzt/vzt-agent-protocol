@@ -96,8 +96,8 @@ none" is not missing information; it IS the diagnosis, and it means the agent ne
 started in that worktree. Do not re-dispatch before reading it.
 This STOPS at the green integration gate — **never auto-merge**; Phase 4 LAND stays
 human. Small/inline work never comes here: a single-file edit, a quick fix, or a one-off
-script is normal in-session work, not a ship run. See `orca/README.md` for the mux
-backends and `docs/VSCODE.md` for the native VS Code backend.
+script is normal in-session work, not a ship run. See `~/.orca/vzt/README.md` for the mux
+backends and `.claude/docs/VSCODE.md` for the native VS Code backend.
 
 **Fallback substrate — the headless Workflow tool** (no mux live, or `vzt-agent`
 off `PATH`). Resumable + content-cached, but not watchable. **Say which driver you
