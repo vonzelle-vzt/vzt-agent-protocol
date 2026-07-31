@@ -454,6 +454,30 @@ not enough.
 cat ~/.vzt/vscode-mux/host.json    # what is actually running
 ```
 
+**It is the MAIN PROCESS's extension registry that goes stale, not the
+extension host** — which is why the obvious shortcuts do not work. Measured:
+
+- Killing the extension host respawns it in ~4s with a **new pid and a fresh
+  `activatedAt`, still serving the old version**. It re-reads the registry the
+  main process scanned at startup.
+- That registry can be provably out of date: with `0.4.0`, `0.5.0` and `0.5.1`
+  all on disk and `.obsolete` listing `0.4.0`, the respawned host still ran
+  `0.4.0` — a build already marked for deletion. The folders and the marker
+  were all written *after* the main process's last scan.
+
+So neither `Developer: Reload Window` nor killing `Code Helper (Plugin)`
+suffices. Only restarting the process tree's root rescans the extensions
+directory. Check what actually restarted before believing a reload happened:
+
+```bash
+ps -eo pid,lstart,args | grep '[C]ode Helper (Plugin)'   # start times must be NEW
+```
+
+⚠️ **An agent working in a VS Code integrated terminal cannot do this to
+itself.** Its own chain runs through the `Code Helper` pty host to the same
+main process, so `Cmd+Q` kills the shell that would verify the result. This is a
+genuine hand-off to a human, not a step to automate.
+
 ### Reference material
 
 - **[`herdr-api-schema.protocol-17.json`](herdr-api-schema.protocol-17.json)** —
