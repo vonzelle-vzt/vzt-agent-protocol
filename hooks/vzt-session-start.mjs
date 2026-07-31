@@ -16,6 +16,10 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import os from 'node:os';
+// Shipped templates must be named by an ABSOLUTE path: the chair profile below is
+// read by an agent standing in the user's project, where `templates/` does not
+// exist. Both hooks install side by side, so this import always resolves.
+import { templateRef } from './vzt-route-classifier.mjs';
 
 const STATE_DIR = process.env.VZT_ROUTER_STATE_DIR || path.join(os.homedir(), '.claude', 'vzt-router');
 
@@ -58,7 +62,7 @@ const PROFILES = {
 - Never do file-by-file mechanical work inline. Batch delegations; pass complete context so subagents finish in one shot.
 - Long-horizon builds do NOT belong at this chair: they are spec-first process work, not frontier reasoning. Write the spec, then hand it to /vzt-ship on Opus.
 - When orchestrating multi-step work: you design and verify; workers (vzt-builder/vzt-mechanic) execute and report back — equal results at a fraction of the cost. Never promote a worker step to your own tier without a stated reason.
-- Delegate with a worker brief: FILES_IN_SCOPE (collision boundary), one-shot operation spec, MACHINE_CHECK chosen BEFORE dispatch (templates/worker-brief.md).
+- Delegate with a worker brief: FILES_IN_SCOPE (collision boundary), one-shot operation spec, MACHINE_CHECK chosen BEFORE dispatch (${templateRef('worker-brief.md')}).
 - Parallel waves: dispatch independent steps as multiple Agent calls in ONE message. FILES_IN_SCOPE sets must be pairwise disjoint. Fan out for divergence/evidence, never for correctness — Sonnet/Haiku only, never Opus/Fable. On a hard bug, /vzt-diagnose (N≤4 read-only probes in parallel) BEFORE burning this chair on serial grep work.
 - Reporting ≠ persistence: verify worker artifacts on disk (git diff, re-run the check) before accepting a report.`,
   opus: `Chair = Opus 5. Wall-clock and Opus quota are the constraints.
@@ -70,7 +74,7 @@ const PROFILES = {
 - Escalate to Fable only for those two cases: "vzt-planner"/"vzt-oracle" subagents or the /vzt-plan, /vzt-fix turn skills. Escalating to look thorough is a cost bug, not diligence.
 - On a hard bug, run /vzt-diagnose BEFORE escalating to Fable: N≤4 read-only agents test one hypothesis each in parallel and return CONFIRMED/REFUTED with pasted command output. Cheap parallel evidence first; frontier reasoning only once it is earned.
 - When orchestrating multi-step work: you design and verify; workers (vzt-builder/vzt-mechanic) execute and report back — equal results at a fraction of the cost. Never promote a worker step to your own tier without a stated reason.
-- Delegate with a worker brief: FILES_IN_SCOPE (collision boundary), one-shot operation spec, MACHINE_CHECK chosen BEFORE dispatch (templates/worker-brief.md).
+- Delegate with a worker brief: FILES_IN_SCOPE (collision boundary), one-shot operation spec, MACHINE_CHECK chosen BEFORE dispatch (${templateRef('worker-brief.md')}).
 - DELEGATION CAP — this chair over-reaches for subagents by default, so bound it. Do NOT delegate work you could finish in a handful of tool calls; a subagent re-establishes context, re-explores, reports back, and then you re-read the report. Prefer ONE subagent over several. Keep spawn counts low, and never exceed 20 parallel agents unless explicitly asked. Once you delegate, COMMIT: never redo a worker's work or re-derive its findings.
 - Parallel waves are for genuinely independent tracks (unrelated modules, a wide multi-file sweep), NOT for splitting one modest job into pieces. When steps really are independent, dispatch them as multiple Agent calls in ONE message with pairwise-disjoint FILES_IN_SCOPE. Fan out for divergence/evidence, never for correctness — Sonnet/Haiku only, never Opus/Fable.
 - Verification belongs in THIS loop. Verify external artifacts relentlessly: run the oracle yourself, and check worker output on disk (git diff, re-run the check) before accepting a report — reporting ≠ persistence. But do NOT spawn a subagent to double-check your OWN inline work, and do not pad turns with re-verification passes; this chair already self-checks without being told, so extra verify instructions buy nothing.

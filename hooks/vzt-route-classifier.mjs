@@ -22,6 +22,8 @@ import os from 'node:os';
 // Used only on the ship-block miss path (resolving a linked worktree back to its
 // primary checkout), never on the common no-active-run path.
 import { execFileSync } from 'node:child_process';
+// import.meta.dirname would do, but engines allow node 18, where it does not exist.
+import { fileURLToPath } from 'node:url';
 
 const STATE_DIR = process.env.VZT_ROUTER_STATE_DIR || path.join(os.homedir(), '.claude', 'vzt-router');
 
@@ -499,7 +501,7 @@ export function directive(result, chair) {
   } else if (result.kind === 'ui' && result.tier === 'opus') {
     lines.push(
       '  action: VISUAL task with NO taste cache — do NOT hand-style one screen. The taste has to come from the model, which means from THIS tier, which means it should be written down ONCE instead of re-derived on every prompt for the rest of the project.',
-      `  step 1: write DESIGN.md at the project root — inline at effort high if this chair is Opus or Fable, otherwise delegate to the "${t.agents.ui}" subagent, or invoke /vzt-ui when the look needs the conversation. Start from templates/DESIGN.md, and derive every value by READING the repo's real token layer (tokens.css / globals.css @theme / theme.ts) — a DESIGN.md naming tokens the code does not have is worse than none.`,
+      `  step 1: write DESIGN.md at the project root — inline at effort high if this chair is Opus or Fable, otherwise delegate to the "${t.agents.ui}" subagent, or invoke /vzt-ui when the look needs the conversation. Start from ${templateRef('DESIGN.md')}, and derive every value by READING the repo's real token layer (tokens.css / globals.css @theme / theme.ts) — a DESIGN.md naming tokens the code does not have is worse than none.`,
       '  step 2: apply it to the screen that was actually asked for — that one, and no others. A cache is proved by being applied once, not by being long. An unapplied DESIGN.md is a document, and a document is a tax.',
       `  step 3: everything after this routes DOWN, automatically. Once DESIGN.md exists the classifier sends visual work to "${TIERS.sonnet.agents.ui}" (Sonnet) on its own, because the judgement is on disk instead of in the tier. This turn is the only expensive one — spend it properly.`,
       '  why NOT Sonnet: this is a taste question with no answer written down yet, and taste is the one axis where the tiers genuinely differ (see the Taste column in docs/ROUTING-MATRIX.md). Sonnet APPLYING a written spec is indistinguishable from Opus applying it; Sonnet INVENTING the spec is not, and the difference compounds across every screen built afterwards.',
@@ -616,6 +618,44 @@ function primaryCheckoutRoot(dir) {
   } catch {
     return null; // git missing or not a repo — caller falls back to cwd
   }
+}
+
+// ——— Shipped templates: name them by a path that RESOLVES ————————————————
+//
+// The doctrine tells an agent to "start from the DESIGN.md template". The agent
+// reading that line stands in the USER's project, where there is no templates/
+// directory — the file lives under .claude/, next to the hooks. So a bare
+// relative reference resolved to nothing on every project, and the agent
+// reported the template as missing while a good 10KB copy sat on disk.
+//
+// Resolve from where THIS FILE was installed instead. That is the one location
+// that is correct for both install shapes: a project install puts us at
+// <project>/.claude/hooks/vzt-router/, a global one at ~/.claude/hooks/vzt-router/,
+// and the templates are two levels up either way. Falling back to the global
+// home covers the case where a project install predates a template being added.
+//
+// Returning null rather than a best guess is the whole point — a path that
+// lies is worse than an admission, because the agent will "fix" the wrong file.
+const TEMPLATES_HOME = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..', 'templates');
+const TEMPLATES_FALLBACK = path.join(os.homedir(), '.claude', 'templates');
+
+/**
+ * Absolute path to a shipped template, or null if it is not installed.
+ * @param {string} name e.g. 'DESIGN.md'
+ */
+export function installedTemplate(name) {
+  for (const dir of [TEMPLATES_HOME, TEMPLATES_FALLBACK]) {
+    const p = path.join(dir, name);
+    try {
+      if (fs.statSync(p).isFile()) return p;
+    } catch { /* not there — try the fallback */ }
+  }
+  return null;
+}
+
+/** The same path, phrased for injection: either a real path or an honest repair instruction. */
+export function templateRef(name) {
+  return installedTemplate(name) || `${name} (NOT INSTALLED — run \`vzt-agent install\`)`;
 }
 
 // ——— DESIGN.md: the taste cache ————————————————————————————————————————

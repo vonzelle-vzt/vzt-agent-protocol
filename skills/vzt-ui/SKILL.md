@@ -53,8 +53,13 @@ solves one page and leaves the next thirty to guesswork.
    and the discrepancy goes in `## Known gaps`.
 4. **Choose the oracle and record the baseline** — see Compliance below. Run it, write the
    real numbers in.
-5. **Write `DESIGN.md`** from `templates/DESIGN.md`, at the repo **root** (that placement is
+5. **Write `DESIGN.md`** from `.claude/templates/DESIGN.md`, at the repo **root** (that placement is
    why it gets read, the same reason `CLAUDE.md` works).
+
+   > **Where the template lives.** It ships with the protocol, not with your project:
+   > `.claude/templates/DESIGN.md` for a project install, `~/.claude/templates/DESIGN.md` for a
+   > global one. There is **no `templates/` directory at a repo root** — looking for one there
+   > is what makes an otherwise-installed template report as missing.
 6. **Add the pointer.** One line in the repo's `CLAUDE.md`: *read `DESIGN.md` before writing
    or restyling UI.* Per the audit this line is the highest-leverage part of the whole
    convention — a design doc nothing is told to read is a design doc nothing reads.
@@ -89,7 +94,7 @@ code in the repo and gets switched off within a week.
 **Baseline-and-ratchet.** Record today's counts; fail on an *increase*. This is what lets a
 repo with real debt adopt the file today instead of never.
 
-Full commands live in `templates/DESIGN.md` under `## Compliance`, and get copied into each
+Full commands live in `.claude/templates/DESIGN.md` under `## Compliance`, and get copied into each
 repo's own `DESIGN.md` with that repo's numbers. Wire it into the merge gates next to
 typecheck/test/build.
 

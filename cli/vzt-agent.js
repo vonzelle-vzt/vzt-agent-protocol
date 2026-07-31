@@ -25,7 +25,7 @@ const PKG_ROOT = path.resolve(__dirname, '..');
 const AGENT_FILES_DIR = path.join(PKG_ROOT, 'agents');
 const SKILLS_DIR = path.join(PKG_ROOT, 'skills');
 const HOOKS_DIR = path.join(PKG_ROOT, 'hooks');
-// The doctrine tells every session to delegate using templates/worker-brief.md.
+// The doctrine tells every session to delegate using .claude/templates/worker-brief.md.
 // If we don't install it, that instruction points at nothing — the brief gets
 // improvised, and MACHINE_CHECK drifts to being chosen AFTER the diff exists.
 const TEMPLATES_DIR = path.join(PKG_ROOT, 'templates');

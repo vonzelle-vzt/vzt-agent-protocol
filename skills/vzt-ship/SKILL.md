@@ -27,7 +27,12 @@ a file. Same coherence, no wall-clock tax.
 
 **You are forbidden from editing a source file in this phase.** Read the codebase
 first — Gate 2, evidence before reasoning — then write `.vzt/ship/<slug>/SPEC.md`
-from `templates/spec.md`:
+from `.claude/templates/spec.md`:
+
+> **Where the templates live.** They ship with the protocol, not with your project:
+> `.claude/templates/<name>` for a project install, `~/.claude/templates/<name>` for a global
+> one. There is **no `templates/` directory at a repo root** — looking for one there is what
+> makes an otherwise-installed template report as missing.
 
 1. **Contract** — the behavioral done-state a stranger could check.
    **Out of scope** — explicit; it is the list of things a worker may not
@@ -119,7 +124,7 @@ If the session dies or you edit the script, resume with
 (content-hashed per call, so editing one unit does not re-run the others).
 
 **Fallback when Workflow is unavailable** — dispatch the units yourself as
-**named** background agents, one brief each from `templates/worker-brief.md`, and
+**named** background agents, one brief each from `.claude/templates/worker-brief.md`, and
 supervise them via the correction protocol there (SendMessage by name; ≤2 rounds).
 Same spec, same oracles, same ledger. You lose resumability, not rigor.
 
@@ -158,7 +163,7 @@ on every prompt exists precisely so you cannot forget this.)
 
 ## When NOT to use this
 
-- **One unit.** A spec with one unit is a worker brief. Use `templates/worker-brief.md`.
+- **One unit.** A spec with one unit is a worker brief. Use `.claude/templates/worker-brief.md`.
 - **The oracle doesn't exist yet** — a design spike, "does this even work". Spike
   on `/vzt-build` first, then ship the real thing.
 - **It's a question of approach, not of scale.** That's `/vzt-plan`. `/vzt-ship`

@@ -108,7 +108,7 @@ export function validateSpec(spec) {
     return errs; // everything below assumes units exist
   }
   if (spec.units.length === 1 && !spec.barrier) {
-    errs.push('a one-unit spec is a worker brief, not a ship run — use templates/worker-brief.md');
+    errs.push('a one-unit spec is a worker brief, not a ship run — use .claude/templates/worker-brief.md');
   }
   if (!spec.integration || !spec.integration.machineCheck) {
     errs.push('missing integration.machineCheck — per-unit oracles are local and cannot see cross-unit breakage');

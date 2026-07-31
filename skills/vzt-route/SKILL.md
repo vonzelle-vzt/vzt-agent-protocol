@@ -112,7 +112,7 @@ written down, applying it is execution rather than judgement — so it routes do
 
 - **Subagent (Agent tool)**: work that is self-contained once briefed. Pass
   complete context; the agent's model comes from its frontmatter. Structure the
-  delegation as a worker brief (templates/worker-brief.md): FILES_IN_SCOPE as a
+  delegation as a worker brief (.claude/templates/worker-brief.md): FILES_IN_SCOPE as a
   collision boundary, a one-shot operation spec, and MACHINE_CHECK + EXPECT
   chosen before dispatch. On report-back, verify artifacts on disk — reporting
   ≠ persistence — and re-run the MACHINE_CHECK yourself on load-bearing steps.

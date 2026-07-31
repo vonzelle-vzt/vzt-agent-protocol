@@ -5,7 +5,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { execFileSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
-import { classify, suggestEffort, directive, TIERS } from '../hooks/vzt-route-classifier.mjs';
+import { classify, suggestEffort, directive, TIERS, installedTemplate } from '../hooks/vzt-route-classifier.mjs';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const REPO_ROOT = path.resolve(__dirname, '..');
@@ -467,6 +467,59 @@ test('every file path the doctrine references is actually installed', () => {
     assert.ok(rules.install.test(cli), `doctrine references ${ref} but cli/vzt-agent.js never installs ${dir}/`);
     assert.ok(rules.uninstall.test(cli), `cli/vzt-agent.js installs ${dir}/ but uninstall() never removes it`);
   }
+});
+
+// The guard above proves the file is INSTALLED. It never proved the reference
+// RESOLVES from where the agent reading it actually stands — and it does not.
+// An agent's cwd is the USER's project root; `templates/` lives under .claude/.
+// No project has a root-level templates/ directory, so every bare reference
+// resolved to nothing, 100% of the time. That is how a 10KB DESIGN.md sitting
+// correctly on disk gets reported as "missing" on every retrofit.
+//
+// Installation guarded, resolution not — the v1.4.0 bug one level deeper.
+test('doctrine names templates by a path that RESOLVES from the agent cwd', () => {
+  // Static surfaces must carry the .claude/ prefix. Runtime surfaces (the hooks)
+  // must not carry a literal path at all — they interpolate installedTemplate(),
+  // which is the only form that is correct for BOTH a global and a project
+  // install, so a bare literal there is a bug even if it were prefixed.
+  const surfaces = [
+    ...fs.readdirSync(path.join(REPO_ROOT, 'hooks')).map((f) => `hooks/${f}`),
+    ...fs
+      .readdirSync(path.join(REPO_ROOT, 'skills'))
+      .map((d) => `skills/${d}/SKILL.md`)
+      .filter((f) => fs.existsSync(path.join(REPO_ROOT, f))),
+    ...fs.readdirSync(path.join(REPO_ROOT, 'agents')).filter((f) => f.endsWith('.md')).map((f) => `agents/${f}`),
+    'cli/vzt-agent.js',
+    'cli/ship-lib.mjs',
+  ];
+  assert.ok(surfaces.length >= 20, `expected the whole doctrine surface, found ${surfaces.length}`);
+
+  // A `templates/x.md` NOT already prefixed by `.claude/`.
+  const BARE = /(?<!\.claude\/)templates\/[A-Za-z0-9._-]+\.(?:md|js|sh)/g;
+  const offenders = [];
+  for (const rel of surfaces) {
+    const text = fs.readFileSync(path.join(REPO_ROOT, rel), 'utf8');
+    for (const m of text.matchAll(BARE)) {
+      offenders.push(`${rel}: "${m[0]}" — write ".claude/${m[0]}", or interpolate installedTemplate() in a hook`);
+    }
+  }
+  assert.deepEqual(
+    offenders,
+    [],
+    `doctrine points agents at a path that does not exist from a project root:\n  ${offenders.join('\n  ')}`
+  );
+});
+
+// The resolver is the whole fix for the runtime surfaces; if it silently
+// returns a non-existent path we are back to shipping a lie, just a longer one.
+test('installedTemplate() returns a real absolute path, or null — never a guess', () => {
+  for (const name of fs.readdirSync(path.join(REPO_ROOT, 'templates')).filter((f) => f.endsWith('.md'))) {
+    const resolved = installedTemplate(name);
+    assert.ok(resolved !== null, `installedTemplate(${name}) returned null while the template is right there in the repo`);
+    assert.ok(path.isAbsolute(resolved), `installedTemplate(${name}) returned "${resolved}", which is not absolute`);
+    assert.ok(fs.existsSync(resolved), `installedTemplate(${name}) returned "${resolved}", which does not exist`);
+  }
+  assert.equal(installedTemplate('no-such-template.md'), null, 'a missing template must be null, not a path that lies');
 });
 
 test('the ship spec template encodes the machine-readable contract', () => {

@@ -53,7 +53,7 @@ forever. You are not the permanent home of visual work — you are how it become
 
 ## Deliverable
 
-A `DESIGN.md` at the repo root, generated from `templates/DESIGN.md`, every value traced to a
+A `DESIGN.md` at the repo root, generated from `.claude/templates/DESIGN.md`, every value traced to a
 real line in the token source. Final message: what you read to derive it → the `## Compliance`
 command with its actual output and baseline → the gaps you recorded and why → the one screen
 you applied it to.
