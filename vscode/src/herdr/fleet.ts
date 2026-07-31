@@ -17,6 +17,7 @@ import { HerdrClient } from "./client";
 import { FLEET_SUBSCRIPTIONS, FleetModel } from "./model";
 import { AgentNode, FleetTreeProvider, type FleetNode } from "./fleetTree";
 import { FleetStatusBar } from "./status";
+import { registerHerdrReview } from "./review";
 
 export const VIEW_ID = "herdrFleet.agents";
 
@@ -115,4 +116,10 @@ export function registerHerdrFleet(context: vscode.ExtensionContext, log: vscode
       await view.reveal(new AgentNode(blocked), { select: true, focus: true, expand: true });
     })
   );
+
+  // --- the review loop ------------------------------------------------------
+  // Registered unconditionally alongside the view. It owns a CommentController
+  // and some commands; neither touches the socket until you actually send, so
+  // it costs nothing on a window that never reviews anything.
+  registerHerdrReview(context, log, model, client);
 }

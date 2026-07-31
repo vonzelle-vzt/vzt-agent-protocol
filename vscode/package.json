@@ -2,7 +2,7 @@
   "name": "vzt-mux",
   "displayName": "VZT Ship Mux",
   "description": "Runs VZT Agent Protocol ship units as native VS Code integrated terminals, with a live Ship Run tree — per-unit status, worktree diffs mid-run, and one-click oracle re-runs.",
-  "version": "0.4.0",
+  "version": "0.5.0",
   "publisher": "vzt",
   "engines": {
     "vscode": "^1.85.0"
@@ -92,6 +92,29 @@
       {
         "command": "vzt-mux.herdr.revealBlocked",
         "title": "Herdr: Reveal Blocked Agent"
+      },
+      {
+        "command": "vzt-mux.herdr.reviewChanges",
+        "title": "Herdr: Review Changes",
+        "icon": "$(git-compare)"
+      },
+      {
+        "command": "vzt-mux.herdr.sendReview",
+        "title": "Herdr: Send Review Comments to Agent",
+        "icon": "$(comment-discussion)"
+      },
+      {
+        "command": "vzt-mux.herdr.discardReview",
+        "title": "Herdr: Discard Review Comments"
+      },
+      {
+        "command": "vzt-mux.herdr.addComment",
+        "title": "Add Comment"
+      },
+      {
+        "command": "vzt-mux.herdr.deleteThread",
+        "title": "Delete Comment Thread",
+        "icon": "$(trash)"
       }
     ],
     "configuration": {
@@ -120,6 +143,11 @@
           "command": "vzt-mux.herdr.refresh",
           "when": "view == herdrFleet.agents",
           "group": "navigation"
+        },
+        {
+          "command": "vzt-mux.herdr.reviewChanges",
+          "when": "view == herdrFleet.agents",
+          "group": "navigation"
         }
       ],
       "view/item/context": [
@@ -137,6 +165,49 @@
           "command": "vzt-mux.rerunOracle",
           "when": "view == vztShipRun && viewItem == vztUnit",
           "group": "inline@3"
+        },
+        {
+          "command": "vzt-mux.herdr.sendReview",
+          "when": "view == herdrFleet.agents && viewItem == herdrAgent",
+          "group": "inline@1"
+        },
+        {
+          "command": "vzt-mux.herdr.focusAgent",
+          "when": "view == herdrFleet.agents && viewItem == herdrAgent",
+          "group": "1_herdr@1"
+        },
+        {
+          "command": "vzt-mux.herdr.sendReview",
+          "when": "view == herdrFleet.agents && viewItem == herdrAgent",
+          "group": "1_herdr@2"
+        }
+      ],
+      "comments/commentThread/context": [
+        {
+          "command": "vzt-mux.herdr.addComment",
+          "when": "commentController == vzt-mux.herdr.review",
+          "group": "inline@1"
+        }
+      ],
+      "comments/commentThread/title": [
+        {
+          "command": "vzt-mux.herdr.deleteThread",
+          "when": "commentController == vzt-mux.herdr.review",
+          "group": "navigation@1"
+        }
+      ],
+      "commandPalette": [
+        {
+          "command": "vzt-mux.herdr.addComment",
+          "when": "false"
+        },
+        {
+          "command": "vzt-mux.herdr.deleteThread",
+          "when": "false"
+        },
+        {
+          "command": "vzt-mux.herdr.focusAgent",
+          "when": "false"
         }
       ]
     }

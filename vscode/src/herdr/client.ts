@@ -8,7 +8,10 @@
  * VS Code windows reload on every extension update and die with the app; an
  * agent parented to this process would die with it. Nothing in this file may
  * start, own, or parent an agent — no `agent.start`, no `pane.split`, no
- * spawning the herdr binary. The daemon runs the fleet; we only look at it.
+ * spawning the herdr binary. The daemon runs the fleet; we talk to it.
+ *
+ * Exactly two writes exist, both of which act on an agent herdr already owns:
+ * `pane.focus` and `agent.prompt`. Adding a third is a decision, not a detail.
  *
  * TWO CONNECTION MODES, because the server demands it (verified against 0.7.5):
  *
@@ -184,9 +187,29 @@ export class HerdrClient implements vscode.Disposable {
     return result.snapshot;
   }
 
-  /** Focus a pane in the daemon. The ONLY write this extension performs. */
+  /** Focus a pane in the daemon. */
   async focusPane(paneId: string): Promise<void> {
     await this.request("pane.focus", { pane_id: paneId });
+  }
+
+  /**
+   * Submit a prompt to an agent. The second and last write this extension makes.
+   *
+   * `target` IS A PANE ID and nothing else. Measured against 0.7.5 with
+   * `agent.get`, which takes the same target string: `w5G:p1` resolves, while
+   * the workspace label ("BlackOps Trading"), the workspace id (`w5G`) and the
+   * terminal title ("admin-ui-rebuild") each come back `agent_not_found`.
+   *
+   * So every caller must pass a `pane_id` straight off the model — never a
+   * display name. Resolving a human-readable label here would be a lookup that
+   * can miss, and missing means the review lands in the WRONG agent, which is
+   * the one failure this whole surface must not have.
+   *
+   * Note this does not start, own or parent an agent: herdr owns the process,
+   * we hand it text. That invariant is intact.
+   */
+  async prompt(paneId: string, text: string): Promise<void> {
+    await this.request("agent.prompt", { target: paneId, text });
   }
 
   // --- event stream --------------------------------------------------------
