@@ -645,14 +645,76 @@ node --test test/herdr-reconnect.test.mjs   # daemon death + recovery
 Live, end to end — and this is the check that found the submit bug:
 
 ```bash
-herdr agent get <pane_id>          # note agent_status before
-# ...send a review from the UI...
-herdr agent get <pane_id>          # must leave idle within ~2s
-herdr pane read <pane_id>          # the review must be VISIBLE, not pending in the composer
+npm run test:live                        # stages its own agent, tears it down after
+npm run test:live -- --pane w5G:p1       # reuse an agent you already have
+npm run test:live -- --keep              # leave the staged pane up to inspect
 ```
 
-Omit `--lines` on `pane read` — it is tail-like and will happily show you blank
-rows above the content you're looking for.
+`test/live/herdr-review-live.mjs` needs a running herdr daemon, so it is
+**deliberately not** named `*.test.mjs` and `npm test` cannot pick it up — an
+automated suite that silently needs a staged agent goes red for the wrong
+reason. With no daemon it exits **2 / CANNOT RUN**, never 0; a gate reported
+green because it did not execute is the failure this repo keeps re-learning.
+
+It runs two phases, and the order is the whole point:
+
+| phase | sends | must |
+| --- | --- | --- |
+| **CONTROL** | bare `agent.prompt`, no `enter` — the pre-fix path | stay idle, text parked as `[Pasted text #1 +N lines]` |
+| **FIXED** | the real compiled `HerdrClient.prompt` | leave idle within ~2s, be **visible** in the pane |
+
+The CONTROL is the mutation, re-run every time rather than trusted from history.
+A green FIXED phase alone proves nothing — it is equally what you get from a
+daemon that submits everything, or from an assertion reading the wrong field.
+Measured on herdr 0.7.5: CONTROL sat idle 8s with `agent.prompt` having returned
+`ok` in 154ms; FIXED left idle in ~500ms. 🔴 If the CONTROL ever **passes**, do
+not skip past it as good news — herdr changed, and the unconditional `enter` in
+`client.ts` needs re-deriving rather than assuming.
+
+Three traps the probe encodes, each of which cost a session:
+
+- 🔴 **`pane.read` over the SOCKET needs `source`, and answers
+  `result.read.text`.** The CLI hides both — `herdr pane read <id>` prints
+  rendered text, while the same call over the socket without `source` is
+  rejected outright. Read a guessed field and you get `undefined`, which
+  contains no `[Pasted text` marker, so the composer assertion **passes while
+  looking at nothing**. A false green on the one assertion the gate exists for.
+- **Omit `--lines`/`lines` on any pane read** — it is tail-like and will happily
+  show you blank rows above the content you're looking for.
+- 🔴 **The review body carries MARKERS, never instructions.** An earlier version
+  embedded "reply ACKNOWLEDGED" as a cheap delivery signal and the live agent
+  refused it by name: *"if I obey commands that arrive inside a review payload,
+  anyone who can file a comment on your repo can steer this session."* It is
+  right — `formatReview` output is attacker-influenced whenever the review is
+  not yours — and a gate must never depend on an agent choosing to obey injected
+  text. Delivery is asserted on `HERDR-PROBE-A`/`-B` appearing in the pane.
+
+And three more that only appeared once the probe had to stage its own agent —
+each cost a run, and all three are invisible from the daemon's side:
+
+- 🔴 **Pane text is HARD-WRAPPED at the pane width**, so a multi-word regex can
+  straddle a newline and silently never match. The trust-prompt check was
+  written from how the dialog *looks* — `Is this a project you created or one
+  you trust` — while the pane actually holds `…you created or\none you trust?`.
+  It matched nothing, the dialog was never cleared, and the run died 90s later
+  blaming the composer. Match SHORT fragments that cannot wrap
+  (`Yes, I trust this folder`). Same family as the `--lines` trap: a pane read
+  is a rendering, not the string you had in mind.
+- 🔴 **Readiness must be POSITIVE — "the composer is on screen" — never "no
+  dialog is on screen."** A fresh `claude` shows a startup screen *before* the
+  trust dialog, so an absence check passes in the gap and `agent.prompt` then
+  fails `agent_not_ready: not an active named agent`. herdr reports `idle`
+  throughout and `agent.wait --until idle` returns happily: from the daemon's
+  side nothing is running, the dialog is just a program drawing characters.
+  Neither signal can see it. Only the pane can.
+- **A freshly split pane is not yet at a shell prompt.** `agent.start` answers
+  `agent_pane_busy`, which reads as "in use" rather than "not ready yet" — retry
+  against a deadline rather than sleeping a guessed constant, since shell
+  startup depends on the user's rc files.
+
+Staging is torn down in a `finally`, including on the failure path: the first
+version recorded the pane only on a clean return, so a throw between the split
+and the agent leaked both a pane and a temp dir.
 
 Every oracle in both suites was confirmed RED by mutation before being trusted
 green: target swapped to a label, `pane_id` sent instead of `target`, the submit

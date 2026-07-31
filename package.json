@@ -29,6 +29,7 @@
     "install:project": "node cli/vzt-agent.js install",
     "install:global": "node cli/vzt-agent.js install --global",
     "test": "node --test 'test/*.test.mjs'",
+    "test:live": "node test/live/herdr-review-live.mjs",
     "doctor": "node cli/vzt-agent.js doctor"
   },
   "engines": {
