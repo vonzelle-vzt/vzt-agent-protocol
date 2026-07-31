@@ -216,7 +216,12 @@ function install(args) {
   const settingsPath = wireSettings(dotClaude, { portable: !args.global });
 
   console.log(`  agents:   ${agents.length} installed (fable×2, opus×4, sonnet×2, haiku×2)`);
-  console.log(`  skills:   ${skills.length} files installed (/vzt-route /vzt-design /vzt-plan /vzt-fix /vzt-build /vzt-quick /vzt-fable-mode /vzt-diagnose /vzt-ship /vzt-ui)`);
+  // Derived, never restated. This line hardcoded its ten skill names, so adding
+  // an eleventh (herdr-extensions) would have installed it while reporting it
+  // did not — the same drift that let AGENT_TYPES omit two agents and the README
+  // claim "Seven agents" while listing eight. Parse the source of truth.
+  const skillNames = fs.existsSync(SKILLS_DIR) ? fs.readdirSync(SKILLS_DIR).sort() : [];
+  console.log(`  skills:   ${skills.length} files installed (${skillNames.map((s) => `/${s}`).join(' ')})`);
   console.log(`  hooks:    ${hooks.length} installed (SessionStart chair-profile + UserPromptSubmit classifier + vscode-mux lifecycle sentinels on SessionStart/PermissionRequest/Stop)`);
   console.log(`  templates: ${templates.length} installed (worker-brief delegation contract, ship spec, DESIGN.md taste cache)`);
   console.log(`  workflows: ${workflows.length} installed (vzt-ship long-horizon orchestration)`);
