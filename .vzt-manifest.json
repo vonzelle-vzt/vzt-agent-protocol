@@ -1,0 +1,29 @@
+{
+  "vzt_version": "3.0.0",
+  "initialized": "2026-08-01T22:54:08.012Z",
+  "last_sync": "2026-08-01T22:54:08.012Z",
+  "installation_history": [
+    {
+      "timestamp": "2026-08-01T22:54:08.012Z",
+      "platforms": [
+        "codex"
+      ],
+      "modules": [
+        "steps"
+      ]
+    }
+  ],
+  "project_info": {
+    "name": "vzt-agent-protocol",
+    "version": "1.16.0"
+  },
+  "commands_run": {},
+  "pending_updates": [],
+  "section_inventory": {},
+  "installed_platforms": [
+    "codex"
+  ],
+  "installed_modules": [
+    "steps"
+  ]
+}
