@@ -241,6 +241,24 @@ primary checkout, so a worktree can actually build), and the ledger resolves to 
 *not* the fan-out that `vzt-route` rejects — units within a wave are pairwise-disjoint,
 not a race. Full guide: [`orca/README.md`](orca/README.md).
 
+## Claude + Codex collaboration
+
+This repo carries a Codex-facing [`AGENTS.md`](AGENTS.md) and a shared
+[`docs/CLAUDE-CODEX-COLLABORATION.md`](docs/CLAUDE-CODEX-COLLABORATION.md)
+contract. Claude Code owns orchestration, product interpretation, and HITL
+gates; Codex owns bounded implementation, mechanical refactors, focused review,
+and local verification.
+
+Use files, not memory, for work that must survive compaction or an agent
+handoff: `.vzt/team/handoff.md`, `.vzt/team/decisions.md`,
+`.vzt/team/verification.md`, and dated review notes under `.vzt/team/reviews/`.
+
+When this execution-layer repo changes routing doctrine, model tiers, worker
+briefs, hook wiring, ship orchestration, or VS Code mux behavior, mirror the
+corresponding protocol note into the sibling
+`../VZT-Tech-Consulting-Protocol` checkout before release. If the sibling repo
+is dirty, patch only the relevant docs/templates and preserve unrelated work.
+
 ## Visual work — `DESIGN.md` is a taste cache
 
 Visual work was the one kind this protocol was blind to. *"Restyle the dashboard"*,
@@ -325,6 +343,19 @@ vzt-agent ship-supervise <SPEC.md> [--mux orca|herdr|vscode]                   #
 Get the bare `vzt-agent` command with `npm install -g github:vonzelle-vzt/vzt-agent-protocol`,
 or prefix any of the above with `npx github:vonzelle-vzt/vzt-agent-protocol`
 (from a clone: `node cli/vzt-agent.js`).
+
+## Maintenance gate
+
+Before release, run:
+
+```bash
+npm run verify
+```
+
+That runs the main `node:test` suite, root and VS Code npm audits, the VS Code
+TypeScript compile, and an npm dry-run package check. The root package uses an
+explicit `files` allowlist so local `.claude/`, `.codex/`, `.vzt/`, and test
+state do not leak into install tarballs.
 
 ## The process is the moat — the five Fable layers
 

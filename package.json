@@ -25,13 +25,34 @@
   "bin": {
     "vzt-agent": "cli/vzt-agent.js"
   },
+  "files": [
+    "agents/",
+    "cli/",
+    "docs/",
+    "hooks/",
+    "orca/",
+    "scripts/",
+    "skills/",
+    "templates/",
+    "workflows/",
+    "vscode/",
+    "vscode-paste-image/",
+    "AGENTS.md",
+    "README.md",
+    "LICENSE"
+  ],
   "scripts": {
     "install:project": "node cli/vzt-agent.js install",
     "install:global": "node cli/vzt-agent.js install --global",
     "test": "node --test 'test/*.test.mjs'",
     "test:live": "node test/live/herdr-review-live.mjs",
     "doctor": "node cli/vzt-agent.js doctor",
-    "codex:auto": "bash scripts/codex-full-auto.sh"
+    "codex:auto": "bash scripts/codex-full-auto.sh",
+    "audit:root": "npm audit",
+    "audit:vscode": "npm --prefix vscode audit",
+    "compile:vscode": "npm --prefix vscode run compile",
+    "pack:dry": "npm pack --dry-run",
+    "verify": "npm test && npm run audit:root && npm run audit:vscode && npm run compile:vscode && npm run pack:dry"
   },
   "engines": {
     "node": ">=18"
