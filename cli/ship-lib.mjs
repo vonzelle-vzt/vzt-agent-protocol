@@ -10,6 +10,7 @@
  * This module is the part of that which must not be left to a model's judgment:
  *   parseSpec     — pull the machine-readable block out of SPEC.md
  *   validateSpec  — turn the collision boundary into a non-zero exit code
+ *   planWaves     — turn `dependsOn` into the order units may actually run in
  *   reduceLedger  — reconstruct run state from an append-only log
  *
  * Pure, zero-dep, no I/O. The CLI does the reading; this does the thinking.
@@ -78,6 +79,27 @@ export function parseSpec(markdown) {
   }
 }
 
+/**
+ * Is `p` covered by a FILES_IN_SCOPE entry?
+ *
+ * ONE definition, deliberately, because there are two consumers and they must
+ * not drift: validateSpec uses it to decide whether a manifest file has an
+ * owner, and the runtime scope audit uses it to decide whether a unit wrote
+ * somewhere it shouldn't. If they disagreed, a directory scope would be legal
+ * to the validator and a breach to the auditor (or the reverse), and every unit
+ * declaring one would fail for a reason found nowhere in the spec.
+ *
+ * An entry ending in `/` claims a subtree; anything else claims that exact file
+ * (and, for convenience, the subtree under a bare directory name).
+ */
+export function pathInScope(p, scope) {
+  const f = String(p).replace(/^\.\//, '');
+  return (scope || []).some((raw) => {
+    const s = String(raw).replace(/^\.\//, '');
+    return s.endsWith('/') ? f.startsWith(s) : f === s || f.startsWith(`${s}/`);
+  });
+}
+
 /** Every unit that owns files: the barrier (if present) plus the units. */
 function allUnits(spec) {
   return [spec.barrier, ...(Array.isArray(spec.units) ? spec.units : [])].filter(Boolean);
@@ -143,6 +165,12 @@ export function validateSpec(spec) {
     }
   }
 
+  // The DAG. `dependsOn` is what lets a unit CONSUME another unit's output
+  // instead of racing it, so a bad edge is not a style problem: an edge naming a
+  // unit that does not exist silently drops the ordering, and a cycle makes the
+  // scheduler dispatch nothing at all. Both must be exit codes, not surprises.
+  errs.push(...validateDeps(spec));
+
   // Every planned file must be owned by exactly one unit. A file in the manifest
   // that no unit owns is a file nobody will write — the run would "succeed" with
   // the deliverable missing.
@@ -153,11 +181,125 @@ export function validateSpec(spec) {
         errs.push('manifest entry has no path');
         continue;
       }
-      if (!owner.has(p)) errs.push(`manifest file "${p}" is owned by no unit — nobody will write it`);
+      // Exact claim first (it names the owning unit in the error), then the
+      // subtree form, so `filesInScope: ["src/api/"]` legitimately owns
+      // `src/api/x.ts` — the same rule the runtime scope audit applies.
+      if (!owner.has(p) && !pathInScope(p, [...owner.keys()]))
+        errs.push(`manifest file "${p}" is owned by no unit — nobody will write it`);
     }
   }
 
   return errs;
+}
+
+/**
+ * Read a unit's declared dependencies as a clean array of ids.
+ *
+ * The barrier is an IMPLICIT dependency of every unit — it runs first and alone
+ * by construction — so it never appears here and naming it is rejected by
+ * validateDeps rather than silently honoured. One rule, one place.
+ */
+export function depsOf(u) {
+  return Array.isArray(u && u.dependsOn) ? u.dependsOn.filter((d) => typeof d === 'string' && d.trim()) : [];
+}
+
+/**
+ * Validate the dependency edges. Returns violations — empty means valid.
+ *
+ * Split out of validateSpec so the cycle check is testable on its own; called
+ * from validateSpec so there is still exactly ONE gate a spec has to pass.
+ */
+function validateDeps(spec) {
+  const errs = [];
+  const units = Array.isArray(spec.units) ? spec.units : [];
+  const ids = new Set(units.map((u) => u.id).filter(Boolean));
+  const barrierId = spec.barrier && spec.barrier.id;
+
+  for (const u of units) {
+    const id = u.id || '<unnamed>';
+    if (u.dependsOn !== undefined && !Array.isArray(u.dependsOn)) {
+      errs.push(`unit ${id}: dependsOn must be an array of unit ids`);
+      continue;
+    }
+    for (const d of depsOf(u)) {
+      if (d === u.id) errs.push(`unit ${id}: dependsOn lists itself`);
+      else if (barrierId && d === barrierId)
+        errs.push(`unit ${id}: dependsOn names the barrier "${d}" — the barrier is an implicit dependency of every unit; remove it`);
+      else if (!ids.has(d)) errs.push(`unit ${id}: dependsOn names unknown unit "${d}"`);
+    }
+  }
+
+  // Kahn: whatever cannot be peeled off is, by definition, inside a cycle.
+  // Reported by name — "there is a cycle" is not an actionable error message.
+  const indeg = new Map();
+  const dependents = new Map();
+  for (const u of units) {
+    if (!u.id) continue;
+    const deps = depsOf(u).filter((d) => ids.has(d) && d !== u.id);
+    indeg.set(u.id, deps.length);
+    for (const d of deps) {
+      if (!dependents.has(d)) dependents.set(d, []);
+      dependents.get(d).push(u.id);
+    }
+  }
+  const queue = [...indeg.keys()].filter((id) => indeg.get(id) === 0);
+  let settled = 0;
+  while (queue.length) {
+    const id = queue.shift();
+    settled++;
+    for (const next of dependents.get(id) || []) {
+      indeg.set(next, indeg.get(next) - 1);
+      if (indeg.get(next) === 0) queue.push(next);
+    }
+  }
+  if (settled < indeg.size) {
+    const stuck = [...indeg.keys()].filter((id) => indeg.get(id) > 0);
+    errs.push(`dependsOn cycle: ${stuck.join(' → ')} can never run — every one waits on another`);
+  }
+
+  return errs;
+}
+
+/**
+ * Group the units into dependency WAVES: everything in wave N may run in
+ * parallel, and wave N+1 may not start until wave N has landed.
+ *
+ * Two agents "bump heads" in two different ways. The one this repo already
+ * solved is spatial — two units writing one file — killed at plan time by the
+ * pairwise-disjoint FILES_IN_SCOPE gate. This is the OTHER one, the temporal
+ * kind: a unit that reads what another unit is still writing. Disjoint scopes
+ * say nothing about that, because reading is not writing.
+ *
+ * Order inside a wave is spec order, so the result is deterministic and a run
+ * is reproducible. A spec with no `dependsOn` anywhere yields exactly one wave —
+ * which is the flat fan-out this replaced, so old specs behave identically.
+ *
+ * Assumes the spec passed validateSpec: a cycle is dropped rather than hung on
+ * (never silently — validateSpec has already refused the run by then).
+ *
+ * @returns {Array<Array<object>>} waves of unit objects (never the barrier)
+ */
+export function planWaves(spec) {
+  const units = Array.isArray(spec && spec.units) ? spec.units.filter((u) => u && u.id) : [];
+  const ids = new Set(units.map((u) => u.id));
+  const remaining = new Map(units.map((u) => [u.id, u]));
+  const landed = new Set();
+  const waves = [];
+
+  while (remaining.size) {
+    const wave = units.filter(
+      (u) => remaining.has(u.id) && depsOf(u).every((d) => !ids.has(d) || d === u.id || landed.has(d))
+    );
+    // Nothing became ready: the rest is a cycle. validateSpec refuses these, so
+    // reaching here means an unvalidated spec — stop rather than loop forever.
+    if (!wave.length) break;
+    for (const u of wave) {
+      remaining.delete(u.id);
+      landed.add(u.id);
+    }
+    waves.push(wave);
+  }
+  return waves;
 }
 
 const TERMINAL = new Set(['run_complete', 'aborted']);

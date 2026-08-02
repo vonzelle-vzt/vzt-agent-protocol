@@ -5,7 +5,7 @@ import path from 'node:path';
 import os from 'node:os';
 import { execFileSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
-import { parseSpec, validateSpec, reduceLedger, nextAction, AGENT_TYPES } from '../cli/ship-lib.mjs';
+import { parseSpec, validateSpec, planWaves, reduceLedger, nextAction, AGENT_TYPES } from '../cli/ship-lib.mjs';
 import { reduceLedgerInline } from '../hooks/vzt-route-classifier.mjs';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -315,4 +315,155 @@ test('the verifier ignores pre-existing dirt (no false SCOPE_BREACH)', () => {
   assert.match(src, /NOT a scope breach/i, 'the verifier must be told pre-existing dirt is not a breach');
   // and the ignore list must actually reach the verify prompt
   assert.match(src, /\$\{ignoreLine\}/, 'ignoreLine must be interpolated into verifyPrompt');
+});
+
+// ——— the DAG: dependsOn, waves, cycles ————————————————————————————————————
+//
+// Disjoint FILES_IN_SCOPE kills the SPATIAL collision — two units writing one
+// file. It says nothing about the TEMPORAL one: a unit reading a file another
+// unit is still writing. Before `dependsOn`, every unit fanned out at once and
+// the only ordering primitive in the whole spec was the single barrier.
+
+const depSpec = (units, barrier) => ({
+  specVersion: 1, slug: 'dag', title: 'DAG', root: '/abs/repo', contract: 'c',
+  ...(barrier ? { barrier } : {}),
+  units,
+  integration: { machineCheck: 'npm test', expect: 'exit 0' },
+});
+const depUnit = (id, file, dependsOn) => ({
+  id, title: id, agentType: 'vzt-builder', filesInScope: [file],
+  brief: 'b', machineCheck: 'npm t', expect: 'exit 0',
+  ...(dependsOn ? { dependsOn } : {}),
+});
+
+test('planWaves orders a diamond into three waves', () => {
+  const spec = depSpec([
+    depUnit('u1', 'a.ts'),
+    depUnit('u2', 'b.ts', ['u1']),
+    depUnit('u3', 'c.ts', ['u1']),
+    depUnit('u4', 'd.ts', ['u2', 'u3']),
+  ]);
+  assert.deepEqual(validateSpec(spec), []);
+  assert.deepEqual(
+    planWaves(spec).map((w) => w.map((u) => u.id)),
+    [['u1'], ['u2', 'u3'], ['u4']]
+  );
+});
+
+// Back-compat is the whole reason `dependsOn` is optional. Every SPEC written
+// before this release has no edges at all, and must keep behaving EXACTLY like
+// the flat fan-out it was written for — one wave, everything parallel.
+test('a spec with no dependsOn yields exactly one wave (old specs unchanged)', () => {
+  const spec = depSpec([depUnit('u1', 'a.ts'), depUnit('u2', 'b.ts'), depUnit('u3', 'c.ts')]);
+  assert.deepEqual(validateSpec(spec), []);
+  const waves = planWaves(spec);
+  assert.equal(waves.length, 1);
+  assert.deepEqual(waves[0].map((u) => u.id), ['u1', 'u2', 'u3']);
+});
+
+// A cycle is the failure that costs the most if it escapes: the scheduler finds
+// nothing ready, dispatches nothing, and the run reports "done" having built
+// zero units. It has to be an exit code at ship-check, naming the units.
+test('a dependsOn cycle is refused by validateSpec, and planWaves does not hang', () => {
+  const spec = depSpec([depUnit('u1', 'a.ts', ['u2']), depUnit('u2', 'b.ts', ['u1'])]);
+  const errs = validateSpec(spec);
+  const cycle = errs.filter((e) => /cycle/.test(e));
+  assert.equal(cycle.length, 1, `expected exactly one cycle error, got: ${JSON.stringify(errs)}`);
+  assert.match(cycle[0], /u1/);
+  assert.match(cycle[0], /u2/);
+  assert.deepEqual(planWaves(spec), []); // refuses to emit a partial plan
+});
+
+test('a three-unit cycle is caught too (not just the two-unit case)', () => {
+  const spec = depSpec([
+    depUnit('u1', 'a.ts', ['u3']),
+    depUnit('u2', 'b.ts', ['u1']),
+    depUnit('u3', 'c.ts', ['u2']),
+  ]);
+  assert.ok(validateSpec(spec).some((e) => /cycle/.test(e)));
+});
+
+// An edge naming a unit that does not exist is worse than a hard error: it
+// silently DROPS the ordering the planner meant to express, and the run looks
+// fine right up until the dependent reads a file nobody wrote yet.
+test('dependsOn naming an unknown unit is an error, not a silently dropped edge', () => {
+  const spec = depSpec([depUnit('u1', 'a.ts'), depUnit('u2', 'b.ts', ['u-nope'])]);
+  const errs = validateSpec(spec).filter((e) => /dependsOn/.test(e));
+  assert.equal(errs.length, 1);
+  assert.match(errs[0], /u-nope/);
+});
+
+test('dependsOn rejects self-reference, a non-array, and naming the barrier', () => {
+  const selfDep = depSpec([depUnit('u1', 'a.ts', ['u1']), depUnit('u2', 'b.ts')]);
+  assert.ok(validateSpec(selfDep).some((e) => /lists itself/.test(e)));
+
+  const notArray = depSpec([depUnit('u1', 'a.ts'), { ...depUnit('u2', 'b.ts'), dependsOn: 'u1' }]);
+  assert.ok(validateSpec(notArray).some((e) => /must be an array/.test(e)));
+
+  // The barrier already gates every unit. Letting a spec name it would imply
+  // there is a choice about it, and a planner would then reasonably assume that
+  // omitting it means "do not wait for the barrier" — which is not true.
+  const barrier = { id: 'u0', title: 'B', agentType: 'vzt-builder', filesInScope: ['z.ts'], brief: 'b', machineCheck: 'npm t', expect: 'exit 0' };
+  const namesBarrier = depSpec([depUnit('u1', 'a.ts', ['u0']), depUnit('u2', 'b.ts')], barrier);
+  assert.ok(validateSpec(namesBarrier).some((e) => /implicit dependency/.test(e)));
+});
+
+// A DAG is only reachable if the thing that WRITES specs knows the field exists.
+// Shipping the scheduler without documenting `dependsOn` would leave every
+// generated spec edge-free and the whole wave machinery dead code — the exact
+// "a gate in a dead workflow enforces nothing" shape this repo has hit before.
+test('dependsOn is documented where specs are actually authored', () => {
+  const tmpl = fs.readFileSync(path.join(REPO_ROOT, 'templates', 'spec.md'), 'utf8');
+  assert.match(tmpl, /"dependsOn"/, 'templates/spec.md must show dependsOn in the json block');
+  const skill = fs.readFileSync(path.join(REPO_ROOT, 'skills', 'vzt-ship', 'SKILL.md'), 'utf8');
+  assert.match(skill, /dependsOn/, 'skills/vzt-ship/SKILL.md must tell the chair the field exists');
+});
+
+// A hand copy is a drift risk, so it gets a guard.
+//
+// Workflow scripts cannot import, so workflows/vzt-ship.js carries its own copy
+// of planWaves/depsOf. The failure that copy invites is not a crash — it is the
+// two engines quietly disagreeing about what order the units run in, which shows
+// up as a unit graded against work that was never produced. Same arrangement as
+// the reduceLedgerInline guard above.
+test('the workflow-inlined planWaves and ship-lib agree (drift guard)', () => {
+  const src = fs.readFileSync(WORKFLOW, 'utf8');
+  const depsFn = src.match(/const depsOf = \([\s\S]*?\n\n/);
+  const wavesFn = src.match(/function planWaves\(units\) \{[\s\S]*?\n\}\n/);
+  assert.ok(depsFn, 'workflows/vzt-ship.js must define depsOf');
+  assert.ok(wavesFn, 'workflows/vzt-ship.js must define planWaves');
+  // eslint-disable-next-line no-new-func
+  const inlinePlanWaves = new Function(`${depsFn[0]}\n${wavesFn[0]}\nreturn planWaves;`)();
+
+  const shapes = [
+    [], // no edges at all — must be one wave, the old flat fan-out
+    [['u2', ['u1']]],
+    [['u2', ['u1']], ['u3', ['u1']], ['u4', ['u2', 'u3']]], // diamond
+    [['u3', ['u2']], ['u2', ['u1']]], // chain declared out of order
+    [['u4', ['u1']]], // a late unit depending on the first
+  ];
+  for (const edges of shapes) {
+    const units = ['u1', 'u2', 'u3', 'u4'].map((id) => {
+      const e = edges.find(([who]) => who === id);
+      return { id, title: id, agentType: 'vzt-builder', filesInScope: [`${id}.ts`], brief: 'b', machineCheck: 'x', expect: 'y', ...(e ? { dependsOn: e[1] } : {}) };
+    });
+    const spec = { specVersion: 1, slug: 's', title: 'S', root: '/abs/r', contract: 'c', units, integration: { machineCheck: 'x', expect: 'y' } };
+    assert.deepEqual(validateSpec(spec), [], `fixture itself must be valid: ${JSON.stringify(edges)}`);
+    assert.deepEqual(
+      inlinePlanWaves(units).map((w) => w.map((u) => u.id)),
+      planWaves(spec).map((w) => w.map((u) => u.id)),
+      `inlined planWaves disagrees with ship-lib for edges ${JSON.stringify(edges)}`
+    );
+  }
+});
+
+// The headless path fanned every unit out at once and ignored dependsOn
+// entirely — a field ship-check accepts and one of the two engines drops.
+test('the headless workflow honours dependsOn instead of one flat fan-out', () => {
+  const src = fs.readFileSync(WORKFLOW, 'utf8');
+  assert.ok(!/parallel\(spec\.units\.map\(/.test(src), 'the flat fan-out over ALL units must be gone');
+  assert.match(src, /for \(let i = 0; i < WAVES\.length; i\+\+\)/, 'units must be dispatched wave by wave');
+  assert.match(src, /BLOCKED — dependency/, 'a unit whose dependency failed must be BLOCKED, not dispatched');
+  assert.match(src, /dependsOn cycle/, 'a cycle must throw before any agent is spawned');
+  assert.match(src, /dependsOn names unknown unit/, 'an unknown dependency id must throw');
 });

@@ -163,14 +163,45 @@ sent immediately ran the TUI fine, which rules the TUI itself out.
 So: a plain `VZT_VSCODE_SEND_DELAY_MS` delay (default 1200ms). Raise it on a
 slow machine; do not replace it with a readiness event.
 
-PASS/FAIL is written back to the same `state/` dir as `<unit>.status`.
+PASS/FAIL/SCOPE_BREACH is written back to the same `state/` dir as `<unit>.status`.
 
 ### The Ship Run tree
 
 The extension contributes a **VZT Ship** activity-bar view listing every unit
 of the current run with live status, backed by a persistent record the CLI
-writes to `~/.vzt/vscode-mux/units/` (the queue record is deleted on launch to
-guarantee exactly-once, so it cannot also be the tree's source of truth).
+writes to `~/.vzt/vscode-mux/units/<key>.json` (the queue record is deleted on
+launch to guarantee exactly-once, so it cannot also be the tree's source of
+truth). Since 1.17.0 that record carries the unit's place in the dependency
+graph, not just its identity:
+
+| field | since | what it is |
+|---|---|---|
+| `title`, `cwd`, `machineCheck`, `expect`, `dispatchedAt` | 0.2.0 | the unit's identity and oracle |
+| `dependsOn` | 0.6.0 | unit ids this one consumes, straight from the SPEC's `dependsOn` |
+| `seeded` | 0.6.0 | dependencies whose finished work was applied into this worktree before launch |
+| `wave` | 0.6.0 | 1-based dependency wave; `0`/absent means a pre-0.6.0 CLI wrote the record |
+| `baseSha` | 0.6.0 | the seed commit this unit's own work is measured against (the scope-audit baseline) |
+| `filesInScope` | 0.6.0 | the unit's declared `FILES_IN_SCOPE`, for the tooltip and the scope audit |
+
+**Units are grouped under collapsible `Wave N` nodes** (contextValue
+`vztWave`; units underneath keep `vztUnit`, so Focus Terminal / Open Worktree
+Diff / Re-run Oracle stay exactly what they were). A wave rolls up to its
+**worst** member — `SCOPE_BREACH` > `FAIL` > `blocked` > `working` > `queued`
+> `waiting` > `finished` > `PASS` — so bad news in one unit is never hidden
+behind a green sibling in the same wave. A record with no `wave` (written by a
+pre-0.6.0 CLI) renders as a flat list exactly as it always did; grouping units
+that never had waves under a synthetic "Wave 0" would be noise about a concept
+that run never had.
+
+**Two states exist only because waves do.** `waiting` (grey `circle-slash`) is
+a unit whose `dependsOn` has not all passed yet — without it, a wave-2 unit
+sitting idle looked identical to a wave-1 unit about to start, and only one of
+those is worth watching. `SCOPE_BREACH` (red `warning`, deliberately a
+*different* icon from FAIL's red `error`) means the unit wrote outside its
+declared `FILES_IN_SCOPE` — that is not "the oracle failed", it means the
+disjointness the whole parallel fan-out rests on already broke, so the oracle
+was never even run. The status-bar tally counts `SCOPE_BREACH` as a failure
+alongside `FAIL`.
 
 Per unit: **Focus Terminal**, **Open Worktree Diff** — which adds the unit's
 worktree as a workspace folder so you can read its diff *while it is still
@@ -237,6 +268,15 @@ leaving it for some later, unrelated window to launch long after the run ended.
 | read a RUNNING agent's output | ✅ `terminal read` | ❌ | ❌ ³ |
 | rename a unit's tab | ✅ | ✅ | ❌ (VS Code API) |
 | worktree diff / tree inside the editor | ❌ | ❌ | ✅ |
+| dependency seeding before dispatch (1.17.0) | ✅ | ✅ | ✅ |
+| wave scheduling + `--max-concurrent` (1.17.0) | ✅ | ✅ | ✅ |
+| `SCOPE_BREACH` audited before the oracle (1.17.0) | ✅ | ✅ | ✅ |
+
+The last three rows are not backend features at all — `seedFromDeps`,
+`planWaves`, and the pre-oracle scope audit in `verifyAndRecord` live once in
+`cli/vzt-agent.js` and run identically regardless of `--mux`, so there is
+nothing for a backend to differ on. Listed here anyway so this table stays the
+single place that answers "does X work under vscode?"
 
 ¹ Orca exposes no agent status states, so the start phase watches `terminal read`'s
 monotonic `latestCursor` — output is proof of life. Written from Orca's documented

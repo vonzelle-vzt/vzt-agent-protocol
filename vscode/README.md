@@ -10,8 +10,9 @@ integrated terminal instead of a tmux pane.
   unit. For each new file it creates an integrated terminal (with the unit's
   `cwd` and `env`), runs the unit's command, then deletes the queue file so it
   is processed exactly once.
-- Polls `~/.vzt/vscode-mux/state/` for `<unitKey>.status` files (`PASS` or
-  `FAIL`) the CLI writes as units finish, and reflects them into:
+- Polls `~/.vzt/vscode-mux/state/` for `<unitKey>.status` files (`PASS`,
+  `FAIL`, or `SCOPE_BREACH`) the CLI writes as units finish, and reflects them
+  into:
   - the **"VZT Ship"** output channel (`[PASS] <unitKey>` / `[FAIL] <unitKey>`)
   - a status bar item showing a running tally, e.g. `VZT ship: 2 ✓  1 ✗`
 - Reports each `.status` file per WRITE (keyed on mtime), so re-running a unit
@@ -22,7 +23,34 @@ integrated terminal instead of a tmux pane.
   this extension.
 - Contributes a **Ship Run tree** (activity bar → *VZT Ship*) listing every
   unit with live status, driven by the persistent unit records the CLI writes
-  to `~/.vzt/vscode-mux/units/`.
+  to `~/.vzt/vscode-mux/units/`. Units with a `dependsOn` graph are grouped
+  under collapsible **`Wave N`** nodes that roll up to their worst member; a
+  unit still waiting on an unmet dependency shows a distinct **`waiting`**
+  state (grey), and a unit that wrote outside its declared `FILES_IN_SCOPE`
+  shows **`SCOPE_BREACH`** (red, a different icon from `FAIL`). A run from an
+  older CLI has no wave data and renders as a flat list, same as before.
+
+### Will my agents survive a closed window?
+
+**No — and the tree now says so.** A ship unit is a VS Code *integrated
+terminal*, which is a child of the extension host, so closing or reloading the
+window (or a host crash) kills every in-flight agent. The sentinels, however,
+are files: `.started` stays on disk and `.idle` never arrives, so a unit that
+died yesterday used to render as a cheerful spinner forever.
+
+The extension stamps `activatedAt` into `~/.vzt/vscode-mux/host.json` on
+activation. Any unit dispatched *before* this host booted is shown as
+**`interrupted`** (orange `debug-disconnect`) with a tooltip explaining why and
+what to do. A recorded verdict still wins — `PASS` is durable, liveness is not
+— and with no heartbeat on disk nothing is marked interrupted at all, so a
+first install never paints a healthy run orange.
+
+For a run that must outlive the editor, use `--mux herdr`: herdr's panes are
+owned by a separate daemon rather than by a window. On macOS, `ship-watch` also
+holds a `caffeinate -i` idle-sleep assertion for the length of the run
+(`VZT_NO_CAFFEINATE=1` to opt out) so an unattended run is not suspended
+mid-turn — but no userland assertion overrides a lid-close without an external
+display, and none of it keeps a killed terminal alive.
 
 ### Known VS Code constraint
 
@@ -36,7 +64,7 @@ channel and the status bar — not on the tab.
 cd vscode
 npm install
 npm run package          # → vzt-mux-<version>.vsix
-code --install-extension vzt-mux-0.2.0.vsix
+code --install-extension vzt-mux-*.vsix
 ```
 
 Then **Developer: Reload Window**. The extension host caches its code, so a

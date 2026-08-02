@@ -7,7 +7,7 @@
 Part of the [VZT Tech Consulting Protocol](https://github.com/vonzelle-vzt/VZT-Tech-Consulting-Protocol) ecosystem.
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
-[![Version](https://img.shields.io/badge/Version-1.16.0-purple.svg)](#)
+[![Version](https://img.shields.io/badge/Version-1.17.0-purple.svg)](#)
 [![Tiers](https://img.shields.io/badge/Tiers-Fable%205%20%7C%20Opus%205%20%7C%20Sonnet%205%20%7C%20Haiku%204.5-green.svg)](docs/ROUTING-MATRIX.md)
 
 ---
@@ -227,13 +227,19 @@ for idle detection. Setup + the honest constraints (VS Code can't rename termina
 tabs, so PASS/FAIL shows in a "VZT Ship" output channel + status bar) are in
 [`docs/VSCODE.md`](docs/VSCODE.md).
 
-One command: dispatch every unit as a `claude` worktree pane → wait for each to finish
-→ auto-run its oracle, stamp its card, record the ledger → integration gate → stop at
-"ready to review + merge". Each pane is auto-bootstrapped (`orca/worktree-bootstrap.sh`
-symlinks `node_modules`/`.env*` from the primary checkout, so a worktree can actually
-build), and the ledger resolves to the **primary checkout** so parallel worker writes
-are never lost or conflicted. This is *not* the fan-out that `vzt-route` rejects — the
-units are pairwise-disjoint, not a race. Full guide: [`orca/README.md`](orca/README.md).
+One command: dispatch each dependency **wave** of units as a `claude` worktree pane, at
+most `--max-concurrent` (default 4, `0` = unlimited) in flight at once → wait for each
+to finish → auto-run its oracle, stamp its card, record the ledger → integration gate →
+stop at "ready to review + merge". A unit declaring `dependsOn` opens its worktree
+already **seeded** with its dependencies' finished work (committed, uncommitted, and
+untracked, applied and committed before launch), so "build against the interface the
+barrier wrote" is a worktree that actually has it rather than a race; a unit whose
+dependency did not pass is recorded `BLOCKED` and never dispatched. Each pane is
+auto-bootstrapped (`orca/worktree-bootstrap.sh` symlinks `node_modules`/`.env*` from the
+primary checkout, so a worktree can actually build), and the ledger resolves to the
+**primary checkout** so parallel worker writes are never lost or conflicted. This is
+*not* the fan-out that `vzt-route` rejects — units within a wave are pairwise-disjoint,
+not a race. Full guide: [`orca/README.md`](orca/README.md).
 
 ## Visual work — `DESIGN.md` is a taste cache
 
@@ -423,6 +429,93 @@ a vibe.
 - [CLAUDE.md snippet for manual installs](templates/CLAUDE-snippet.md)
 
 ## Release notes
+
+### 1.17.0 — a worktree is not seeded, so "build against the interface" was fiction
+
+🔴 **Every `git worktree add` branched from the primary checkout's HEAD, on all
+three backends, with no merge, rebase, or cherry-pick anywhere in `cli/`.** So a
+unit briefed "implement X against the interface the barrier wrote in
+`types.ts`" opened a tree where `types.ts` did not exist — the barrier had
+written it in a different worktree, on a different branch. The unit then
+either failed its own oracle or breached scope re-creating the file itself, and
+the only place the pieces ever met was the integration gate, at the very end,
+after every unit's budget was already spent.
+
+The fix is a real dependency graph, not a naming convention. Spec units gain an
+optional `dependsOn: ["<unit id>"]`; `ship-check` now also rejects a `dependsOn`
+cycle (named — "u1 → u2 → u1", not "there is a cycle"), an unknown unit id, a
+self-reference, and naming the barrier (it is every unit's *implicit*
+dependency already). New pure exports in `cli/ship-lib.mjs`: `planWaves(spec)`
+(topological waves — a spec with no `dependsOn` anywhere still yields exactly
+**one** wave, so every existing SPEC behaves identically), `depsOf(u)`, and
+`pathInScope(p, scope)`.
+
+**Before a unit launches, `seedFromDeps()` applies each dependency's finished
+work into the dependent's worktree** — transitively, in topological order,
+barrier first — via the same `captureWorktreePatch` the integration gate
+already used (committed, uncommitted, *and* untracked), then **commits** the
+result and records it as `baseSha`. Committing matters twice: it becomes the
+scope-audit baseline, so a seeded file is never mistaken for this unit's own
+write, and it keeps this unit's own captured patch free of its dependencies'
+content. Seeding is idempotent (`git apply --check --reverse` detects an
+already-applied seed), so a corrected, re-dispatched unit doesn't choke on its
+own seed commit.
+
+**`ship-watch` now runs units in dependency waves, not `spec.units.map(dispatch)`.**
+A wide spec used to start one `claude` process and one terminal per unit, all
+at once; a new `--max-concurrent <n>` flag (also `VZT_MAX_CONCURRENT`, default
+**4**, `0` restores the old unlimited behaviour) bounds how many run at a time.
+A unit whose dependency did not PASS is recorded `BLOCKED` and never
+dispatched — its worktree would be seeded from a broken or absent base, so
+running it anyway would fail for a reason that has nothing to do with its own
+brief.
+
+**Runtime `SCOPE_BREACH` moves onto the supervised path.** `verifyAndRecord`
+now audits `git diff --name-only <baseSha>` plus `git ls-files --others
+--exclude-standard` in the unit's own worktree *before* running the oracle.
+This verdict used to exist only in the headless `workflows/vzt-ship.js` path —
+on `ship-watch` a breach first surfaced as a failed `git apply` in the
+integration gate, at the very end, attributed to whichever unit happened to
+apply second. Seeded dependency files and gitignored build artifacts are
+correctly not breaches.
+
+**A reused worktree that has fallen behind gets a `--- BASE DRIFT ---` block**
+appended to its prompt, naming the missing-commit count and the 5 most recent
+subjects it's missing; a freshly created worktree emits nothing.
+
+**The VS Code Ship Run tree groups units under collapsible `Wave N` nodes**
+(units stay `vztUnit`, so Focus Terminal / Open Worktree Diff / Re-run Oracle
+are unchanged), adds two states — `waiting` (grey, a dependency hasn't passed
+yet, distinct from `queued`) and `SCOPE_BREACH` (red `warning`, deliberately a
+different icon from FAIL's red `error`) — and rolls a wave up to its worst
+member (`SCOPE_BREACH` > `FAIL` > `blocked` > `working` > `queued` > `waiting`
+> `finished` > `PASS`). A record from a pre-0.6.0 CLI has no `wave` and still
+renders as a flat list. Extension `0.6.0`.
+
+**The headless path honours `dependsOn` too.** A field one engine obeys and the
+other silently drops is worse than no field — the spec would promise an ordering
+that half the runs ignore. `workflows/vzt-ship.js` now dispatches wave by wave
+and records `BLOCKED` for a unit whose dependency did not pass. Workflow scripts
+cannot import, so it carries a hand copy of `planWaves`/`depsOf`, and a drift
+guard runs both against the same fixtures and fails if they ever disagree. It
+needs *ordering* only, not seeding: those agents share one checkout, so a unit
+that runs after its dependency simply finds the files there.
+
+**"If I close my lid, do my agents keep running?"** With `--mux vscode`, a ship
+unit is a VS Code **integrated terminal** — a child of the extension host — so
+closing or reloading the window kills every in-flight agent. That was already
+true; what was new is that the tree now *says so*. Sentinels are files, so
+`.started` survived on disk, `.idle` never arrived, and a unit that died
+yesterday rendered as a cheerful spinner forever. The extension stamps
+`activatedAt` into `host.json`, and any unit dispatched before this host booted
+is now `interrupted` (orange `debug-disconnect`) with a tooltip saying why. A
+recorded verdict still wins — PASS is durable, liveness is not. Separately,
+`ship-watch` holds a `caffeinate -i -w <pid>` idle-sleep assertion for the length
+of the run (macOS; opt out with `VZT_NO_CAFFEINATE=1`), so walking away does not
+suspend a unit mid-turn. For a run that must outlive the editor entirely, use
+`--mux herdr` — its panes belong to a daemon, not to a window.
+
+183 tests.
 
 ### 1.16.0 — review a diff in VS Code, and prove the agent got it
 

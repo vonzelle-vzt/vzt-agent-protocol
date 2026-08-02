@@ -15,9 +15,9 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import os from 'node:os';
-import { execFileSync } from 'node:child_process';
+import { execFileSync, spawn } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
-import { parseSpec, validateSpec, reduceLedger, nextAction, unitLine } from './ship-lib.mjs';
+import { parseSpec, validateSpec, planWaves, depsOf, pathInScope, reduceLedger, nextAction, unitLine } from './ship-lib.mjs';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const PKG_ROOT = path.resolve(__dirname, '..');
@@ -70,6 +70,10 @@ function parseArgs(argv) {
     else if (a === '--herdr') args.herdr = argv[++i];
     else if (a === '--mux') args.mux = argv[++i];
     else if (a === '--timeout-ms') args.timeoutMs = argv[++i];
+    else if (a === '--max-concurrent') args.maxConcurrent = argv[++i];
+    // This list is a WHITELIST: anything not named here lands in `_` as a
+    // positional and is silently ignored. A flag added to the help text but not
+    // to this switch reads as "supported" and does nothing at all.
     else args._.push(a);
   }
   return args;
@@ -287,6 +291,10 @@ function uninstall(args) {
 function doctor(args) {
   const dotClaude = claudeDir(args);
   const checks = [];
+  // Things worth SAYING that are not things worth FAILING on: transient state a
+  // reinstall cannot fix. Kept separate so the exit code stays a statement about
+  // the installation itself.
+  const warnings = [];
   const agentCount = fs.existsSync(AGENT_FILES_DIR)
     ? fs.readdirSync(AGENT_FILES_DIR).filter((f) => f.endsWith('.md')).length
     : 0;
@@ -309,6 +317,39 @@ function doctor(args) {
   const docFiles = fs.existsSync(DOCS_DIR) ? fs.readdirSync(DOCS_DIR).filter((f) => f.endsWith('.md')) : [];
   const docsOk = docFiles.length > 0 && docFiles.every((f) => fs.existsSync(path.join(dotClaude, 'docs', f)));
   checks.push([`docs installed (${docFiles.join(', ')})`, docsOk]);
+
+  // INSTALLED ≠ CURRENT, and every check above only proves the file EXISTS.
+  //
+  // 🔴 The failure this catches, from the 1.17.0 release itself. `dependsOn` was
+  // added to templates/spec.md in the repo — but the chair writes specs from the
+  // INSTALLED copy at .claude/templates/spec.md. Anyone who had installed an
+  // earlier version kept a template with no `dependsOn` in it, so no spec would
+  // ever declare a dependency, and the entire task DAG would sit there as code
+  // nothing could reach. Doctor reported all-green throughout, because the file
+  // was present — just old.
+  //
+  // Same shape as the v1.4.0 bug one level down: doctrine pointing at an
+  // artifact that exists but no longer says what the doctrine assumes.
+  const stale = [];
+  for (const [srcDir, destSub, filter] of [
+    [TEMPLATES_DIR, 'templates', (f) => f.endsWith('.md')],
+    [AGENT_FILES_DIR, 'agents', (f) => f.endsWith('.md')],
+    [WORKFLOWS_DIR, 'workflows', (f) => f.endsWith('.js')],
+    [DOCS_DIR, 'docs', (f) => f.endsWith('.md')],
+  ]) {
+    if (!fs.existsSync(srcDir)) continue;
+    for (const f of fs.readdirSync(srcDir).filter(filter)) {
+      const dest = path.join(dotClaude, destSub, f);
+      if (!fs.existsSync(dest)) continue; // absence is the "installed" check's job
+      try {
+        if (fs.readFileSync(path.join(srcDir, f), 'utf8') !== fs.readFileSync(dest, 'utf8')) stale.push(`${destSub}/${f}`);
+      } catch { /* unreadable — not worth failing a doctor run over */ }
+    }
+  }
+  checks.push([
+    stale.length ? `installed copies are STALE (${stale.slice(0, 4).join(', ')}${stale.length > 4 ? `, +${stale.length - 4} more` : ''}) — re-run: vzt-agent install` : 'installed copies match this version',
+    stale.length === 0,
+  ]);
 
   // EVERY unit prompt makes this file its hard-required STEP 0. If it is
   // missing, every unit's first action fails, the worktree never gets its deps
@@ -361,12 +402,18 @@ function doctor(args) {
     const hostFile = path.join(VZT_VSCODE_DIR, 'host.json');
     if (fs.existsSync(hostFile)) {
       const running = readJson(hostFile, {}).version;
-      checks.push([
-        running === want
-          ? `vscode extension host running ${running}`
-          : `vscode extension host running ${running}, but ${want} is installed — RELOAD THE WINDOW (Cmd+Shift+P → Developer: Reload Window)`,
-        running === want,
-      ]);
+      if (running === want) {
+        checks.push([`vscode extension host running ${running}`, true]);
+      } else {
+        // ADVISORY, not a failed check. Everything else doctor grades is fixed by
+        // `vzt-agent install`; this one is fixed only by reloading an editor
+        // window, and it clears itself the moment you do. Failing the run on it
+        // made `doctor` report the developer's live editor state — so a bumped
+        // extension version turned the test suite red on a machine where nothing
+        // was actually wrong, and "Some checks failed — run: vzt-agent install"
+        // pointed at a command that cannot fix it.
+        warnings.push(`vscode extension host is running ${running}, but ${want} is installed — RELOAD THE WINDOW (Cmd+Shift+P → Developer: Reload Window) before trusting a --mux vscode run.`);
+      }
     } else if (found) {
       checks.push(['vscode extension host has not reported a version yet (reload the window once to enable the staleness check)', true]);
     }
@@ -380,6 +427,7 @@ function doctor(args) {
     console.log(`  ${pass ? '✅' : '❌'} ${label}`);
     if (!pass) ok = false;
   }
+  for (const w of warnings) console.log(`  ⚠️  ${w}`);
   console.log(ok ? '\nAll checks passed.' : '\nSome checks failed — run: vzt-agent install');
   process.exitCode = ok ? 0 : 1;
 }
@@ -674,8 +722,17 @@ const BOOTSTRAP = path.join(ORCA_VZT_DIR, 'worktree-bootstrap.sh');
 // queue/ into native integrated terminals; the Stop hook writes state/*.idle.
 const VZT_VSCODE_DIR = process.env.VZT_VSCODE_DIR || path.join(os.homedir(), '.vzt', 'vscode-mux');
 
-function unitPrompt(spec, u) {
+function unitPrompt(spec, u, extras = {}) {
   const files = (u.filesInScope || []).map((f) => `    - ${f}`).join('\n');
+  const seeded = extras.seeded && extras.seeded.length
+    ? [
+        `ALREADY IN THIS WORKTREE — the finished work of: ${extras.seeded.join(', ')}.`,
+        'Those files are your dependencies\' output, not yours. READ them, build against',
+        'them, and do NOT rewrite or "improve" them — they are outside FILES_IN_SCOPE and',
+        'editing them is a scope breach that fails this unit.',
+        '',
+      ]
+    : [];
   return [
     `[VZT ship unit ${u.id}] ${u.title || ''}`.trim(),
     '',
@@ -685,6 +742,7 @@ function unitPrompt(spec, u) {
     '',
     u.brief,
     '',
+    ...seeded,
     'FILES_IN_SCOPE — touch ONLY these; they are your collision boundary:',
     files,
     '',
@@ -694,7 +752,155 @@ function unitPrompt(spec, u) {
     'Work under VZT fable-mode discipline (scope → evidence → attack → verify → report).',
     'Do not edit, create, or delete any file outside FILES_IN_SCOPE. When finished, run the',
     'MACHINE_CHECK yourself and report its exact output.',
+    ...(extras.drift ? ['', extras.drift] : []),
   ].join('\n');
+}
+
+/**
+ * A unit's dependencies in TOPOLOGICAL order, expanded transitively, barrier first.
+ *
+ * Transitivity is not optional, and the reason is captureWorktreePatch(): it
+ * diffs a worktree against its OWN HEAD. Once a dependent's worktree has its
+ * seed committed, that worktree's patch contains only ITS work — the grandparent's
+ * contribution has moved into HEAD and vanished from the patch. So seeding u3
+ * from its direct dep u2 alone would silently hand u3 a tree with u2's work and
+ * NONE of u1's. Expand the whole ancestry and apply each unit's own delta in
+ * order, and the layers compose exactly once.
+ */
+function transitiveDeps(spec, u) {
+  const byId = new Map((spec.units || []).map((x) => [x.id, x]));
+  const ordered = [];
+  const seen = new Set();
+  const visit = (unit, trail) => {
+    for (const id of depsOf(unit)) {
+      if (trail.has(id)) continue; // cycle — validateSpec already refused this spec
+      const dep = byId.get(id);
+      if (!dep || seen.has(id)) continue;
+      visit(dep, new Set([...trail, id]));
+      if (!seen.has(id)) { seen.add(id); ordered.push(dep); }
+    }
+  };
+  visit(u, new Set([u.id]));
+  // The barrier is every unit's implicit first dependency: it holds the shared
+  // contract, so it must be underneath everything else.
+  return [spec.barrier, ...ordered].filter(Boolean);
+}
+
+/** Which dependency wave this unit runs in (1-based). 0 = the barrier / unknown. */
+function waveOf(spec, u) {
+  const waves = planWaves(spec);
+  for (let i = 0; i < waves.length; i++) if (waves[i].some((x) => x.id === u.id)) return i + 1;
+  return 0;
+}
+
+/**
+ * Seed a unit's worktree with its dependencies' finished work, then commit it.
+ *
+ * 🔴 THE BUG THIS FIXES. Every worktree in this file is created from the primary
+ * checkout's HEAD — barrier and units alike, on all three backends. Nothing ever
+ * merged, rebased, or cherry-picked. So a unit briefed to "implement X against
+ * the interface in types.ts" opened a tree where types.ts DID NOT EXIST, because
+ * the barrier wrote it on a different branch in a different worktree. The unit
+ * then either failed its own oracle or breached scope creating the missing file
+ * itself. Only the integration gate ever saw the pieces together, at the very end.
+ *
+ * Seeding is a `git apply` of each dependency's patch, not a merge, because
+ * agents routinely leave work UNCOMMITTED and a branch merge would miss it —
+ * captureWorktreePatch() is the same primitive the integration gate already uses.
+ *
+ * The seed is COMMITTED for two reasons: it becomes the audit baseline (so
+ * seeded files are not mistaken for this unit's own writes), and it keeps this
+ * unit's own captured patch free of its dependencies' content, so the integration
+ * gate applies each layer exactly once.
+ *
+ * Scopes are pairwise disjoint, so these applies cannot conflict — which makes a
+ * conflict here a REAL finding (a dependency wrote outside its declared scope),
+ * surfaced at dispatch instead of after the whole run has been paid for.
+ *
+ * @returns {{baseSha: string|null, seeded: string[]}}
+ */
+function seedFromDeps(be, spec, u, wtPath) {
+  const seeded = [];
+  for (const dep of transitiveDeps(spec, u)) {
+    let ref = null;
+    try { ref = be.resolve(spec, dep); } catch { /* not dispatched yet */ }
+    if (!ref || !ref.path || !fs.existsSync(ref.path) || path.resolve(ref.path) === path.resolve(wtPath)) continue;
+    let patch = '';
+    try { patch = captureWorktreePatch(ref.path); } catch { /* unreadable worktree */ }
+    if (!patch.trim()) continue;
+    // Seeding must be IDEMPOTENT. ensureWorktree deliberately reuses a worktree
+    // across re-dispatches, so a unit corrected and re-run would meet its own
+    // seed commit and `git apply` would die with "already exists" — turning an
+    // ordinary retry into a permanent dispatch failure. `--check --reverse`
+    // succeeds exactly when the patch is already present.
+    try {
+      execFileSync('git', ['-C', wtPath, 'apply', '--check', '--reverse'], { input: patch, stdio: ['pipe', 'ignore', 'ignore'] });
+      seeded.push(dep.id);
+      continue; // already seeded by an earlier dispatch of this unit
+    } catch { /* not applied yet — fall through and apply it */ }
+    try {
+      execFileSync('git', ['-C', wtPath, 'apply', '--index', '--whitespace=nowarn'], {
+        input: patch, stdio: ['pipe', 'ignore', 'pipe'],
+      });
+      seeded.push(dep.id);
+    } catch (e) {
+      const detail = `${e.stderr || ''}`.trim().split('\n').slice(0, 4).join(' / ');
+      const err = new Error(
+        `seed conflict: ${dep.id}'s work does not apply into ${u.id}'s worktree — ` +
+        `scopes are disjoint, so ${dep.id} wrote OUTSIDE its declared FILES_IN_SCOPE. ${detail}`
+      );
+      err.vztSeedConflict = true;
+      throw err; // a corrupt base is worse than a missing one — never launch on it
+    }
+  }
+  if (seeded.length) {
+    try {
+      execFileSync('git', ['-C', wtPath, 'commit', '--no-verify', '-qm', `vzt: seed ${u.id} from ${seeded.join(', ')}`], {
+        stdio: ['ignore', 'ignore', 'pipe'],
+        env: { ...process.env, GIT_AUTHOR_NAME: 'vzt-agent', GIT_AUTHOR_EMAIL: 'vzt@local', GIT_COMMITTER_NAME: 'vzt-agent', GIT_COMMITTER_EMAIL: 'vzt@local' },
+      });
+    } catch { /* nothing staged after all — the baseline below still resolves */ }
+  }
+  let baseSha = null;
+  try { baseSha = execFileSync('git', ['-C', wtPath, 'rev-parse', 'HEAD'], { encoding: 'utf8' }).trim(); } catch { /* not a repo */ }
+  return { baseSha, seeded };
+}
+
+/**
+ * How far a REUSED worktree has fallen behind the primary checkout, as a prompt block.
+ *
+ * ensureWorktree deliberately reuses an existing worktree across re-dispatches,
+ * which means a re-run silently works on whatever HEAD was current the first
+ * time. The worker discovers that the hard way — stale line numbers, a helper
+ * that "should exist" and doesn't. Orca surfaces the same thing to its workers
+ * as a BASE DRIFT block; the point is that the drift is visible on line 1 rather
+ * than inferred from confusing evidence an hour in.
+ *
+ * Returns null when there is no drift, so a fresh worktree emits nothing at all —
+ * a section that fires every time is a section workers learn to skip.
+ */
+function baseDriftBlock(root, branch) {
+  try {
+    const behind = Number(
+      execFileSync('git', ['-C', root, 'rev-list', '--count', `${branch}..HEAD`], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] }).trim()
+    );
+    if (!behind) return null;
+    const subjects = execFileSync('git', ['-C', root, 'log', '--format=%s', '-5', `${branch}..HEAD`], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] })
+      .trim().split('\n').filter(Boolean).map((s) => `  - ${s}`).join('\n');
+    return [
+      '--- BASE DRIFT ---',
+      `This worktree is ${behind} commit(s) behind the primary checkout's HEAD. The most`,
+      'recent subjects on HEAD that are NOT in your worktree:',
+      subjects,
+      '',
+      'If any look relevant to your task, pull them in (`git rebase HEAD@{upstream}` or',
+      'equivalent) or say so in your report BEFORE starting. Do not silently build on a',
+      'stale base.',
+      '---',
+    ].join('\n');
+  } catch {
+    return null; // no such branch / not a repo — drift is unknowable, not zero
+  }
 }
 
 /** POSIX single-quote an argument for safe copy-paste of the printed command. */
@@ -743,12 +949,12 @@ function orcaBackend(args) {
   // would poll an idle shell and grade the unit the instant it launched.
   const createArgv = (spec, u) => ['worktree', 'create', '--repo', `path:${spec.root}`,
     '--name', key(spec, u), '--no-parent', '--setup', 'run', '--json'];
-  const claudeCmd = (spec, u) =>
-    `claude ${skipPerms ? '--dangerously-skip-permissions ' : ''}${shq(unitPrompt(spec, u))}`;
-  const termArgv = (spec, u, wtId) => ['terminal', 'create',
+  const claudeCmd = (spec, u, extras) =>
+    `claude ${skipPerms ? '--dangerously-skip-permissions ' : ''}${shq(unitPrompt(spec, u, extras))}`;
+  const termArgv = (spec, u, wtId, extras) => ['terminal', 'create',
     ...(wtId ? ['--worktree', wtId] : []),
-    '--title', key(spec, u), '--command', claudeCmd(spec, u), '--json'];
-  return {
+    '--title', key(spec, u), '--command', claudeCmd(spec, u, extras), '--json'];
+  const be = {
     name: 'orca', bin,
     plan(spec, u) {
       return [
@@ -764,13 +970,19 @@ function orcaBackend(args) {
       // is not a worktree id, so prefer the returned id verbatim.
       const wtId = wt.id || (wpath ? `path:${wpath}` : null);
 
+      // Seed the worktree with this unit's dependencies BEFORE the agent starts.
+      // Orca creates every worktree from the repo's base branch, so without this
+      // a dependent opens a tree that does not contain what it was told to build
+      // against. Throws on a seed conflict rather than launching on a bad base.
+      const { baseSha, seeded } = wpath ? seedFromDeps(be, spec, u, wpath) : { baseSha: null, seeded: [] };
+
       // The agent handle comes from `terminal create`, NEVER from the worktree.
       // A bare `worktree create` (no --agent) leaves a fallback SHELL as the
       // first terminal; waiting on that reports tui-idle immediately and grades
       // the unit before the agent has done anything.
       let handle = null;
       try {
-        const term = envJson(bin, termArgv(spec, u, wtId));
+        const term = envJson(bin, termArgv(spec, u, wtId, { seeded }));
         handle = term.handle || term.terminal?.handle || term.startupTerminal?.handle || null;
       } catch (e) {
         console.error(`  ${u.id}: orca terminal create failed — ${(e.message || '').trim().split('\n')[0]}`);
@@ -781,7 +993,7 @@ function orcaBackend(args) {
       if (!handle) {
         console.error(`  ${u.id}: no orca agent terminal handle — cannot wait for idle, so the oracle may grade an unfinished worktree.`);
       }
-      return { path: wpath, ws: key(spec, u), handle };
+      return { path: wpath, ws: key(spec, u), baseSha, seeded, handle };
     },
     // TWO-PHASE, matching herdr and vscode: prove the agent STARTED before
     // waiting for it to stop. Orca exposes no agent status states, but
@@ -835,6 +1047,7 @@ function orcaBackend(args) {
       try { execFileSync(bin, ['worktree', 'set', '--worktree', `name:${info.ws}`, '--comment', `oracle: ${status}`, '--workspace-status', pass ? 'in-review' : 'in-progress', '--json'], { stdio: ['ignore', 'ignore', 'ignore'] }); } catch { /* not live */ }
     },
   };
+  return be;
 }
 
 function herdrBackend(args) {
@@ -864,7 +1077,7 @@ function herdrBackend(args) {
   // unit's agent "claude" made the first unit claim the name and every later
   // `agent start claude` die with `agent_name_taken`, launching nothing and
   // grading empty worktrees. Name each agent by its unit key (already unique).
-  return {
+  const be = {
     name: 'herdr', bin,
     plan(spec, u) {
       const b = branch(spec, u);
@@ -879,14 +1092,18 @@ function herdrBackend(args) {
       const wt = envJson(bin, ['worktree', 'create', '--cwd', spec.root, '--branch', b, '--label', b, '--no-focus', '--json']);
       const ws = wt.workspace?.workspace_id || wt.worktree?.open_workspace_id || null;
       const wpath = wt.worktree?.path || wt.workspace?.worktree?.checkout_path || null;
+      // Seed dependencies into the worktree BEFORE the agent boots. herdr creates
+      // the branch from the repo's current HEAD, so a dependent would otherwise
+      // open a tree missing everything it was told to build against.
+      const { baseSha, seeded } = wpath ? seedFromDeps(be, spec, u, wpath) : { baseSha: null, seeded: [] };
       let handle = null;
       if (ws && wpath) {
         try {
-          const ag = envJson(bin, ['agent', 'start', b, '--workspace', ws, '--cwd', wpath, '--no-focus', ...envPath, '--', ...claudeArgv(unitPrompt(spec, u))]);
+          const ag = envJson(bin, ['agent', 'start', b, '--workspace', ws, '--cwd', wpath, '--no-focus', ...envPath, '--', ...claudeArgv(unitPrompt(spec, u, { seeded }))]);
           handle = ag.agent?.pane_id || null;
         } catch (e) { console.error(`  ${u.id}: herdr agent start failed — ${e.message}`); }
       }
-      return { path: wpath, ws, handle };
+      return { path: wpath, ws, baseSha, seeded, handle };
     },
     waitIdle(handle, t) {
       if (!handle) return;
@@ -928,6 +1145,7 @@ function herdrBackend(args) {
       try { execFileSync(bin, ['workspace', 'rename', info.ws, `${branch(spec, u)} oracle:${status}`], { stdio: ['ignore', 'ignore', 'ignore'] }); } catch { /* not live */ }
     },
   };
+  return be;
 }
 
 // A tiny synchronous sleep so the vscode backend can poll a sentinel file
@@ -984,23 +1202,28 @@ function vscodeBackend(/* args */) {
   const ensureWorktree = (spec, u) => {
     const k = key(spec, u);
     const wtPath = path.join(wtRoot, k);
-    if (fs.existsSync(path.join(wtPath, '.git'))) return wtPath; // reuse from a prior run
+    // `fresh` decides whether a BASE DRIFT block is worth emitting: a worktree
+    // created just now is by definition at HEAD, and a drift section that fires
+    // on every unit is one workers stop reading.
+    if (fs.existsSync(path.join(wtPath, '.git'))) return { path: wtPath, fresh: false }; // reuse from a prior run
     try {
       execFileSync('git', ['-C', spec.root, 'worktree', 'add', '-b', k, wtPath, 'HEAD'], { stdio: ['ignore', 'ignore', 'pipe'] });
     } catch {
       // Branch already exists (re-dispatch) — attach it instead of recreating.
       execFileSync('git', ['-C', spec.root, 'worktree', 'add', wtPath, k], { stdio: ['ignore', 'ignore', 'pipe'] });
     }
-    return wtPath;
+    return { path: wtPath, fresh: true };
   };
 
-  return {
+  const be = {
     name: 'vscode', bin: 'code',
     plan(spec, u) {
       const k = key(spec, u);
       const wtPath = path.join(wtRoot, k);
       const promptFile = path.join(promptDir, `${k}.txt`);
+      const deps = transitiveDeps(spec, u).map((d) => d.id);
       return [
+        ...(deps.length ? [`# seeded from: ${deps.join(', ')} (their patches applied + committed first)`] : []),
         `git -C ${shq(spec.root)} worktree add -b ${shq(k)} ${shq(wtPath)} HEAD`,
         `# then in a VS Code integrated terminal at ${shq(wtPath)}:  ${claudeCmd(promptFile)}`,
         `# (--mux vscode does both automatically via the companion extension)`,
@@ -1008,7 +1231,12 @@ function vscodeBackend(/* args */) {
     },
     dispatch(spec, u) {
       const k = key(spec, u);
-      const wtPath = ensureWorktree(spec, u);
+      const { path: wtPath, fresh } = ensureWorktree(spec, u);
+      // Seed BEFORE the agent launches. A dependent that opens a tree missing its
+      // dependencies' output has already lost — it will either fail its oracle or
+      // breach scope rebuilding what it cannot see. Throws on a seed conflict,
+      // which shipWatch records as a dispatch failure with the reason.
+      const { baseSha, seeded } = seedFromDeps(be, spec, u, wtPath);
       // Clear EVERY sentinel from a prior run of this unit key, not just idle —
       // a stale `.started` would satisfy the start phase instantly and put us
       // right back to grading an empty worktree.
@@ -1016,7 +1244,7 @@ function vscodeBackend(/* args */) {
         try { fs.unlinkSync(path.join(stateDir, f)); } catch { /* none */ }
       }
       const promptFile = path.join(promptDir, `${k}.txt`);
-      fs.writeFileSync(promptFile, unitPrompt(spec, u));
+      fs.writeFileSync(promptFile, unitPrompt(spec, u, { seeded, drift: fresh ? null : baseDriftBlock(spec.root, k) }));
       const idleFile = path.join(stateDir, `${k}.idle`);
       const startedFile = path.join(stateDir, `${k}.started`);
       const blockedFile = path.join(stateDir, `${k}.blocked`);
@@ -1047,7 +1275,17 @@ function vscodeBackend(/* args */) {
       fs.writeFileSync(
         path.join(unitDir, `${k}.json`),
         JSON.stringify(
-          { unitKey: k, slug: spec.slug, id: u.id, title: u.title || u.id, cwd: wtPath, machineCheck: u.machineCheck || '', expect: u.expect || '', dispatchedAt: new Date().toISOString() },
+          {
+            unitKey: k, slug: spec.slug, id: u.id, title: u.title || u.id, cwd: wtPath,
+            machineCheck: u.machineCheck || '', expect: u.expect || '',
+            // The DAG, as the tree view needs it: what this unit waited for, which
+            // wave it ran in, and the commit its own work is measured against.
+            // `baseSha` is the seed commit, so the scope audit does not mistake a
+            // dependency's files for something this unit wrote.
+            dependsOn: depsOf(u), seeded, wave: waveOf(spec, u), baseSha,
+            filesInScope: Array.isArray(u.filesInScope) ? u.filesInScope : [],
+            dispatchedAt: new Date().toISOString(),
+          },
           null,
           2
         )
@@ -1071,7 +1309,7 @@ function vscodeBackend(/* args */) {
         // window — launching a stale unit long after its run ended.
         try { fs.unlinkSync(queueFile); } catch { /* already claimed after all */ }
       }
-      return { path: wtPath, ws: k, handle: { idleFile, startedFile, blockedFile, unitKey: k, launched } };
+      return { path: wtPath, ws: k, baseSha, seeded, handle: { idleFile, startedFile, blockedFile, unitKey: k, launched } };
     },
     // TWO-PHASE, mirroring herdrBackend().waitIdle — see that function's comment
     // for the original incident. Waiting on `.idle` ALONE cannot distinguish:
@@ -1136,7 +1374,29 @@ function vscodeBackend(/* args */) {
     stamp(spec, u, info, status /*, pass */) {
       try { fs.writeFileSync(path.join(stateDir, `${key(spec, u)}.status`), status); } catch { /* best-effort */ }
     },
+    // Wait on SEVERAL in-flight units at once and return the first to finish.
+    //
+    // waitIdle is the 5-method interface's blocking primitive, and blocking on
+    // ONE handle is exactly wrong for a concurrency cap: a slot only frees when
+    // its own unit finishes, so a wave runs at the speed of whichever unit the
+    // loop happened to name first. Polling every sentinel in one loop frees the
+    // slot that actually finished. Only the vscode backend can do this cheaply
+    // (its liveness signal is a file); orca and herdr fall back to chunking.
+    waitAny(handles, t) {
+      const live = (handles || []).filter((h) => h && h.idleFile);
+      if (!live.length) return null;
+      const deadline = Date.now() + t;
+      while (Date.now() < deadline) {
+        for (const h of live) if (fs.existsSync(h.idleFile)) return h;
+        // Nothing can ever finish if nothing was ever launched — don't burn the
+        // whole timeout to discover the extension is not running.
+        if (live.every((h) => h.launched === false)) return live[0];
+        sleepSync(500);
+      }
+      return live[0]; // timed out: surrender the oldest slot so the wave can advance
+    },
   };
+  return be;
 }
 
 function getBackend(args) {
@@ -1159,6 +1419,25 @@ function getBackend(args) {
   process.exit(2);
 }
 
+/**
+ * What a unit's worktree was actually seeded with — including when the answer is
+ * "nothing", which is the case that matters.
+ *
+ * A dependency whose agent has not written anything yields an EMPTY patch, and an
+ * empty patch applies cleanly by doing nothing at all. So the difference between
+ * "seeded from u1" and "u1 had nothing to give" is invisible unless it is said
+ * out loud, and a unit silently building against an absent dependency is the
+ * exact failure the seeding was added to prevent.
+ */
+function seedLine(spec, u, info) {
+  const want = transitiveDeps(spec, u).map((d) => d.id);
+  if (!want.length) return 'seeded from: (nothing to wait on — base is HEAD)';
+  const got = (info && info.seeded) || [];
+  const missing = want.filter((d) => !got.includes(d));
+  if (!missing.length) return `seeded from: ${got.join(', ')}`;
+  return `⚠️  seeded from: ${got.join(', ') || 'NOTHING'} — ${missing.join(', ')} produced no work yet`;
+}
+
 function shipDispatch(args) {
   const specPath = args._[1];
   const spec = loadSpec(specPath);
@@ -1170,12 +1449,37 @@ function shipDispatch(args) {
   const be = getBackend(args);
   const phases = [];
   if (spec.barrier) phases.push({ label: 'PHASE 1 — barrier (run FIRST, alone; its oracle grades every unit)', units: [spec.barrier] });
-  phases.push({ label: `PHASE ${spec.barrier ? 2 : 1} — units (parallel; pairwise-disjoint scopes)`, units: spec.units });
+  // One phase per dependency wave. A spec with no `dependsOn` has exactly one,
+  // which is the flat parallel fan-out this replaced.
+  const waves = planWaves(spec);
+  const base = spec.barrier ? 2 : 1;
+  waves.forEach((wave, i) => {
+    phases.push({
+      label: `PHASE ${base + i} — wave ${i + 1}/${waves.length} (parallel; pairwise-disjoint scopes)`
+        + (i > 0 ? ` — waits on wave ${i}` : ''),
+      units: wave,
+    });
+  });
 
   console.log(`# ship-dispatch: ${spec.slug} — ${spec.title}`);
   console.log(`# root: ${spec.root}`);
   console.log(`# ${args.execute ? 'EXECUTING via' : 'DRY RUN (add --execute to run) via'} ${be.name} (${be.bin})`);
   if (spec.barrier) console.log('# NOTE: wait for the barrier oracle to pass before dispatching the units.');
+  // ship-dispatch fires everything at once — it has no wait, by design; it is the
+  // manual escape hatch. That was harmless when units were independent. With
+  // `dependsOn` it is a trap: a later wave's worktree gets seeded from a
+  // dependency whose agent has not written anything yet, so the seed is empty and
+  // the unit builds against nothing — silently, because an empty patch is not an
+  // error. Say so before spending anything, and name the units affected.
+  if (args.execute && waves.length > 1) {
+    const later = waves.slice(1).flat().map((u) => u.id);
+    console.log(`#`);
+    console.log(`# ⚠️  This spec has ${waves.length} dependency waves and ship-dispatch does NOT wait.`);
+    console.log(`#    ${later.join(', ')} will be dispatched against dependencies that have not run yet,`);
+    console.log(`#    so their worktrees will be seeded with nothing. Use ship-watch for a staged run:`);
+    console.log(`#      vzt-agent ship-watch ${specPath} --mux ${be.name}`);
+    console.log(`#    Continuing anyway — re-dispatch a later wave once its dependencies pass.`);
+  }
 
   for (const phase of phases) {
     console.log(`\n## ${phase.label}`);
@@ -1185,6 +1489,7 @@ function shipDispatch(args) {
         try {
           const info = be.dispatch(spec, u);
           console.log(`  ${u.id} → ${info.path || '(worktree)'}${info.handle ? '' : '  (no agent handle — will resolve on verify)'}`);
+          console.log(`     ${seedLine(spec, u, info)}`);
         } catch (e) {
           console.error(`❌ ${u.id}: ${be.name} dispatch failed — ${e.message}`);
         }
@@ -1207,6 +1512,61 @@ function shipDispatch(args) {
 // resolves to the primary checkout), and — when Orca is live — stamps the worktree
 // card. Oracles are self-contained (`cd <root> && …`), so this also works without a
 // live Orca: it falls back to running the check as written and recording the verdict.
+
+/**
+ * The commit a unit's own work is measured against.
+ *
+ * NOT simply HEAD: a dependent's worktree is seeded with its dependencies and
+ * that seed is committed, so diffing against the worktree's creation point would
+ * report every seeded file as something this unit wrote — a false breach on
+ * exactly the units that need the audit most.
+ *
+ * Order of preference: the baseSha dispatch recorded; else the seed commit found
+ * by message (ship-supervise runs without a dispatch result in hand); else the
+ * fork point from the primary checkout; else HEAD.
+ */
+function auditBase(wt, spec, ref) {
+  if (ref && ref.baseSha) return ref.baseSha;
+  const tryGit = (argv) => {
+    try {
+      const out = execFileSync('git', ['-C', wt, ...argv], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] }).trim();
+      return out || null;
+    } catch { return null; }
+  };
+  const seed = tryGit(['log', '-1', '--format=%H', '--grep', '^vzt: seed ']);
+  if (seed) return seed;
+  const rootHead = (() => {
+    try { return execFileSync('git', ['-C', spec.root, 'rev-parse', 'HEAD'], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] }).trim(); } catch { return null; }
+  })();
+  return (rootHead && tryGit(['merge-base', 'HEAD', rootHead])) || 'HEAD';
+}
+
+/**
+ * Every path this unit touched that it never declared. Empty means clean.
+ *
+ * Two sources, because either alone misses half the cases: `diff --name-only`
+ * sees work the agent COMMITTED, and `ls-files --others` sees files it created
+ * and left untracked — which the smoke runs showed is the common case.
+ *
+ * `--exclude-standard` is what keeps this honest. The unit bootstrap symlinks
+ * node_modules and .env* into every worktree, and a naive scan reports all of
+ * them as writes. A verifier that manufactures failures is worse than no
+ * verifier — this repo has already had a correct barrier BLOCKED through two
+ * correction rounds by exactly that.
+ */
+function auditScope(wt, base, filesInScope) {
+  const lines = (argv) => {
+    try {
+      return execFileSync('git', ['-C', wt, ...argv], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] })
+        .split('\n').map((l) => l.trim()).filter(Boolean);
+    } catch { return []; }
+  };
+  const touched = new Set([
+    ...lines(['diff', '--name-only', base]),
+    ...lines(['ls-files', '--others', '--exclude-standard']),
+  ]);
+  return [...touched].filter((p) => !pathInScope(p, filesInScope)).sort();
+}
 
 /** Run a self-contained oracle command; return {pass, code, output}. */
 function runOracle(machineCheck, cwd) {
@@ -1250,6 +1610,39 @@ function agentTranscriptDir(dir) {
 function verifyAndRecord(be, spec, u, specPath, info, via) {
   const ref = info && info.path ? info : be.resolve(spec, u);
   const wt = ref && ref.path;
+
+  // SCOPE AUDIT, before the oracle.
+  //
+  // FILES_IN_SCOPE was enforced in exactly two places, and neither ran on this
+  // path: a plan-time disjointness check (which cannot see what an agent
+  // actually did) and a SCOPE_BREACH verdict that lives only in the headless
+  // Workflow driver. On the supervised path the FIRST sign a unit had written
+  // outside its scope was a failed `git apply` in the integration gate — at the
+  // very end, after every unit's budget was already spent, reported against
+  // whichever unit happened to be applied second.
+  //
+  // Orca's equivalent is `worker_done --files-modified`, which is the agent's
+  // own account of what it touched. The worktree is better evidence: it needs no
+  // cooperation from the model and cannot be wrong.
+  const breach = wt ? auditScope(wt, auditBase(wt, spec, ref), u.filesInScope || []) : [];
+  if (breach.length) {
+    console.log(`  ${u.id} … SCOPE_BREACH  (${breach.length} file(s) outside FILES_IN_SCOPE)`);
+    for (const f of breach.slice(0, 8)) console.log(`      ✗ ${f}`);
+    if (breach.length > 8) console.log(`      … and ${breach.length - 8} more`);
+    console.log(`      declared scope: ${(u.filesInScope || []).join(', ') || '(none)'}`);
+    console.log(`      worktree: ${wt}`);
+    try {
+      execFileSync(process.execPath, [fileURLToPath(import.meta.url), 'ship-note', specPath,
+        JSON.stringify({ kind: 'unit_result', unit: u.id, status: 'SCOPE_BREACH', via, mux: be.name, code: -1, output: breach.slice(0, 20).join(', ') })],
+        { stdio: ['ignore', 'ignore', 'ignore'] });
+    } catch { /* best-effort */ }
+    if (ref) { try { be.stamp(spec, u, ref, 'SCOPE_BREACH', false); } catch { /* not live */ } }
+    // Do not run the oracle. A unit that wrote outside its declared scope has
+    // already broken the assumption the whole parallel fan-out rests on, and a
+    // green oracle on top of that reads as "fine" when it is not.
+    return false;
+  }
+
   const r = runOracle(u.machineCheck, wt || spec.root);
   const status = r.pass ? 'PASS' : 'FAIL';
   console.log(`  ${u.id} … ${status}${wt ? '' : '  (no live worktree — ran against primary)'}`);
@@ -1402,6 +1795,58 @@ function shipSupervise(args) {
 // (if any) runs FIRST and gates the units. Stops at the green gate with a "ready to
 // review + merge" verdict — it never auto-merges (verify-before-accept stays human).
 
+/**
+ * Block until ONE of the in-flight workers finishes, remove it, and return it.
+ *
+ * The 5-method backend interface only ever offered `waitIdle(handle)` — blocking
+ * on one named worker. That is the wrong primitive for a concurrency cap: a slot
+ * should free when whichever unit finishes first does, not when the one the loop
+ * happened to name first does. A backend that can watch several at once says so
+ * with `waitAny`; the others fall back to the old single-handle wait, which is
+ * still correct, just less efficient (the wave proceeds in dispatch order).
+ *
+ * Always removes exactly one worker, so the caller's loop cannot spin.
+ */
+function takeFinished(be, inflight, timeoutMs) {
+  if (typeof be.waitAny === 'function' && inflight.length > 1) {
+    const handle = be.waitAny(inflight.map((w) => w.info.handle), timeoutMs);
+    const i = inflight.findIndex((w) => w.info.handle === handle);
+    return inflight.splice(i >= 0 ? i : 0, 1)[0];
+  }
+  be.waitIdle(inflight[0].info.handle, timeoutMs);
+  return inflight.splice(0, 1)[0];
+}
+
+/**
+ * Hold an idle-sleep assertion for the length of the run, on macOS.
+ *
+ * "Kick once and walk away" is the whole promise of ship-watch, and walking away
+ * is exactly what puts the machine to sleep — a 40-minute unit on a laptop that
+ * idles out at 20 gets suspended mid-turn, and the API connection it was holding
+ * does not survive the wake. `caffeinate -w <pid>` dies with us, so a crashed or
+ * killed run never leaves the machine permanently awake.
+ *
+ * What this does NOT do, and must not be described as doing: keep agents alive
+ * past the thing that actually kills them. Ship units are VS Code integrated
+ * terminals — child processes of the extension host — so closing or reloading
+ * the window ends them regardless. Nor does any userland assertion override a
+ * lid-close on a Mac without an external display. For a run that genuinely
+ * outlives the editor, the answer is `--mux herdr`: its panes belong to a
+ * separate daemon, not to a window.
+ *
+ * @returns {() => void} release
+ */
+function keepAwake() {
+  if (process.platform !== 'darwin' || process.env.VZT_NO_CAFFEINATE === '1') return () => {};
+  try {
+    const child = spawn('caffeinate', ['-i', '-w', String(process.pid)], { stdio: 'ignore', detached: true });
+    child.unref();
+    return () => { try { child.kill(); } catch { /* already gone */ } };
+  } catch {
+    return () => {}; // no caffeinate — not worth failing a run over
+  }
+}
+
 function shipWatch(args) {
   const specPath = args._[1];
   const spec = loadSpec(specPath);
@@ -1411,7 +1856,15 @@ function shipWatch(args) {
     process.exit(1);
   }
   const be = getBackend(args);
+  // Held for the whole run; released on every exit path below, including the
+  // barrier abort. A `caffeinate -w <our pid>` also dies with us if we crash.
+  const release = keepAwake();
+  process.on('exit', release);
   const timeoutMs = args.timeoutMs ? Number(args.timeoutMs) : 30 * 60 * 1000;
+  // How many units may be in flight at once. The old behaviour was "all of
+  // them", which on a wide spec means N claude processes and N terminals
+  // competing for the same machine. 0 restores it explicitly.
+  const maxConcurrent = Number(args.maxConcurrent ?? process.env.VZT_MAX_CONCURRENT ?? 4);
   console.log(`ship-watch [${be.name}]: ${spec.slug} — dispatch → wait → verify → integration gate (timeout ${Math.round(timeoutMs / 60000)}m/unit)`);
 
   // Open the ledger.
@@ -1436,6 +1889,9 @@ function shipWatch(args) {
     try {
       const info = be.dispatch(spec, u);
       console.log(`  dispatched ${u.id} → ${info.path || '(worktree)'}${info.handle ? '' : '  (no agent handle — will resolve on verify)'}`);
+      // Only worth a line when this unit actually depends on something; the
+      // barrier-only case is every unit in every spec and would be pure noise.
+      if (depsOf(u).length) console.log(`     ${seedLine(spec, u, info)}`);
       return { u, info };
     } catch (e) {
       const msg = (e && e.message ? e.message : String(e)).trim().split('\n')[0];
@@ -1461,25 +1917,67 @@ function shipWatch(args) {
     }
   }
 
-  // Phase 2 — units in parallel; verify each as it idles.
-  console.log('\n## units (parallel)');
-  const workers = spec.units.map(dispatch);
-  console.log('\n## verifying as each finishes …');
+  // Phase 2 — units in dependency WAVES, at most `cap` at a time.
+  //
+  // This used to be `spec.units.map(dispatch)`: every unit launched at once,
+  // then waited on in spec order. Two things were wrong with that. A 12-unit
+  // spec started 12 claude processes and 12 terminals simultaneously, and there
+  // was no way to say "u2 needs what u1 produces" short of making it the single
+  // barrier. Waves fix the ordering; the cap fixes the stampede.
+  const waves = planWaves(spec);
+  const cap = maxConcurrent > 0 ? maxConcurrent : Infinity;
+  console.log(`\n## units — ${waves.length} wave(s), ${maxConcurrent > 0 ? `max ${maxConcurrent} at a time` : 'no concurrency cap'}`);
+
   let passed = 0;
   const passedUnits = [];
-  for (const w of workers) {
-    if (w.dispatchFailed) continue; // already recorded FAIL; nothing to wait on
-    be.waitIdle(w.info.handle, timeoutMs); // by the time earlier ones idle, later ones often already have
-    if (verifyAndRecord(be, spec, w.u, specPath, w.info, 'ship-watch')) {
-      passed++;
-      passedUnits.push(w.u);
+  const verdict = new Map(); // unit id -> 'PASS' | 'FAIL' | 'BLOCKED'
+
+  for (const [i, wave] of waves.entries()) {
+    console.log(`\n### wave ${i + 1}/${waves.length}: ${wave.map((u) => u.id).join(', ')}`);
+
+    // A unit whose dependency did not PASS must never be dispatched. Its
+    // worktree would be seeded from a broken or absent base, so it would fail
+    // for a reason that has nothing to do with its own brief — and the operator
+    // would then debug the wrong unit. BLOCKED is the honest verdict.
+    const queue = [];
+    for (const u of wave) {
+      const unmet = depsOf(u).filter((d) => verdict.get(d) !== 'PASS');
+      if (unmet.length) {
+        console.log(`  ${u.id} … BLOCKED (dependency ${unmet.join(', ')} did not pass)`);
+        verdict.set(u.id, 'BLOCKED');
+        note({ kind: 'unit_result', unit: u.id, status: 'BLOCKED', via: 'ship-watch', mux: be.name, code: -1, output: `not dispatched: dependency ${unmet.join(', ')} did not pass` });
+      } else {
+        queue.push(u);
+      }
+    }
+
+    // Slot scheduler. A slot frees when the unit HOLDING it finishes, which is
+    // why this waits on all in-flight handles at once rather than on whichever
+    // one the loop named first — otherwise a wave runs at the speed of its
+    // slowest member no matter how many slots are free.
+    const inflight = [];
+    while (queue.length || inflight.length) {
+      while (inflight.length < cap && queue.length) {
+        const w = dispatch(queue.shift());
+        if (w.dispatchFailed) { verdict.set(w.u.id, 'FAIL'); continue; }
+        inflight.push(w);
+      }
+      if (!inflight.length) break;
+      const w = takeFinished(be, inflight, timeoutMs);
+      if (verifyAndRecord(be, spec, w.u, specPath, w.info, 'ship-watch')) {
+        verdict.set(w.u.id, 'PASS');
+        passed++;
+        passedUnits.push(w.u);
+      } else {
+        verdict.set(w.u.id, 'FAIL');
+      }
     }
   }
 
-  console.log(`\n${passed}/${workers.length} unit oracle(s) PASS.`);
+  console.log(`\n${passed}/${spec.units.length} unit oracle(s) PASS.`);
 
   let integration = { ok: false, status: 'SKIPPED' };
-  if (passed === workers.length) {
+  if (passed === spec.units.length) {
     integration = runIntegrationGate(spec, be, [spec.barrier, ...passedUnits].filter(Boolean));
   } else {
     console.log('\nintegration gate skipped — not all units passed.');
@@ -1493,9 +1991,9 @@ function shipWatch(args) {
   // it has no repair loop (that lives in the headless workflow path).
   note({
     kind: 'ship',
-    units: workers.length + (spec.barrier ? 1 : 0),
+    units: spec.units.length + (spec.barrier ? 1 : 0),
     passed: passed + (spec.barrier ? 1 : 0),
-    blocked: workers.length - passed,
+    blocked: spec.units.length - passed,
     corrections: 0,
   });
 
@@ -1560,9 +2058,13 @@ Long-horizon runs (/vzt-ship):
 
 Supervision layer — parallel /vzt-ship runs in an agent multiplexer [--mux orca|herdr|vscode]:
   vzt-agent ship-watch <SPEC.md> [--mux orca|herdr|vscode] [--timeout-ms <n>]
+                                 [--max-concurrent <n>]
                                           KICK ONCE, WALK AWAY: dispatch every unit → wait
                                           for each to finish → auto-verify + stamp + ledger →
                                           integration gate. Stops at "ready to review + merge".
+                                          Units run in dependency waves (see dependsOn in the
+                                          SPEC); at most --max-concurrent at a time (default 4,
+                                          0 = unlimited, or set VZT_MAX_CONCURRENT).
   vzt-agent ship-dispatch <SPEC.md> [--mux orca|herdr|vscode] [--execute]
                                           one worktree+claude per unit (dry-run prints commands)
   vzt-agent ship-supervise <SPEC.md> [--mux orca|herdr|vscode]

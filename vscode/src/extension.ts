@@ -314,10 +314,18 @@ function processStatus(): void {
 
     if (contents === "PASS") {
       passCount++;
-    } else if (contents === "FAIL") {
+    } else if (contents === "FAIL" || contents === "SCOPE_BREACH") {
+      // A breach is a failure and must be counted as one. Leaving it out of the
+      // tally would show "3 ✓ 0 ✗" for a run where a unit wrote outside its
+      // declared scope — the one result that invalidates every other unit's.
       failCount++;
     }
     outputChannel.appendLine(`[${contents}] ${unitKey}`);
+    if (contents === "SCOPE_BREACH") {
+      outputChannel.appendLine(
+        `[SCOPE_BREACH] ${unitKey} wrote outside FILES_IN_SCOPE — the integration gate's disjointness assumption no longer holds for this run.`
+      );
+    }
     updateStatusBar();
   }
 }

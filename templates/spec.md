@@ -42,6 +42,13 @@ Disjointness is not a style preference — it is the entire reason the fan-out i
 safe. Two workers writing one file clobber each other and neither reports a
 problem.
 
+Disjointness handles the SPATIAL collision. For the TEMPORAL one — a unit that
+READS what another unit is still writing — declare `"dependsOn": ["<unit id>"]`.
+A dependent starts in a worktree already seeded with its dependencies' finished
+work, one wave later. Leave it off when units are genuinely independent; a spec
+with no edges is a single wave, i.e. the plain parallel fan-out.
+The barrier is an implicit dependency of every unit — never name it in dependsOn.
+
 Each unit gets ONE machine-checkable oracle, chosen NOW, before any code exists.
 A check invented after the diff exists tests what was built, not what was asked.
 
@@ -91,8 +98,9 @@ came here for gets lost.>
       "id": "u2-invoice",
       "title": "Invoice builder",
       "agentType": "vzt-builder",
+      "dependsOn": ["u1-meter"],
       "filesInScope": ["src/example/invoice.ts"],
-      "brief": "Implement buildInvoice() against the interface in src/example/types.ts.",
+      "brief": "Implement buildInvoice() against the interface in src/example/types.ts. Bill the usage returned by meter() — it is already in this worktree.",
       "machineCheck": "npx vitest run test/example/invoice.test.ts",
       "expect": "exit 0, 0 failed"
     }
