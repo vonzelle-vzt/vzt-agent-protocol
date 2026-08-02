@@ -1,11 +1,11 @@
 export const meta = {
   name: 'vzt-ship',
-  description: 'Spec-first long-horizon build: barrier → parallel units → independent oracle → bounded repair → integration gate',
+  description: 'Spec-first long-horizon build: barrier → dependency waves of parallel units → independent oracle → bounded repair → integration gate',
   whenToUse:
     'Invoked by the /vzt-ship skill AFTER `vzt-agent ship-check` exits 0. Requires args {spec} — the parsed <!-- vzt-spec --> block from SPEC.md. Workflow scripts have no filesystem access, so the calling session reads the spec and passes it in. Returns per-unit verdicts plus ledgerLines; the session appends them to LEDGER.jsonl.',
   phases: [
     { title: 'Barrier', detail: 'shared interfaces — serial, must land before anything fans out' },
-    { title: 'Units', detail: 'one agent per unit, disjoint FILES_IN_SCOPE, fully parallel' },
+    { title: 'Units', detail: 'one agent per unit, disjoint FILES_IN_SCOPE, parallel within each dependsOn wave' },
     { title: 'Verify', detail: 'a SEPARATE read-only agent re-runs each oracle — builders never grade themselves' },
     { title: 'Repair', detail: 'bounded correction: ≤2 rounds per failed unit, then BLOCKED' },
     { title: 'Integration', detail: 'whole-repo gate — the only thing that sees cross-unit breakage' },
@@ -35,6 +35,51 @@ for (const u of [spec.barrier, ...spec.units].filter(Boolean)) {
     if (owner.has(f)) throw new Error(`FILES_IN_SCOPE collision: "${f}" claimed by both ${owner.get(f)} and ${u.id}`)
     owner.set(f, u.id)
   }
+}
+
+// The DAG, inlined. Workflow scripts cannot import, so this is a hand copy of
+// `planWaves`/`depsOf` from cli/ship-lib.mjs — and a hand copy is a drift risk,
+// so test/ship.test.mjs runs both against the same fixtures and fails if they
+// ever disagree. Same arrangement as reduceLedgerInline in the router hook.
+//
+// 🔴 Why this had to exist at all: `dependsOn` shipped into the SPEC schema and
+// ship-check accepted it, but THIS path fanned every unit out at once and
+// ignored the field completely. A field one engine honours and another silently
+// drops is worse than no field — the spec says the ordering is guaranteed and
+// half the runs do not do it.
+//
+// Note this path needs ORDERING only, not the worktree seeding the mux backends
+// do: these agents all work in the SAME checkout, so a unit that runs after its
+// dependency simply sees its files already on disk.
+const depsOf = (u) =>
+  Array.isArray(u && u.dependsOn) ? u.dependsOn.filter((d) => typeof d === 'string' && d.trim()) : []
+
+function planWaves(units) {
+  const ids = new Set(units.map((u) => u.id))
+  const remaining = new Map(units.map((u) => [u.id, u]))
+  const landed = new Set()
+  const waves = []
+  while (remaining.size) {
+    const wave = units.filter(
+      (u) => remaining.has(u.id) && depsOf(u).every((d) => !ids.has(d) || d === u.id || landed.has(d))
+    )
+    if (!wave.length) break // cycle — ship-check refuses these; never spin
+    for (const u of wave) { remaining.delete(u.id); landed.add(u.id) }
+    waves.push(wave)
+  }
+  return waves
+}
+
+for (const u of spec.units) {
+  for (const d of depsOf(u)) {
+    if (d !== u.id && !spec.units.some((x) => x.id === d)) {
+      throw new Error(`unit ${u.id}: dependsOn names unknown unit "${d}"`)
+    }
+  }
+}
+const WAVES = planWaves(spec.units)
+if (WAVES.reduce((n, w) => n + w.length, 0) !== spec.units.length) {
+  throw new Error('dependsOn cycle — run `vzt-agent ship-check` for the names')
 }
 
 const ROOT = spec.root
@@ -206,8 +251,36 @@ if (spec.barrier) {
 // Disjoint scopes ⇒ genuinely parallel. No barrier between them: serializing
 // here would burn the exact resource this whole release exists to protect.
 phase('Units')
-log(`Fanning out ${spec.units.length} units (FILES_IN_SCOPE verified pairwise disjoint in code)`)
-const results = await parallel(spec.units.map((u) => () => runUnit(u, 'Units')))
+log(`${spec.units.length} unit(s) in ${WAVES.length} dependency wave(s) (FILES_IN_SCOPE verified pairwise disjoint in code)`)
+
+// A wave is a BARRIER on purpose — the one thing this file otherwise refuses to
+// do. Units inside a wave are still fully parallel; only a declared `dependsOn`
+// buys a wait, and a spec with no edges is one wave, i.e. the old flat fan-out
+// exactly. Serializing more than that would burn the resource this release
+// exists to protect.
+const results = []
+const verdictOf = new Map()
+for (let i = 0; i < WAVES.length; i++) {
+  const runnable = []
+  for (const u of WAVES[i]) {
+    const unmet = depsOf(u).filter((d) => verdictOf.get(d) !== 'PASS')
+    if (unmet.length) {
+      // Running it anyway means grading a unit against work that was never
+      // produced, then attributing the failure to the wrong unit.
+      log(`${u.id} BLOCKED — dependency ${unmet.join(', ')} did not pass`)
+      const blocked = { unit: u.id, verdict: 'BLOCKED', rounds: 0, oracleOutput: `not dispatched: dependency ${unmet.join(', ')} did not pass`, filesWritten: [] }
+      verdictOf.set(u.id, 'BLOCKED')
+      results.push(blocked)
+    } else {
+      runnable.push(u)
+    }
+  }
+  if (!runnable.length) continue
+  if (WAVES.length > 1) log(`wave ${i + 1}/${WAVES.length}: ${runnable.map((u) => u.id).join(', ')}`)
+  const waveResults = (await parallel(runnable.map((u) => () => runUnit(u, 'Units')))).filter(Boolean)
+  for (const r of waveResults) verdictOf.set(r.unit, r.verdict)
+  results.push(...waveResults)
+}
 
 const done = results.filter(Boolean)
 const passed = done.filter((r) => r.verdict === 'PASS')

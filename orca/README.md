@@ -36,12 +36,21 @@ vzt-agent ship-watch .vzt/ship/<slug>/SPEC.md              # everything, on orca
 vzt-agent ship-watch .vzt/ship/<slug>/SPEC.md --mux herdr  # …or on herdr
 ```
 
-`ship-watch` **dispatches** every unit as a `claude` worktree pane → **waits** for each to
-finish (agent idle) → the instant one idles, **auto-verifies** its
-oracle, **stamps** its card, and **records** the ledger → runs the **integration gate**.
-The barrier (if any) runs first and gates the units. It **stops at the green gate** with
-a "ready to review + merge" verdict — it never auto-merges (verify-before-accept stays a
-human call). `--timeout-ms <n>` bounds the per-unit wait (default 30m).
+The barrier (if any) runs first, alone, in **phase 1** — its oracle grades every unit.
+**Phase 2** dispatches units in dependency **waves** (a unit's `dependsOn` says which
+units must PASS before it starts; a spec with no `dependsOn` is one wave, same as
+before): `ship-watch` **dispatches** each ready unit as a `claude` worktree pane, at most
+`--max-concurrent <n>` (also `VZT_MAX_CONCURRENT`, default 4, `0` = unlimited) in flight
+at once, → **waits** for each to finish (agent idle) → the instant one idles,
+**auto-verifies** its oracle, **stamps** its card, and **records** the ledger. A unit
+whose worktree is created fresh for this dispatch is first **seeded**: each of its
+dependencies' finished work (committed, uncommitted, and untracked) is applied and
+committed into it before the agent ever sees it, so a unit briefed to build against an
+interface the barrier wrote actually finds it there. A unit whose dependency did not
+PASS is recorded `BLOCKED` and never dispatched. Once every wave lands, `ship-watch`
+runs the **integration gate** and **stops at the green gate** with a "ready to review +
+merge" verdict — it never auto-merges (verify-before-accept stays a human call).
+`--timeout-ms <n>` bounds the per-unit wait (default 30m).
 
 ## The manual loop (same steps, run them yourself)
 
@@ -54,7 +63,9 @@ vzt-agent ship-start    .vzt/ship/<slug>/SPEC.md          # open the ledger
 vzt-agent ship-dispatch .vzt/ship/<slug>/SPEC.md            # review
 vzt-agent ship-dispatch .vzt/ship/<slug>/SPEC.md --execute  # create the panes
 #   Each pane runs worktree-bootstrap.sh FIRST (symlinks node_modules/.env from the
-#   primary checkout). Barrier runs alone in PHASE 1; units run in PHASE 2 in parallel.
+#   primary checkout). Barrier runs alone in PHASE 1; units run in PHASE 2 in
+#   dependency waves (a unit with dependsOn is seeded from its dependencies'
+#   finished work and committed before its worktree is handed to the agent).
 
 # Supervise: when workers finish, verify every unit's oracle and record it.
 vzt-agent ship-supervise .vzt/ship/<slug>/SPEC.md

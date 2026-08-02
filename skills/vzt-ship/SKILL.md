@@ -45,11 +45,19 @@ from `.claude/templates/spec.md`:
 4. **Units** — decompose so `FILES_IN_SCOPE` sets are **pairwise disjoint**.
    Disjointness is not a style preference; it is the only reason the fan-out is
    safe.
-5. **One oracle per unit, chosen NOW** — the command, and its expected output.
+5. **`dependsOn` — the order, when order exists.** Disjoint scopes stop two units
+   *writing* one file. They say nothing about a unit *reading* a file another
+   unit is still writing. If unit B consumes what unit A produces, say so:
+   `"dependsOn": ["u1-meter"]`. B then starts in a worktree seeded with A's
+   finished work, in the next wave. Omit it when units are genuinely independent
+   — a spec with no edges is one wave, which is the old flat fan-out.
+   The barrier is an implicit dependency of every unit; never name it.
+   Cycles and unknown ids are refused by `ship-check`.
+6. **One oracle per unit, chosen NOW** — the command, and its expected output.
    A check invented after the diff exists tests what was built, not what was
    asked. **If you cannot name the command that proves a unit is done, the unit
    is not specified — decompose again.**
-6. Fill the `<!-- vzt-spec -->` JSON block. It is the machine truth.
+7. Fill the `<!-- vzt-spec -->` JSON block. It is the machine truth.
 
 ## Phase 2 — GATE (a command, not an opinion)
 
@@ -58,7 +66,7 @@ vzt-agent ship-check .vzt/ship/<slug>/SPEC.md
 ```
 
 Exits non-zero on: overlapping FILES_IN_SCOPE, a manifest file no unit owns, a
-unit with no oracle, an unknown agentType. **Do not proceed on a red gate.**
+unit with no oracle, an unknown agentType, a `dependsOn` cycle or unknown id. **Do not proceed on a red gate.**
 This is Gate 4 pointed at the plan itself.
 
 **Bring the spec to the user for approval before spending anything.** The spec is
@@ -80,15 +88,20 @@ including over SSH/mobile:
 
 ```bash
 vzt-agent ship-watch .vzt/ship/<slug>/SPEC.md      # dispatch → idle-wait → independent oracle → integration gate
+vzt-agent ship-watch .vzt/ship/<slug>/SPEC.md --max-concurrent 2  # cap units in flight (default 4, 0 = unlimited)
 ```
 
 The built-in default is **orca** — `--mux` beats `VZT_MUX`, which beats orca. Export
 `VZT_MUX=herdr` (or `vscode`) to change it, or pass `--mux herdr|vscode|orca` per run.
 `--mux vscode` opens each unit as a native VS Code integrated terminal and adds a Ship
 Run tree — per-unit status, the unit's worktree diff readable mid-run, and one-click
-oracle re-runs. The CLI still warns when it falls through to orca implicitly, because
-orca is where an unverified path remains: its skip-permissions and start-grace are
-written from Orca's documented CLI contract but not exercised end-to-end.
+oracle re-runs. Units run in dependency **waves**: a unit still waiting on an unmet
+`dependsOn` shows `waiting` (grey) in that tree — do not mistake it for `blocked`
+(amber), which means the unit is live and parked on a permission prompt; `waiting`
+means it hasn't been dispatched at all. The CLI still warns when it falls through to
+orca implicitly, because orca is where an unverified path remains: its
+skip-permissions and start-grace are written from Orca's documented CLI contract but
+not exercised end-to-end.
 
 **When a unit FAILs, read what it prints** — the oracle command, the oracle's own
 output, the worktree, and the agent's Claude Code transcript path. "agent transcript:

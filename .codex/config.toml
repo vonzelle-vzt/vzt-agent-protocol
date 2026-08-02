@@ -1,0 +1,11 @@
+# VZT Codex default for trusted local repo work.
+#
+# This makes future Codex sessions in this repository start in low-prompt
+# workspace automation mode. It does not bypass Codex, OS, or organization
+# policy enforcement, and it does not authorize destructive/prod actions.
+
+sandbox_mode = "workspace-write"
+approval_policy = "never"
+
+[sandbox_workspace_write]
+network_access = false

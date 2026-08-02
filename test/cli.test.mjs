@@ -206,3 +206,44 @@ test('ship-start → ship-note → ship-status reconstructs the run from disk al
     fs.rmSync(repo, { recursive: true, force: true });
   }
 });
+
+// INSTALLED ≠ CURRENT. Every other doctor check proves a file EXISTS; none
+// proved it still says what the doctrine assumes.
+//
+// 🔴 The failure this catches came from the 1.17.0 release itself. `dependsOn`
+// was added to templates/spec.md in the repo, but the chair authors specs from
+// the INSTALLED copy at .claude/templates/spec.md. Anyone holding an earlier
+// install kept a template with no `dependsOn` in it, so no spec would ever
+// declare a dependency and the whole task DAG would be code nothing could
+// reach — while doctor reported all-green, because the file was present.
+test('doctor detects a STALE installed copy, not just a missing one', () => {
+  const target = fs.mkdtempSync(path.join(os.tmpdir(), 'vzt-stale-'));
+  try {
+    run(['install', '--target', target]);
+
+    // CONTROL: immediately after install, nothing is stale. Without this the
+    // assertion below would also pass on a check that simply always fails.
+    const fresh = run(['doctor', '--target', target]);
+    assert.match(fresh, /installed copies match this version/);
+    assert.ok(!/STALE/.test(fresh), `a just-installed target must not be stale:\n${fresh}`);
+
+    // Now simulate the real thing: an older install whose template predates a
+    // field the current doctrine depends on.
+    const installedSpec = path.join(target, '.claude', 'templates', 'spec.md');
+    const body = fs.readFileSync(installedSpec, 'utf8');
+    assert.match(body, /dependsOn/, 'precondition: the shipped template documents dependsOn');
+    fs.writeFileSync(installedSpec, body.replace(/dependsOn/g, 'THIS_FIELD_IS_FROM_AN_OLD_RELEASE'));
+
+    let out = '';
+    try {
+      out = run(['doctor', '--target', target]);
+    } catch (e) {
+      out = `${e.stdout || ''}${e.stderr || ''}`; // non-zero exit is the point
+    }
+    assert.match(out, /STALE/);
+    assert.match(out, /templates\/spec\.md/, 'the check must name the file that drifted');
+    assert.match(out, /vzt-agent install/, 'and must name the command that fixes it');
+  } finally {
+    fs.rmSync(target, { recursive: true, force: true });
+  }
+});
