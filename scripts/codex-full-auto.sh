@@ -15,7 +15,7 @@ Usage:
   npm run codex:auto -- "Implement the requested change and run targeted checks"
 
 This runs Codex with VZT's full-auto project profile:
-  codex exec --sandbox workspace-write --ask-for-approval never
+  codex exec --sandbox workspace-write
 
 Hard safety gates still apply by protocol:
   no secrets, force pushes, production deploys, DB migrations, or writes outside the workspace.
@@ -23,4 +23,4 @@ USAGE
   exit 2
 fi
 
-codex exec --sandbox workspace-write --ask-for-approval never "$TASK"
+codex exec --sandbox workspace-write "$TASK" < /dev/null
