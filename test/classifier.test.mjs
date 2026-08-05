@@ -597,6 +597,25 @@ test('every Opus surface carries the fable-mode gates (always-on discipline)', (
   assert.ok(!sonnetDirective.includes('fable-mode gates'), 'sonnet directive should not carry the opus gates line');
 });
 
+// This doctrine once lived ONLY in the installed copy under ~/.claude and was
+// absent from this repo — so the next `install --global` would have overwritten
+// the hook and silently deleted it from every project at once. The chair would
+// then go back to in-process subagents, which can never appear in a pane, and the
+// user would see no agents working with nothing to explain why. Pin it at the
+// SOURCE, which is the only copy install can preserve.
+test('every chair profile tells the chair to dispatch waves as real panes', () => {
+  const sessionStart = fs.readFileSync(path.join(REPO_ROOT, 'hooks', 'vzt-session-start.mjs'), 'utf8');
+  for (const chair of ['fable', 'opus', 'sonnet', 'haiku']) {
+    const profile = new RegExp(`${chair}: \`[^\`\\\\]*(?:\\\\.[^\`\\\\]*)*`, 's').exec(sessionStart);
+    assert.ok(profile, `no ${chair} chair profile found`);
+    assert.ok(profile[0].includes('VISIBLE PARALLELISM'),
+      `${chair} chair profile lost the VISIBLE PARALLELISM doctrine`);
+    // The doctrine is only actionable if it names the command that splits a pane.
+    assert.ok(profile[0].includes('vzt-orca-flow pane run'),
+      `${chair} chair profile names no pane command`);
+  }
+});
+
 test('vzt-route skill references the worker-brief template', () => {
   const skill = fs.readFileSync(path.join(REPO_ROOT, 'skills', 'vzt-route', 'SKILL.md'), 'utf8');
   assert.ok(skill.includes('worker-brief'), 'skills/vzt-route/SKILL.md missing reference to "worker-brief"');

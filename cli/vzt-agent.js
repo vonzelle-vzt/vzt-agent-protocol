@@ -925,6 +925,21 @@ function envJson(bin, argv) {
   return d && d.result ? d.result : d;
 }
 
+/** Terminal handle out of an `orca terminal create|split --json` result.
+ *  Orca wraps the payload in a per-verb node (`result.split.handle`,
+ *  `result.create.handle`), so SCAN rather than guessing one key: guessing wrong
+ *  returns null, and a null handle makes waitIdle return instantly and grade a
+ *  worktree the agent never touched. */
+function paneHandle(res) {
+  if (!res || typeof res !== 'object') return null;
+  if (res.handle) return res.handle;
+  for (const k of ['split', 'create', 'terminal', 'startupTerminal', 'session']) {
+    if (res[k] && res[k].handle) return res[k].handle;
+  }
+  for (const v of Object.values(res)) if (v && typeof v === 'object' && v.handle) return v.handle;
+  return null;
+}
+
 function orcaBackend(args) {
   const bin = args.orca || process.env.ORCA_CLI || DEFAULT_ORCA;
   const key = (spec, u) => `${spec.slug}-${u.id}`;
@@ -951,15 +966,55 @@ function orcaBackend(args) {
     '--name', key(spec, u), '--no-parent', '--setup', 'run', '--json'];
   const claudeCmd = (spec, u, extras) =>
     `claude ${skipPerms ? '--dangerously-skip-permissions ' : ''}${shq(unitPrompt(spec, u, extras))}`;
-  const termArgv = (spec, u, wtId, extras) => ['terminal', 'create',
+
+  // PANES, NOT A TAB PER UNIT. `terminal create` opens a whole TAB, so a 9-unit
+  // run buried the operator in 9 agent tabs (plus 9 fallback shells) with no way
+  // to watch two agents at once — the entire point of running them in parallel.
+  // Units after the first in a tab are SPLIT off that tab's first pane instead.
+  //
+  // The cap exists because agent TUIs degrade badly when squeezed: past
+  // VZT_PANES_PER_TAB the next unit opens a fresh tab and becomes its anchor.
+  const PANES_PER_TAB = Math.max(1, Number(process.env.VZT_PANES_PER_TAB || 3));
+  let anchor = null;      // first pane of the current ship tab; every split hangs off it
+  let panesInTab = 0;
+  let plannedPanes = 0;   // dry-run only (plan()), never touched by a real dispatch
+  const tabArgv = (spec, u, wtId, extras) => ['terminal', 'create',
     ...(wtId ? ['--worktree', wtId] : []),
-    '--title', key(spec, u), '--command', claudeCmd(spec, u, extras), '--json'];
+    '--title', `ship/${spec.slug}`, '--command', claudeCmd(spec, u, extras), '--json'];
+  // `terminal split` has NO --worktree flag: the new pane inherits the ANCHOR's
+  // worktree, so the command must cd into this unit's checkout itself. Cost of
+  // that, stated plainly: `orca terminal list` reports split panes under the
+  // anchor's worktreePath. Nothing here reads it — resolve() goes through
+  // `worktree list`, stamp() through `name:<ws>`, waitIdle() through the handle
+  // — so grading is unaffected; only Orca's own label for the pane is.
+  //
+  // Direction alternates so a capped tab forms a grid rather than three slivers.
+  // `--title` is not available on split, and `terminal rename` renames the whole
+  // TAB, which would clobber every sibling — so units are attributed on stdout.
+  const splitArgv = (spec, u, wpath, extras) => ['terminal', 'split',
+    '--terminal', anchor,
+    '--direction', panesInTab % 2 === 1 ? 'vertical' : 'horizontal',
+    '--command', `cd ${shq(wpath)} && ${claudeCmd(spec, u, extras)}`, '--json'];
+  const paneArgv = (spec, u, wtId, wpath, extras) =>
+    (anchor && panesInTab < PANES_PER_TAB && wpath
+      ? splitArgv(spec, u, wpath, extras)
+      : tabArgv(spec, u, wtId, extras));
   const be = {
     name: 'orca', bin,
+    // Dry-run. No pane exists yet, so the layout is SIMULATED with the same rule
+    // dispatch uses — otherwise ship-dispatch would print a tab per unit and
+    // misrepresent what the real run does.
     plan(spec, u) {
+      const slot = plannedPanes % PANES_PER_TAB;   // 0 = first pane of a new tab
+      plannedPanes += 1;
+      const planned = slot === 0
+        ? tabArgv(spec, u, '<WORKTREE_ID>')
+        : ['terminal', 'split', '--terminal', '<FIRST_PANE_HANDLE>',
+          '--direction', slot % 2 === 1 ? 'vertical' : 'horizontal',
+          '--command', `cd '<WORKTREE_PATH>' && ${claudeCmd(spec, u)}`, '--json'];
       return [
         `${shq(bin)} ${createArgv(spec, u).map(shq).join(' ')}`,
-        `${shq(bin)} ${termArgv(spec, u, '<WORKTREE_ID>').map(shq).join(' ')}`,
+        `${shq(bin)} ${planned.map(shq).join(' ')}`,
       ];
     },
     dispatch(spec, u) {
@@ -976,16 +1031,46 @@ function orcaBackend(args) {
       // against. Throws on a seed conflict rather than launching on a bad base.
       const { baseSha, seeded } = wpath ? seedFromDeps(be, spec, u, wpath) : { baseSha: null, seeded: [] };
 
-      // The agent handle comes from `terminal create`, NEVER from the worktree.
+      // The agent handle comes from the pane we open, NEVER from the worktree.
       // A bare `worktree create` (no --agent) leaves a fallback SHELL as the
       // first terminal; waiting on that reports tui-idle immediately and grades
-      // the unit before the agent has done anything.
+      // the unit before the agent has done anything. That shell is closed once
+      // this unit has been graded — see shipWatch; closing it earlier would kill
+      // the repo setup hook that runs in it, and `terminal wait --for` offers
+      // only exit|tui-idle, neither of which a plain shell ever reports.
+      const startupHandle = res.startupTerminal?.handle || null;
+      const argv = paneArgv(spec, u, wtId, wpath, { seeded });
+      let mode = argv[1]; // 'create' (new tab) | 'split' (pane in the current tab)
       let handle = null;
       try {
-        const term = envJson(bin, termArgv(spec, u, wtId, { seeded }));
-        handle = term.handle || term.terminal?.handle || term.startupTerminal?.handle || null;
+        const term = envJson(bin, argv);
+        handle = paneHandle(term);
       } catch (e) {
-        console.error(`  ${u.id}: orca terminal create failed — ${(e.message || '').trim().split('\n')[0]}`);
+        console.error(`  ${u.id}: orca terminal ${mode} failed — ${(e.message || '').trim().split('\n')[0]}`);
+      }
+      // A split is anchored on a pane that may be GONE — the operator closed it,
+      // or its agent exited and Orca reaped it. Layout must never cost a unit its
+      // agent, so fall back to the tab this replaced. Worst case is the old
+      // behaviour, not a unit that silently launched nothing.
+      if (!handle && mode === 'split') {
+        console.error(`  ${u.id}: anchor pane unusable — opening a tab instead`);
+        anchor = null; panesInTab = 0; mode = 'create';
+        try {
+          handle = paneHandle(envJson(bin, tabArgv(spec, u, wtId, { seeded })));
+        } catch (e) {
+          console.error(`  ${u.id}: orca terminal create failed — ${(e.message || '').trim().split('\n')[0]}`);
+        }
+      }
+      if (handle) {
+        if (mode === 'split') {
+          panesInTab += 1;
+        } else {
+          anchor = handle;   // splits hang off the tab's FIRST pane, not a chain
+          panesInTab = 1;
+        }
+        // split takes no --title and rename retitles the whole tab, so stdout is
+        // the only place a pane can be attributed back to its unit.
+        console.log(`  ${u.id} → ${mode === 'split' ? `pane ${panesInTab}/${PANES_PER_TAB}` : `tab ship/${spec.slug}`}  ${handle}`);
       }
       // A null handle means waitIdle has nothing to wait ON: it returns instantly
       // and the oracle grades a worktree the agent may not have touched yet.
@@ -993,7 +1078,18 @@ function orcaBackend(args) {
       if (!handle) {
         console.error(`  ${u.id}: no orca agent terminal handle — cannot wait for idle, so the oracle may grade an unfinished worktree.`);
       }
-      return { path: wpath, ws: key(spec, u), baseSha, seeded, handle };
+      return { path: wpath, ws: key(spec, u), baseSha, seeded, handle, startupHandle };
+    },
+    // Best-effort tidy of the fallback shell `worktree create` left behind. Only
+    // safe once the unit has been GRADED: the repo setup hook runs in that shell,
+    // and there is no CLI signal for "setup finished". Never throws — a stray tab
+    // costs one command, a failed run costs the work.
+    closeStartup(startupHandle) {
+      if (!startupHandle) return;
+      try {
+        execFileSync(bin, ['terminal', 'close', '--terminal', startupHandle, '--tab', '--json'],
+          { stdio: ['ignore', 'ignore', 'ignore'] });
+      } catch { /* already gone, or Orca not live */ }
     },
     // TWO-PHASE, matching herdr and vscode: prove the agent STARTED before
     // waiting for it to stop. Orca exposes no agent status states, but
@@ -1070,40 +1166,114 @@ function herdrBackend(args) {
   // the first tool prompt, the idle-wait returns, and the oracle grades an
   // empty worktree. Opt out per-run with VZT_HERDR_SKIP_PERMISSIONS=0.
   const skipPerms = process.env.VZT_HERDR_SKIP_PERMISSIONS !== '0';
-  const claudeArgv = (prompt) => ['claude', ...(skipPerms ? ['--dangerously-skip-permissions'] : []), prompt];
+  // herdr 0.7.5: `agent start <NAME> --kind <KIND> --pane <ID> [-- AGENT_ARG...]`.
+  // The KIND supplies the executable, so the args after `--` are claude's FLAGS
+  // only — passing `claude` again would run `claude claude <prompt>`.
+  //
+  // 🔴 This shape is a BREAKING CHANGE from the one this backend used to send
+  // (`--workspace <ws> --cwd <path> --no-focus --env … -- claude …`), and herdr
+  // rejects the old one with a bare `unknown option: --workspace`. Every unit
+  // therefore created its worktree, started NOTHING, and was graded on an empty
+  // tree — silently, because the throw was swallowed into a one-line warning.
+  // `agent wait` drifted the same way: `--status` became `--until`.
+  const agentArgs = (prompt) => [...(skipPerms ? ['--dangerously-skip-permissions'] : []), prompt];
+  // PANES, NOT A WORKSPACE PER UNIT. `worktree create` opens a workspace holding
+  // one pane, so a 9-unit run produced 9 separate surfaces and the operator could
+  // never watch two units at once. Units after the first are SPLIT into the first
+  // unit's workspace instead — `pane split --cwd` puts the new pane in the right
+  // checkout with no cd, and the now-empty per-unit workspace is closed.
+  // Shares VZT_PANES_PER_TAB with the orca backend: one knob for "how many agents
+  // share a surface", because agent TUIs degrade badly when squeezed.
+  const PANES_PER_WS = Math.max(1, Number(process.env.VZT_PANES_PER_TAB || 3));
+  // A freshly split pane is NOT yet at its shell prompt, and herdr answers
+  // `agent_pane_busy` — which reads as "pane in use" rather than "not ready yet".
+  // Retry against a deadline: shell startup time depends on the user's rc files,
+  // so a slept constant is a guess that fails on someone else's machine.
+  const PANE_READY_MS = Number(process.env.VZT_HERDR_PANE_READY_MS || 30_000);
+  let anchor = null;      // first agent pane; every split hangs off it
+  let panesInWs = 0;
+  const paneId = (r) => r?.pane?.pane_id || r?.agent?.pane_id || r?.root_pane?.pane_id || null;
+  const quietly = (argv) => {
+    try { execFileSync(bin, argv, { stdio: ['ignore', 'ignore', 'ignore'] }); return true; } catch { return false; }
+  };
   // herdr enforces GLOBALLY-UNIQUE agent instance names. The `<name>` positional
-  // of `agent start <name>` is the instance name, NOT the agent type — the type
-  // (claude/codex/…) is auto-detected from the running process. So naming every
-  // unit's agent "claude" made the first unit claim the name and every later
-  // `agent start claude` die with `agent_name_taken`, launching nothing and
-  // grading empty worktrees. Name each agent by its unit key (already unique).
+  // of `agent start <name>` is the instance name, NOT the agent type. So naming
+  // every unit's agent "claude" made the first unit claim the name and every later
+  // start die with `agent_name_taken`, launching nothing and grading empty
+  // worktrees. Name each agent by its unit key, and salt a RE-RUN of the same unit
+  // (whose previous agent may still hold the name) rather than launching nothing.
+  const startAgent = (name, pane, prompt) => {
+    const deadline = Date.now() + PANE_READY_MS;
+    for (let attempt = 0; ; attempt += 1) {
+      const instance = attempt === 0 ? name : `${name}-${attempt}`;
+      try {
+        return paneId(envJson(bin, ['agent', 'start', instance, '--kind', 'claude', '--pane', pane,
+          '--timeout', String(PANE_READY_MS), '--', ...agentArgs(prompt)]));
+      } catch (e) {
+        const msg = (e.message || '').trim();
+        if (/agent_name_taken/.test(msg) && attempt < 3) continue;      // stale name from a re-run
+        if (/busy|not ready|agent_pane_busy/i.test(msg) && Date.now() < deadline) { sleepSync(1000); continue; }
+        throw e;
+      }
+    }
+  };
   const be = {
     name: 'herdr', bin,
     plan(spec, u) {
       const b = branch(spec, u);
-      const cargv = claudeArgv(unitPrompt(spec, u)).map(shq).join(' ');
+      const aargv = agentArgs(unitPrompt(spec, u)).map(shq).join(' ');
       return [
         `${shq(bin)} worktree create --cwd ${shq(spec.root)} --branch ${shq(b)} --label ${shq(b)} --no-focus --json`,
-        `${shq(bin)} agent start ${shq(b)} --workspace <WS> --cwd <WT_PATH> --no-focus --env PATH="$PATH" -- ${cargv}`,
+        `${shq(bin)} pane split --pane <ANCHOR_PANE> --direction down --cwd <WT_PATH> --env PATH="$PATH" --no-focus`,
+        `${shq(bin)} agent start ${shq(b)} --kind claude --pane <PANE> -- ${aargv}`,
       ];
     },
     dispatch(spec, u) {
       const b = branch(spec, u);
       const wt = envJson(bin, ['worktree', 'create', '--cwd', spec.root, '--branch', b, '--label', b, '--no-focus', '--json']);
       const ws = wt.workspace?.workspace_id || wt.worktree?.open_workspace_id || null;
-      const wpath = wt.worktree?.path || wt.workspace?.worktree?.checkout_path || null;
+      const wpath = wt.worktree?.path || wt.root_pane?.cwd || wt.workspace?.worktree?.checkout_path || null;
       // Seed dependencies into the worktree BEFORE the agent boots. herdr creates
       // the branch from the repo's current HEAD, so a dependent would otherwise
       // open a tree missing everything it was told to build against.
       const { baseSha, seeded } = wpath ? seedFromDeps(be, spec, u, wpath) : { baseSha: null, seeded: [] };
-      let handle = null;
-      if (ws && wpath) {
+
+      // Where the agent will live: a split of the shared ship workspace when one
+      // is open, otherwise this unit's own root pane (which then becomes the
+      // anchor every later unit splits off).
+      let pane = null;
+      let paneWs = ws;
+      if (anchor && panesInWs < PANES_PER_WS && wpath) {
         try {
-          const ag = envJson(bin, ['agent', 'start', b, '--workspace', ws, '--cwd', wpath, '--no-focus', ...envPath, '--', ...claudeArgv(unitPrompt(spec, u, { seeded }))]);
-          handle = ag.agent?.pane_id || null;
-        } catch (e) { console.error(`  ${u.id}: herdr agent start failed — ${e.message}`); }
+          pane = paneId(envJson(bin, ['pane', 'split', '--pane', anchor, '--direction',
+            panesInWs % 2 === 1 ? 'down' : 'right', '--cwd', wpath, ...envPath, '--no-focus']));
+        } catch (e) { console.error(`  ${u.id}: herdr pane split failed — ${(e.message || '').trim().split('\n')[0]}`); }
+        if (pane) {
+          panesInWs += 1;
+          paneWs = null;              // the agent lives in the SHARED workspace now
+          if (ws) quietly(['workspace', 'close', ws]);   // this unit's own surface is empty
+        }
       }
-      return { path: wpath, ws, baseSha, seeded, handle };
+      if (!pane) {
+        pane = wt.root_pane?.pane_id || null;
+        if (pane) { anchor = pane; panesInWs = 1; }
+      }
+
+      let handle = null;
+      if (pane) {
+        try {
+          handle = startAgent(b, pane, unitPrompt(spec, u, { seeded }));
+        } catch (e) { console.error(`  ${u.id}: herdr agent start failed — ${(e.message || '').trim().split('\n')[0]}`); }
+      } else {
+        console.error(`  ${u.id}: herdr gave no pane to start in — the unit will be graded on an untouched worktree.`);
+      }
+      if (handle) {
+        // `pane rename` labels THIS unit's pane. Renaming the workspace would
+        // clobber every sibling sharing it — the same trap as retitling a tab.
+        quietly(['pane', 'rename', handle, b]);
+        console.log(`  ${u.id} → ${paneWs ? 'workspace' : `pane ${panesInWs}/${PANES_PER_WS}`}  ${handle}`);
+      }
+      return { path: wpath, ws, baseSha, seeded, handle, paneWs };
     },
     waitIdle(handle, t) {
       if (!handle) return;
@@ -1116,21 +1286,21 @@ function herdrBackend(args) {
       // `blocked` counts as started too — an agent sitting on a permission
       // prompt has clearly begun, and we want the idle wait (not a 1s false
       // FAIL) to be what governs it.
-      const started = ['working', 'blocked'].some((st) => {
-        try {
-          execFileSync(bin, ['agent', 'wait', handle, '--status', st, '--timeout', String(Math.min(t, START_GRACE_MS))],
-            { stdio: ['ignore', 'ignore', 'ignore'] });
-          return true;
-        } catch { return false; }
-      });
+      //
+      // The flag is `--until`, NOT `--status`: herdr rejects the latter outright,
+      // and because every wait here is wrapped in a catch, the rejection made
+      // waitIdle return in milliseconds — so the oracle graded each worktree the
+      // instant it was created. A silent no-op wait is worse than no wait at all.
+      const started = ['working', 'blocked'].some((st) =>
+        quietly(['agent', 'wait', handle, '--until', st, '--timeout', String(Math.min(t, START_GRACE_MS))]));
       if (!started) {
         // Never observed running. Either it died on launch, or it finished
         // faster than we looked. Don't grade yet — the oracle is the authority,
         // but give the filesystem a beat so a fast unit isn't failed on a race.
-        try { execFileSync(bin, ['agent', 'wait', handle, '--status', 'idle', '--timeout', String(Math.min(t, START_GRACE_MS))], { stdio: ['ignore', 'ignore', 'ignore'] }); } catch { /* fall through */ }
+        quietly(['agent', 'wait', handle, '--until', 'idle', '--timeout', String(Math.min(t, START_GRACE_MS))]);
         return;
       }
-      try { execFileSync(bin, ['agent', 'wait', handle, '--status', 'idle', '--timeout', String(t)], { stdio: ['ignore', 'ignore', 'ignore'] }); } catch { /* timed out/stale — verify anyway */ }
+      quietly(['agent', 'wait', handle, '--until', 'idle', '--timeout', String(t)]);
     },
     resolve(spec, u) {
       try {
@@ -1140,9 +1310,14 @@ function herdrBackend(args) {
         return hit ? { path: hit.path, ws: hit.open_workspace_id } : null;
       } catch { return null; }
     },
+    // The verdict goes on whatever surface this unit actually OWNS. A unit that
+    // shares the ship workspace owns only its pane; renaming the workspace there
+    // would overwrite the label of every sibling in it.
     stamp(spec, u, info, status /* , pass */) {
-      if (!info.ws) return;
-      try { execFileSync(bin, ['workspace', 'rename', info.ws, `${branch(spec, u)} oracle:${status}`], { stdio: ['ignore', 'ignore', 'ignore'] }); } catch { /* not live */ }
+      const label = `${branch(spec, u)} oracle:${status}`;
+      if (info.handle && !info.paneWs) { quietly(['pane', 'rename', info.handle, label]); return; }
+      const ws = info.paneWs || info.ws;
+      if (ws) quietly(['workspace', 'rename', ws, label]);
     },
   };
   return be;
@@ -1901,6 +2076,17 @@ function shipWatch(args) {
     }
   };
 
+  // Grade a finished unit, then let the backend tidy anything it opened purely to
+  // get the agent running — for orca, the fallback shell tab `worktree create`
+  // leaves behind. Deliberately AFTER the oracle: that shell runs the repo setup
+  // hook and there is no CLI signal for "setup finished", so a unit that has been
+  // graded is the first moment closing it is provably safe.
+  const grade = (u, info) => {
+    const pass = verifyAndRecord(be, spec, u, specPath, info, 'ship-watch');
+    if (be.closeStartup) be.closeStartup(info && info.startupHandle);
+    return pass;
+  };
+
   // Phase 1 — barrier gates everything.
   if (spec.barrier) {
     console.log('\n## barrier (runs first; its oracle grades every unit)');
@@ -1908,7 +2094,7 @@ function shipWatch(args) {
     let barrierOk = false;
     if (!b.dispatchFailed) {
       be.waitIdle(b.info.handle, timeoutMs);
-      barrierOk = verifyAndRecord(be, spec, spec.barrier, specPath, b.info, 'ship-watch');
+      barrierOk = grade(spec.barrier, b.info);
     }
     if (!barrierOk) {
       console.error('\n❌ barrier FAILED — aborting before dispatching units. Fix the barrier worktree, then re-run.');
@@ -1964,7 +2150,7 @@ function shipWatch(args) {
       }
       if (!inflight.length) break;
       const w = takeFinished(be, inflight, timeoutMs);
-      if (verifyAndRecord(be, spec, w.u, specPath, w.info, 'ship-watch')) {
+      if (grade(w.u, w.info)) {
         verdict.set(w.u.id, 'PASS');
         passed++;
         passedUnits.push(w.u);
