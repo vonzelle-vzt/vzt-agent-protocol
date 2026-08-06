@@ -138,7 +138,7 @@ test('units after the first share a tab as split panes, up to the cap', () => {
     // checkout: without this cd the agent runs in the WRONG worktree.
     for (const sp of splits) {
       const cmd = arg(sp, '--command');
-      assert.match(cmd, /^cd '.*\/wt\/panes-u[234]' && claude /, `split command lost its cd:\n${cmd}`);
+      assert.match(cmd, /^cd '.*\/wt\/panes-u[234]' && VZT_VSCODE_MUX=1 /, `split command lost its cd:\n${cmd}`);
     }
     // The house standard survives on BOTH paths.
     for (const a of [...creates, ...splits]) {

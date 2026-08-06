@@ -722,6 +722,69 @@ const BOOTSTRAP = path.join(ORCA_VZT_DIR, 'worktree-bootstrap.sh');
 // queue/ into native integrated terminals; the Stop hook writes state/*.idle.
 const VZT_VSCODE_DIR = process.env.VZT_VSCODE_DIR || path.join(os.homedir(), '.vzt', 'vscode-mux');
 
+// ——— agent lifecycle sentinels — shared by the vscode and orca backends ———————
+//
+// `~/.claude/hooks/vzt-router/vzt-vscode-agent-state.sh` is installed GLOBALLY on
+// SessionStart/PermissionRequest/Stop and no-ops unless VZT_VSCODE_MUX=1 and
+// VZT_VSCODE_UNIT are in the agent's env. It writes <unit>.started / .blocked /
+// .idle. The signal comes from claude's OWN lifecycle, so unlike anything derived
+// from screen output it cannot be faked by a prompt echo or missed during a slow
+// tool call.
+//
+// The orca backend uses this too — hence the extraction. Orca offers only
+// `terminal wait --for tui-idle`, and that was measured returning WHILE the agent
+// was still working (vzt-orca-flow's pane_await carries the same finding from a
+// codex pane still printing "Working"). Grading on tui-idle grades a unit
+// mid-sentence. The env names keep their VZT_VSCODE_ prefix because the installed
+// hook reads exactly those; the mechanism is not vscode-specific.
+const SENTINEL_ENV = 'VZT_VSCODE_MUX';
+const SENTINEL_UNIT_ENV = 'VZT_VSCODE_UNIT';
+
+/** Sentinel file paths for one unit key, plus a best-effort mkdir of their dir. */
+function sentinelPaths(stateDir, unitKey) {
+  try { fs.mkdirSync(stateDir, { recursive: true }); } catch { /* unwritable — caller degrades */ }
+  return {
+    unitKey,
+    startedFile: path.join(stateDir, `${unitKey}.started`),
+    blockedFile: path.join(stateDir, `${unitKey}.blocked`),
+    idleFile: path.join(stateDir, `${unitKey}.idle`),
+  };
+}
+
+/** Clear every sentinel from a PRIOR run of this unit key.
+ *  Not just `.idle`: a stale `.started` satisfies phase 1 instantly and puts us
+ *  straight back to grading an empty worktree. */
+function sentinelReset(stateDir, unitKey) {
+  for (const ext of ['started', 'blocked', 'idle', 'status']) {
+    try { fs.unlinkSync(path.join(stateDir, `${unitKey}.${ext}`)); } catch { /* none */ }
+  }
+}
+
+/** TWO-PHASE wait: prove the agent STARTED, then wait for it to go idle.
+ *  Waiting on `.idle` alone cannot tell "still working" from "never launched" —
+ *  observed live 2026-07-28, where a swallowed command burned the whole unit
+ *  timeout before being graded FAIL against an untouched worktree.
+ *  Returns 'idle' | 'no-start' | 'timeout'. Never throws: the oracle is the
+ *  authority, so a broken sentinel must degrade to verifying, not to failing. */
+function waitOnSentinels(h, t) {
+  const startGrace = Number(process.env.VZT_START_GRACE_MS || 90_000);
+  const startDeadline = Date.now() + Math.min(t, startGrace);
+  let started = false;
+  while (Date.now() < startDeadline) {
+    if (fs.existsSync(h.startedFile) || fs.existsSync(h.blockedFile)) { started = true; break; }
+    if (fs.existsSync(h.idleFile)) return 'idle'; // finished faster than we looked
+    sleepSync(500);
+  }
+  if (!started) return 'no-start';
+
+  const deadline = Date.now() + t;
+  while (Date.now() < deadline) {
+    if (fs.existsSync(h.idleFile)) return 'idle';
+    sleepSync(1000);
+  }
+  return 'timeout';
+}
+
 function unitPrompt(spec, u, extras = {}) {
   const files = (u.filesInScope || []).map((f) => `    - ${f}`).join('\n');
   const seeded = extras.seeded && extras.seeded.length
@@ -964,8 +1027,18 @@ function orcaBackend(args) {
   // would poll an idle shell and grade the unit the instant it launched.
   const createArgv = (spec, u) => ['worktree', 'create', '--repo', `path:${spec.root}`,
     '--name', key(spec, u), '--no-parent', '--setup', 'run', '--json'];
+  const stateDir = path.join(VZT_VSCODE_DIR, 'state');
+  // The lifecycle env rides INSIDE the --command string because neither
+  // `orca terminal create` nor `orca terminal split` has an --env flag
+  // (vzt-orca-flow carries VZT_PANE_DEPTH into child panes the same way).
+  // VZT_VSCODE_DIR is passed explicitly rather than left to default: the pane's
+  // shell need not inherit this process's env, and a hook writing sentinels to a
+  // different directory than waitIdle polls is indistinguishable from an agent
+  // that never started.
+  const sentinelEnv = (spec, u) =>
+    `${SENTINEL_ENV}=1 ${SENTINEL_UNIT_ENV}=${shq(key(spec, u))} VZT_VSCODE_DIR=${shq(VZT_VSCODE_DIR)} `;
   const claudeCmd = (spec, u, extras) =>
-    `claude ${skipPerms ? '--dangerously-skip-permissions ' : ''}${shq(unitPrompt(spec, u, extras))}`;
+    `${sentinelEnv(spec, u)}claude ${skipPerms ? '--dangerously-skip-permissions ' : ''}${shq(unitPrompt(spec, u, extras))}`;
 
   // PANES, NOT A TAB PER UNIT. `terminal create` opens a whole TAB, so a 9-unit
   // run buried the operator in 9 agent tabs (plus 9 fallback shells) with no way
@@ -977,6 +1050,11 @@ function orcaBackend(args) {
   const PANES_PER_TAB = Math.max(1, Number(process.env.VZT_PANES_PER_TAB || 3));
   let anchor = null;      // first pane of the current ship tab; every split hangs off it
   let panesInTab = 0;
+  // handle -> sentinel paths. The 5-method interface hands waitIdle only the
+  // terminal handle, and the handle stays a plain string because shipWatch
+  // compares and closes it — so the lifecycle files are looked up here rather
+  // than by widening the handle contract for one backend.
+  const sentinelsByHandle = new Map();
   let plannedPanes = 0;   // dry-run only (plan()), never touched by a real dispatch
   const tabArgv = (spec, u, wtId, extras) => ['terminal', 'create',
     ...(wtId ? ['--worktree', wtId] : []),
@@ -1039,6 +1117,10 @@ function orcaBackend(args) {
       // the repo setup hook that runs in it, and `terminal wait --for` offers
       // only exit|tui-idle, neither of which a plain shell ever reports.
       const startupHandle = res.startupTerminal?.handle || null;
+      // Clear a prior run's sentinels BEFORE the pane opens, so the agent's own
+      // hooks are the only thing that can create them.
+      sentinelReset(stateDir, key(spec, u));
+      const sentinels = sentinelPaths(stateDir, key(spec, u));
       const argv = paneArgv(spec, u, wtId, wpath, { seeded });
       let mode = argv[1]; // 'create' (new tab) | 'split' (pane in the current tab)
       let handle = null;
@@ -1062,6 +1144,7 @@ function orcaBackend(args) {
         }
       }
       if (handle) {
+        sentinelsByHandle.set(handle, sentinels);
         if (mode === 'split') {
           panesInTab += 1;
         } else {
@@ -1078,7 +1161,7 @@ function orcaBackend(args) {
       if (!handle) {
         console.error(`  ${u.id}: no orca agent terminal handle — cannot wait for idle, so the oracle may grade an unfinished worktree.`);
       }
-      return { path: wpath, ws: key(spec, u), baseSha, seeded, handle, startupHandle };
+      return { path: wpath, ws: key(spec, u), baseSha, seeded, handle, startupHandle, sentinels };
     },
     // Best-effort tidy of the fallback shell `worktree create` left behind. Only
     // safe once the unit has been GRADED: the repo setup hook runs in that shell,
@@ -1091,44 +1174,63 @@ function orcaBackend(args) {
           { stdio: ['ignore', 'ignore', 'ignore'] });
       } catch { /* already gone, or Orca not live */ }
     },
-    // TWO-PHASE, matching herdr and vscode: prove the agent STARTED before
-    // waiting for it to stop. Orca exposes no agent status states, but
-    // `terminal read` returns a monotonic `latestCursor` — output is proof of
-    // life, and no output within the start grace means it never ran.
+    // TWO-PHASE on the agent's OWN lifecycle hooks — see waitOnSentinels.
     //
-    // Written from Orca's documented CLI contract and NOT exercised end-to-end
-    // (no Orca runtime on the machine this was written on), so it degrades on
-    // purpose: if a cursor cannot be read the phase is skipped entirely and we
-    // fall through to the single-phase wait that shipped before. Worst case is
-    // today's behaviour, not a broken default backend.
+    // What this replaced, and why: a `latestCursor` delta for "started" plus
+    // `orca terminal wait --for tui-idle` for "finished". Both are screen-derived
+    // and both were measured wrong. tui-idle returns WHILE the agent is still
+    // working, so a unit got graded mid-sentence; and cursor movement cannot tell
+    // a booting agent from a shell echoing its own prompt. The sentinels come from
+    // claude's SessionStart/Stop hooks instead, which is the same signal the
+    // vscode backend has run on since 2026-07-28.
+    //
+    // Degrades rather than throws: no sentinels recorded for this handle (an older
+    // dispatch, or an unwritable state dir) falls back to the tui-idle wait that
+    // shipped before. Worst case is the previous behaviour, not a stalled run.
     waitIdle(handle, t) {
       if (!handle) return;
-      const startGrace = Number(process.env.VZT_START_GRACE_MS || 90_000);
-      const cursor = () => {
-        try {
-          const r = envJson(bin, ['terminal', 'read', '--terminal', handle, '--limit', '1', '--json']);
-          const c = r.latestCursor ?? r.nextCursor ?? null;
-          return typeof c === 'number' ? c : null;
-        } catch {
-          return null;
-        }
-      };
-      const base = cursor();
-      if (base !== null) {
-        const deadline = Date.now() + Math.min(t, startGrace);
-        let started = base > 0;
-        while (!started && Date.now() < deadline) {
-          sleepSync(1000);
-          const c = cursor();
-          if (c === null) { started = true; break; } // lost the signal — don't stall on it
-          if (c > base) started = true;
-        }
-        if (!started) {
-          console.error(`  orca: no output within ${Math.round(Math.min(t, startGrace) / 1000)}s — the agent likely never started; verifying anyway`);
-          return;
-        }
+      const h = sentinelsByHandle.get(handle);
+      if (!h) {
+        try { execFileSync(bin, ['terminal', 'wait', '--terminal', handle, '--for', 'tui-idle', '--timeout-ms', String(t), '--json'], { stdio: ['ignore', 'ignore', 'ignore'] }); } catch { /* timed out/stale — verify anyway */ }
+        return;
       }
-      try { execFileSync(bin, ['terminal', 'wait', '--terminal', handle, '--for', 'tui-idle', '--timeout-ms', String(t), '--json'], { stdio: ['ignore', 'ignore', 'ignore'] }); } catch { /* timed out/stale — verify anyway */ }
+      const r = waitOnSentinels(h, t);
+      if (r === 'no-start') {
+        const s = Math.round(Math.min(t, Number(process.env.VZT_START_GRACE_MS || 90_000)) / 1000);
+        console.error(`  ${h.unitKey}: no start signal within ${s}s — the pane never ran its agent; verifying anyway`);
+        console.error('    A pane sitting at a shell prompt means DISPATCH failed, not that the unit is slow.');
+        console.error('    Check it with: orca terminal read --terminal ' + handle + ' --limit 40 --json');
+      }
+    },
+    // Free a wave slot when whichever unit finishes FIRST does, not when the one
+    // the loop named first does. Cheap here because every unit's completion is a
+    // file: polling N of them costs no more than polling one.
+    waitAny(handles, t) {
+      const watched = handles.filter((x) => x && sentinelsByHandle.has(x));
+      if (!watched.length) return handles[0];
+      const startGrace = Number(process.env.VZT_START_GRACE_MS || 90_000);
+      const deadline = Date.now() + t;
+      let startDeadline = Date.now() + Math.min(t, startGrace);
+      while (Date.now() < deadline) {
+        for (const x of watched) {
+          if (fs.existsSync(sentinelsByHandle.get(x).idleFile)) return x;
+        }
+        // A unit that never started must not hold the slot for the full budget —
+        // same failure the single-handle path reports, applied to the whole wave.
+        if (Date.now() > startDeadline) {
+          const dead = watched.find((x) => {
+            const s = sentinelsByHandle.get(x);
+            return !fs.existsSync(s.startedFile) && !fs.existsSync(s.blockedFile);
+          });
+          if (dead) {
+            console.error(`  ${sentinelsByHandle.get(dead).unitKey}: no start signal — the pane never ran its agent; verifying anyway`);
+            return dead;
+          }
+          startDeadline = Infinity; // all alive; only idle decides from here
+        }
+        sleepSync(1000);
+      }
+      return watched[0];
     },
     resolve(spec, u) {
       try {
@@ -1412,17 +1514,10 @@ function vscodeBackend(/* args */) {
       // breach scope rebuilding what it cannot see. Throws on a seed conflict,
       // which shipWatch records as a dispatch failure with the reason.
       const { baseSha, seeded } = seedFromDeps(be, spec, u, wtPath);
-      // Clear EVERY sentinel from a prior run of this unit key, not just idle —
-      // a stale `.started` would satisfy the start phase instantly and put us
-      // right back to grading an empty worktree.
-      for (const f of [`${k}.idle`, `${k}.status`, `${k}.started`, `${k}.blocked`]) {
-        try { fs.unlinkSync(path.join(stateDir, f)); } catch { /* none */ }
-      }
+      sentinelReset(stateDir, k);
       const promptFile = path.join(promptDir, `${k}.txt`);
       fs.writeFileSync(promptFile, unitPrompt(spec, u, { seeded, drift: fresh ? null : baseDriftBlock(spec.root, k) }));
-      const idleFile = path.join(stateDir, `${k}.idle`);
-      const startedFile = path.join(stateDir, `${k}.started`);
-      const blockedFile = path.join(stateDir, `${k}.blocked`);
+      const { idleFile, startedFile, blockedFile } = sentinelPaths(stateDir, k);
       const cmd = claudeCmd(promptFile);
       const queueFile = path.join(queueDir, `${k}.json`);
       // `workspaceRoot` is what SCOPES this record to a window.
@@ -1442,7 +1537,7 @@ function vscodeBackend(/* args */) {
         unitKey: k,
         cwd: wtPath,
         workspaceRoot: spec.root,
-        env: { VZT_VSCODE_MUX: '1', VZT_VSCODE_UNIT: k },
+        env: { [SENTINEL_ENV]: '1', [SENTINEL_UNIT_ENV]: k },
         cmd,
       }, null, 2));
       // Persistent twin for the tree view: survives the queue record's deletion
@@ -1504,30 +1599,14 @@ function vscodeBackend(/* args */) {
         return;
       }
 
-      // Phase 1 — wait for evidence the agent actually STARTED. `blocked` counts
-      // as started (it is sitting on a prompt, which is a live agent), and so
-      // does `idle` itself for a unit that finished faster than we looked.
-      const startGrace = Number(process.env.VZT_START_GRACE_MS || 90_000);
-      const startDeadline = Date.now() + Math.min(t, startGrace);
-      let started = false;
-      while (Date.now() < startDeadline) {
-        if (fs.existsSync(handle.startedFile) || fs.existsSync(handle.blockedFile)) { started = true; break; }
-        if (fs.existsSync(handle.idleFile)) return; // finished already
-        sleepSync(500);
-      }
-      if (!started) {
+      // Phase 1 proves the agent STARTED, phase 2 waits for it to go idle. Shared
+      // with the orca backend — see waitOnSentinels for the incident behind it.
+      if (waitOnSentinels(handle, t) === 'no-start') {
         // Never observed running inside the grace window. Don't spend the rest of
         // the unit budget waiting on a sentinel that is not coming — the oracle
         // is still the authority and will run against the worktree.
-        console.error(`  ${handle.unitKey}: no start signal within ${Math.round(Math.min(t, startGrace) / 1000)}s — terminal likely never ran its command; verifying anyway`);
-        return;
-      }
-
-      // Phase 2 — it is alive; now the full unit budget governs.
-      const deadline = Date.now() + t;
-      while (Date.now() < deadline) {
-        if (fs.existsSync(handle.idleFile)) return;
-        sleepSync(1000);
+        const s = Math.round(Math.min(t, Number(process.env.VZT_START_GRACE_MS || 90_000)) / 1000);
+        console.error(`  ${handle.unitKey}: no start signal within ${s}s — terminal likely never ran its command; verifying anyway`);
       }
     },
     resolve(spec, u) {
@@ -1577,15 +1656,20 @@ function vscodeBackend(/* args */) {
 function getBackend(args) {
   const explicit = args.mux || process.env.VZT_MUX;
   const name = (explicit || 'orca').toLowerCase();
-  // Orca is the historical default AND the least hardened backend: alone among
-  // the three it has no start-grace phase in waitIdle and cannot pass
-  // skip-permissions to its agent (see orcaBackend). Falling into it silently,
-  // because neither --mux nor VZT_MUX was set, is how someone ends up debugging
-  // "the oracle graded an empty worktree" without knowing which substrate they
-  // were on. Say it out loud; do not change the default under them.
-  if (!explicit) {
-    console.error('note: no --mux and no VZT_MUX — defaulting to orca, the least-hardened backend.');
-    console.error('      prefer `--mux herdr` or `--mux vscode`, or export VZT_MUX, unless you mean orca.');
+  // Orca is the default and, since it gained the shared lifecycle sentinels and
+  // skip-permissions, no longer the least-hardened one — that comment stood here
+  // until 2026-08-06 and steered runs onto herdr, which is where they broke.
+  //
+  // Herdr's `agent start` is a two-step protocol (split a pane, wait for it to
+  // reach a shell prompt, type the agent in, detect that it booted) and it lost
+  // that race on 2026-08-04 and again on 2026-08-06: panes opened, no agent ever
+  // ran in them, and both runs fell back to the headless driver — which has no
+  // panes at all, so the operator watched an empty window for an hour. Orca
+  // passes the agent as the pane's startup --command, so there is no prompt
+  // detection step to lose. Prefer it, and say so when someone asks for herdr.
+  if (name === 'herdr') {
+    console.error('note: --mux herdr starts agents in a SECOND step that has failed twice');
+    console.error('      (2026-08-04, 2026-08-06: panes opened, zero agents ran). Prefer --mux orca.');
   }
   if (name === 'herdr') return herdrBackend(args);
   if (name === 'orca') return orcaBackend(args);
