@@ -17,7 +17,7 @@ import path from 'node:path';
 import os from 'node:os';
 import { execFileSync, spawn } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
-import { parseSpec, validateSpec, planWaves, depsOf, pathInScope, reduceLedger, nextAction, unitLine } from './ship-lib.mjs';
+import { parseSpec, parseConnections, connectionsOf, validateSpec, planWaves, depsOf, pathInScope, reduceLedger, nextAction, unitLine } from './ship-lib.mjs';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const PKG_ROOT = path.resolve(__dirname, '..');
@@ -203,7 +203,11 @@ function install(args) {
   const agents = copyDirContents(AGENT_FILES_DIR, path.join(dotClaude, 'agents'), { ext: '.md' });
   const skills = copyDirContents(SKILLS_DIR, path.join(dotClaude, 'skills'));
   const hooks = copyDirContents(HOOKS_DIR, path.join(dotClaude, 'hooks', 'vzt-router'));
-  const templates = copyDirContents(TEMPLATES_DIR, path.join(dotClaude, 'templates'), { ext: '.md' });
+  // No `ext` filter: templates/ is not all markdown any more (connections.json,
+  // the external side-effect registry). An `.md`-only copy would have shipped
+  // doctrine referencing a template the installer silently skipped — precisely
+  // the v1.4.0 bug noted below. Install whatever templates/ holds.
+  const templates = copyDirContents(TEMPLATES_DIR, path.join(dotClaude, 'templates'));
   const workflows = copyDirContents(WORKFLOWS_DIR, path.join(dotClaude, 'workflows'), { ext: '.js' });
   // The skills tell a running session to "see docs/VSCODE.md" and
   // docs/ROUTING-MATRIX.md, but install() never copied docs/ — so from the
@@ -227,7 +231,7 @@ function install(args) {
   const skillNames = fs.existsSync(SKILLS_DIR) ? fs.readdirSync(SKILLS_DIR).sort() : [];
   console.log(`  skills:   ${skills.length} files installed (${skillNames.map((s) => `/${s}`).join(' ')})`);
   console.log(`  hooks:    ${hooks.length} installed (SessionStart chair-profile + UserPromptSubmit classifier + vscode-mux lifecycle sentinels on SessionStart/PermissionRequest/Stop)`);
-  console.log(`  templates: ${templates.length} installed (worker-brief delegation contract, ship spec, DESIGN.md taste cache)`);
+  console.log(`  templates: ${templates.length} installed (worker-brief delegation contract, ship spec, DESIGN.md taste cache, connections registry)`);
   console.log(`  workflows: ${workflows.length} installed (vzt-ship long-horizon orchestration)`);
   console.log(`  docs:     ${docs.length} installed (VSCODE, ROUTING-MATRIX, CHAIR-PROFILES — the skills reference these by path)`);
   console.log(`  orca:     ${orca.length} helper(s) → ${ORCA_VZT_DIR} (worktree-bootstrap for ship-dispatch/ship-watch)`);
@@ -307,7 +311,7 @@ function doctor(args) {
   checks.push([`skills installed (${skillDirs.join(', ')})`, skillsOk && skillDirs.length > 0]);
   // The v1.4.0 bug was a doctrine reference to a file install() never copied.
   // Doctor now checks the artifacts the doctrine points at, not just the agents.
-  const templateFiles = fs.existsSync(TEMPLATES_DIR) ? fs.readdirSync(TEMPLATES_DIR).filter((f) => f.endsWith('.md')) : [];
+  const templateFiles = fs.existsSync(TEMPLATES_DIR) ? fs.readdirSync(TEMPLATES_DIR) : [];
   const templatesOk = templateFiles.length > 0 && templateFiles.every((f) => fs.existsSync(path.join(dotClaude, 'templates', f)));
   checks.push([`templates installed (${templateFiles.join(', ')})`, templatesOk]);
   const workflowFiles = fs.existsSync(WORKFLOWS_DIR) ? fs.readdirSync(WORKFLOWS_DIR).filter((f) => f.endsWith('.js')) : [];
@@ -332,7 +336,7 @@ function doctor(args) {
   // artifact that exists but no longer says what the doctrine assumes.
   const stale = [];
   for (const [srcDir, destSub, filter] of [
-    [TEMPLATES_DIR, 'templates', (f) => f.endsWith('.md')],
+    [TEMPLATES_DIR, 'templates', () => true],
     [AGENT_FILES_DIR, 'agents', (f) => f.endsWith('.md')],
     [WORKFLOWS_DIR, 'workflows', (f) => f.endsWith('.js')],
     [DOCS_DIR, 'docs', (f) => f.endsWith('.md')],
@@ -592,6 +596,30 @@ function loadSpec(specPath) {
   return spec;
 }
 
+/** Path to a repo's external side-effect registry. */
+function connectionsPathFor(spec) {
+  const root = spec && typeof spec.root === 'string' && spec.root ? spec.root : null;
+  return root ? path.join(root, '.vzt', 'connections.json') : null;
+}
+
+/**
+ * Gate a spec: filesystem collision boundary AND external side-effect boundary.
+ *
+ * ship-lib is pure and does no I/O, so the registry is read here and handed in.
+ * Every caller that refuses to run on a red gate goes through this — a second
+ * entry point that skipped the connections check would make the boundary
+ * advisory again for whichever command forgot it.
+ */
+function gateSpec(spec) {
+  const p = connectionsPathFor(spec);
+  if (!p || !fs.existsSync(p)) return validateSpec(spec, { connections: null });
+  const { connections, errors } = parseConnections(fs.readFileSync(p, 'utf8'));
+  return [
+    ...errors.map((e) => `.vzt/connections.json: ${e}`),
+    ...validateSpec(spec, { connections: connections ? connections.map((c) => c.id) : null }),
+  ];
+}
+
 /**
  * The gate. This is what turns "FILES_IN_SCOPE must be pairwise disjoint" from
  * doctrine a model might honour into a command that exits non-zero.
@@ -599,7 +627,7 @@ function loadSpec(specPath) {
 function shipCheck(args) {
   const specPath = args._[1];
   const spec = loadSpec(specPath);
-  const errs = validateSpec(spec);
+  const errs = gateSpec(spec);
   if (errs.length) {
     console.error(`❌ SPEC invalid — ${errs.length} violation${errs.length === 1 ? '' : 's'}:\n`);
     for (const e of errs) console.error(`  • ${e}`);
@@ -607,8 +635,11 @@ function shipCheck(args) {
     process.exit(1);
   }
   const units = spec.units.length + (spec.barrier ? 1 : 0);
-  const files = [spec.barrier, ...spec.units].filter(Boolean).reduce((n, u) => n + (u.filesInScope || []).length, 0);
+  const all = [spec.barrier, ...spec.units].filter(Boolean);
+  const files = all.reduce((n, u) => n + (u.filesInScope || []).length, 0);
+  const conns = new Set(all.flatMap((u) => connectionsOf(u)));
   console.log(`✅ SPEC valid — ${units} units, ${files} files, scopes pairwise disjoint, every unit has an oracle.`);
+  console.log(`   external: ${conns.size ? `${conns.size} declared connection(s) — ${[...conns].join(', ')}` : 'none declared (repo-local run)'}`);
   console.log(`   slug: ${spec.slug}`);
   console.log(`   next: vzt-agent ship-start ${specPath}`);
 }
@@ -616,7 +647,7 @@ function shipCheck(args) {
 function shipStart(args) {
   const specPath = args._[1];
   const spec = loadSpec(specPath);
-  const errs = validateSpec(spec);
+  const errs = gateSpec(spec);
   if (errs.length) {
     console.error('❌ refusing to start: SPEC does not pass ship-check.');
     process.exit(1);
@@ -785,6 +816,37 @@ function waitOnSentinels(h, t) {
   return 'timeout';
 }
 
+/**
+ * The external-side-effect boundary, as the worker sees it.
+ *
+ * This block is the reason `connectionsInScope` is not decoration. A boundary
+ * declared in the SPEC and gated by ship-check but never rendered into the
+ * prompt would bind the plan and not the agent — the worktree still has the
+ * symlinked `.env`, so the only enforcement that reaches the worker is the
+ * sentence telling it the rule. Default-deny is stated on EVERY unit, including
+ * the ones declaring nothing, because silence reads as permission.
+ */
+function connectionsBlock(u) {
+  const conns = connectionsOf(u);
+  if (!conns.length) {
+    return [
+      'CONNECTIONS_IN_SCOPE — none. This unit is repo-local: do not call any external',
+      'service, write to any live API, or send anything outward. Your worktree has the',
+      'repo\'s .env symlinked in; holding a credential is not permission to use it.',
+      '',
+    ];
+  }
+  return [
+    'CONNECTIONS_IN_SCOPE — the ONLY external services you may reach:',
+    ...conns.map((c) => `    - ${c}   (see .vzt/connections.json for its mode and allowed operations)`),
+    'Every other external service is out of bounds. Stay inside the declared mode —',
+    'a connection registered as test/sandbox must never be pointed at live data. If the',
+    'task appears to require an undeclared connection, STOP and report it, exactly as',
+    'you would for a file outside FILES_IN_SCOPE.',
+    '',
+  ];
+}
+
 function unitPrompt(spec, u, extras = {}) {
   const files = (u.filesInScope || []).map((f) => `    - ${f}`).join('\n');
   const seeded = extras.seeded && extras.seeded.length
@@ -809,6 +871,7 @@ function unitPrompt(spec, u, extras = {}) {
     'FILES_IN_SCOPE — touch ONLY these; they are your collision boundary:',
     files,
     '',
+    ...connectionsBlock(u),
     `This unit is DONE only when this command passes:  ${u.machineCheck}`,
     `Expected:  ${u.expect}`,
     '',
@@ -1700,7 +1763,7 @@ function seedLine(spec, u, info) {
 function shipDispatch(args) {
   const specPath = args._[1];
   const spec = loadSpec(specPath);
-  const errs = validateSpec(spec);
+  const errs = gateSpec(spec);
   if (errs.length) {
     console.error('❌ refusing to dispatch: SPEC does not pass ship-check. Run `vzt-agent ship-check` first.');
     process.exit(1);
@@ -2032,7 +2095,7 @@ function runIntegrationGate(spec, be, units) {
 function shipSupervise(args) {
   const specPath = args._[1];
   const spec = loadSpec(specPath);
-  const errs = validateSpec(spec);
+  const errs = gateSpec(spec);
   if (errs.length) {
     console.error('❌ refusing to supervise: SPEC does not pass ship-check.');
     process.exit(1);
@@ -2109,7 +2172,7 @@ function keepAwake() {
 function shipWatch(args) {
   const specPath = args._[1];
   const spec = loadSpec(specPath);
-  const errs = validateSpec(spec);
+  const errs = gateSpec(spec);
   if (errs.length) {
     console.error('❌ refusing to watch: SPEC does not pass ship-check. Run `vzt-agent ship-check` first.');
     process.exit(1);
@@ -2321,7 +2384,8 @@ Usage:
   vzt-agent matrix
 
 Long-horizon runs (/vzt-ship):
-  vzt-agent ship-check <SPEC.md>          gate the spec — disjoint scopes, an oracle per unit
+  vzt-agent ship-check <SPEC.md>          gate the spec — disjoint scopes, an oracle per unit,
+                                          declared connections (.vzt/connections.json)
   vzt-agent ship-start <SPEC.md>          open the run ledger
   vzt-agent ship-note  <SPEC.md> '<json>' append one ledger line
   vzt-agent ship-status [--target <dir>]  reconstruct run state from disk (use after a compaction)

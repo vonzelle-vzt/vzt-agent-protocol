@@ -191,7 +191,8 @@ A `HORIZON` classification points at `/vzt-ship`, which runs four phases:
    with one machine-checkable oracle chosen *before* the unit is built.
 2. **GATE** — `vzt-agent ship-check <SPEC.md>` is a command, not an opinion:
    it exits non-zero on overlapping scopes, a manifest file no unit owns, a
-   unit with no oracle, or an unknown agentType.
+   unit with no oracle, an unknown agentType, or an undeclared external
+   connection (see [below](#external-side-effects--connections_in_scope)).
 3. **RUN** — launches `workflows/vzt-ship.js` via the Workflow tool: barrier →
    parallel units → independent read-only verification of each oracle
    (builders never grade themselves) → bounded repair (≤2 rounds) →
@@ -296,6 +297,59 @@ Start with `/vzt-ui extract`. Template: [`templates/DESIGN.md`](templates/DESIGN
 > This is **visual** design. Technical design — architecture, schemas, APIs,
 > migration plans — is a different lane: `/vzt-design` and `vzt-architect`.
 
+## External side effects — `CONNECTIONS_IN_SCOPE`
+
+`FILES_IN_SCOPE` is the collision boundary for what a worker writes **inside** the
+repo. Until now nothing bounded what it could reach **outside** one — and the ship
+path is exactly where that gap bites hardest. `orca/worktree-bootstrap.sh` symlinks
+the primary checkout's `node_modules` and **`.env*`** into every unit's worktree,
+because a worktree that cannot build cannot be graded. The side effect is that a
+fan-out of parallel agents starts life holding whatever production credentials the
+repo holds, and the only thing standing between a builder and a live customer API
+is that nobody happened to tell it to call one.
+
+So external access gets the same treatment as filesystem access — declared in the
+spec, checked by a command, **default-deny**:
+
+```jsonc
+// .vzt/connections.json — git-tracked, and never contains a credential
+{
+  "version": 1,
+  "connections": [
+    { "id": "stripe-test", "service": "stripe", "mode": "test",
+      "credentialEnv": "STRIPE_TEST_SECRET_KEY", "allow": ["read", "write"] }
+  ]
+}
+```
+
+```jsonc
+// a unit in SPEC.md, or CONNECTIONS_IN_SCOPE in a worker brief
+{ "id": "u2-invoice", "filesInScope": ["src/invoice.ts"],
+  "connectionsInScope": ["stripe-test"] }
+```
+
+`ship-check` exits non-zero when a unit names a connection the registry does not
+declare, when the registry is absent entirely, when it is malformed, or when an
+entry carries an inline `token`/`secret`/`apiKey`/`key`/`credential`/`password` —
+the registry names the **env var**, never the value, because a file whose whole
+job is to bound blast radius is the last place a live key should live.
+
+Three properties keep it honest:
+
+- **Omitted means none, not unrestricted.** A unit that declares nothing is
+  repo-local work — nearly all work — and pays no friction for it.
+- **The absent registry is a red gate, not an open one.** "No registry" means
+  nothing has been declared, so a unit claiming a connection fails.
+- **The boundary is rendered into the worker's prompt**, on every unit, including
+  the ones declaring nothing. A boundary that binds the plan but never reaches the
+  agent is decorative — the worktree still has the symlinked `.env`, so the only
+  enforcement the worker ever sees is the sentence stating the rule. Silence about
+  outbound calls reads as permission to make them.
+
+Template: [`templates/connections.json`](templates/connections.json). Same move as
+`SPEC.md` and `DESIGN.md`, one axis out: put the boundary on disk, and a command
+can enforce what doctrine only requested.
+
 ## Guardrails
 
 - **Escalation ladder** — two failures at a rung escalates exactly one rung
@@ -303,6 +357,9 @@ Start with `/vzt-ui extract`. Template: [`templates/DESIGN.md`](templates/DESIGN
 - **Fable budget** — ≤10% of turns; `vzt-agent stats` shows your distribution
   against the target. The `opus@max` rung absorbs the planning that used to
   land on Fable.
+- **External side effects are default-deny** — a worker reaches only the
+  connections its brief declares against `.vzt/connections.json`; holding a
+  credential is not permission to use it.
 - **Delegation cap** — never delegate work finishable in a handful of tool
   calls; prefer one sub-agent over several; once delegated, commit. Verify
   *external* artifacts (run the oracle, `git diff` the worker's output); never

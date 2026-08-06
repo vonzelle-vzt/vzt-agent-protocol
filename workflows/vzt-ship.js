@@ -123,13 +123,26 @@ const VERDICT = {
   },
 }
 
+// The external-side-effect boundary. Stated on EVERY unit, including the ones
+// that declare nothing: the worktree carries the repo's symlinked .env either
+// way, so silence about outbound calls reads as permission to make them.
+const connectionsFor = (u) => {
+  const conns = (Array.isArray(u.connectionsInScope) ? u.connectionsInScope : []).filter((c) => typeof c === 'string' && c.trim())
+  return conns.length
+    ? `\nCONNECTIONS_IN_SCOPE (the ONLY external services you may reach — see .vzt/connections.json
+for each one's mode and allowed operations; never point a test/sandbox connection at live data):
+${conns.map((c) => `  - ${c}`).join('\n')}\n`
+    : `\nCONNECTIONS_IN_SCOPE: none. This unit is repo-local — no external API calls, no writes to a
+live service, nothing sent outward. Holding a credential is not permission to use it.\n`
+}
+
 const buildPrompt = (u, correction) => `${GATES}
 
 UNIT: ${u.id} — ${u.title || ''}
 
 FILES_IN_SCOPE (the ONLY files you may write):
 ${(u.filesInScope || []).map((f) => `  - ${f}`).join('\n')}
-
+${connectionsFor(u)}
 OPERATION:
 ${u.brief}
 

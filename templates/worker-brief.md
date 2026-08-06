@@ -15,6 +15,9 @@ CONTEXT: <everything the worker needs that isn't in the files: decisions already
 FILES_IN_SCOPE: <explicit list of files/globs the worker may MODIFY — this is
   the collision boundary. Reads are unrestricted; writes outside this list are
   forbidden.>
+CONNECTIONS_IN_SCOPE: <ids from .vzt/connections.json naming the ONLY external
+  services this worker may reach. OMIT or leave empty for repo-local work (nearly
+  all work) — empty means "no outbound calls at all", never "unrestricted".>
 OPERATION: <precise spec of the change — executable in one shot, no open
   questions left to the worker's judgment unless explicitly delegated>
 ACCEPTANCE: <the done-state in one sentence>
@@ -31,6 +34,16 @@ REPORT: <what to include in the report back: diff summary, MACHINE_CHECK output
   outside FILES_IN_SCOPE, the worker STOPS and reports the conflict instead of
   expanding scope. This is what makes parallel dispatch safe — two workers with
   disjoint FILES_IN_SCOPE cannot collide.
+- **The external boundary is default-deny.** `FILES_IN_SCOPE` bounds what a
+  worker writes *inside* the repo; nothing bounds what it reaches *outside* one
+  unless you say so. This matters most exactly where it is least visible: a
+  ship worktree gets the primary checkout's `.env*` symlinked in by
+  `worktree-bootstrap.sh`, so a fan-out of parallel agents starts life holding
+  whatever production credentials the repo holds. Declare
+  `CONNECTIONS_IN_SCOPE` against `.vzt/connections.json` when a worker genuinely
+  needs an outbound call, and state the empty case out loud otherwise —
+  *holding* a credential is not permission to *use* it, and a brief that says
+  nothing about outbound calls reads as permission to make them.
 - **MACHINE_CHECK is decided by the orchestrator, before dispatch.** A check the
   worker invents after the fact tests what was built, not what was asked.
 - **Run the MACHINE_CHECK once against the UNFINISHED state before dispatching.**

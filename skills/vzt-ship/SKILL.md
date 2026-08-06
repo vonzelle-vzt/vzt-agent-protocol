@@ -66,7 +66,8 @@ vzt-agent ship-check .vzt/ship/<slug>/SPEC.md
 ```
 
 Exits non-zero on: overlapping FILES_IN_SCOPE, a manifest file no unit owns, a
-unit with no oracle, an unknown agentType, a `dependsOn` cycle or unknown id. **Do not proceed on a red gate.**
+unit with no oracle, an unknown agentType, a `dependsOn` cycle or unknown id, or a
+`connectionsInScope` id absent from `.vzt/connections.json`. **Do not proceed on a red gate.**
 This is Gate 4 pointed at the plan itself.
 
 **Bring the spec to the user for approval before spending anything.** The spec is
