@@ -468,9 +468,10 @@ function rememberChair(sessionId, model) {
 
 const RANK = { haiku: 0, sonnet: 1, opus: 2, fable: 3, unknown: 1 };
 
-export function directive(result, chair) {
+export function directive(result, chair, env = process.env) {
   const t = TIERS[result.tier];
   const agent = t.agents[result.kind] || Object.values(t.agents)[0];
+  const orca = env.ORCA_TERMINAL_HANDLE;
   const lines = [
     '[VZT-ROUTE] Automatic model routing (advisory — override only with a stated reason):',
     `  task: ${result.kind.toUpperCase()} → target tier: ${t.label} @ effort ${result.effort}`,
@@ -536,9 +537,17 @@ export function directive(result, chair) {
   } else {
     // Down-tier work from an expensive chair: push it down to save quota.
     const costCite = chair !== 'unknown' ? ` (~${Math.round(TIERS[chair].cost / t.cost)}× cost saving)` : '';
-    lines.push(
-      `  action: this task is below the chair tier. Delegate to the "${agent}" subagent (Agent tool) to conserve ${chair === 'unknown' ? 'premium' : chair} quota${costCite}. Only handle inline if delegation overhead exceeds the task itself.`
-    );
+    if (orca && ['build', 'mech'].includes(result.kind)) {
+      lines.push(
+        `  action: below the chair tier, and you ARE inside an Orca terminal (handle ${orca}) — dispatch as a VISIBLE pane, not an in-process subagent: vzt-orca-flow pane run --agent codex --task "<worker brief>" --title <short-name> (codex = zero Anthropic quota; --agent claude when it must be Claude).`,
+        '  ops: pane run blocks until the agent signals done — pass --detach, or run via background Bash; pane open for fire-and-forget waves; reap with pane list.',
+        `  fallback: Agent tool ("${agent}" subagent) only for read-only recon or if the pane fails to open.`
+      );
+    } else {
+      lines.push(
+        `  action: this task is below the chair tier. Delegate to the "${agent}" subagent (Agent tool) to conserve ${chair === 'unknown' ? 'premium' : chair} quota${costCite}. Only handle inline if delegation overhead exceeds the task itself.`
+      );
+    }
   }
 
   if (result.tier === 'opus') {

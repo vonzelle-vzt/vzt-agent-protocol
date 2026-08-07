@@ -216,6 +216,53 @@ test('the opus@max directive names the plan agent and explains why it is not Fab
   assert.ok(d.includes('/vzt-design'), 'directive does not offer the turn skill');
 });
 
+test('down-tier build directives use visible Orca panes when available', () => {
+  const r = {
+    tier: 'sonnet',
+    kind: 'build',
+    confidence: 'high',
+    effort: 'medium',
+    matched: [],
+    scores: {},
+    words: 10,
+  };
+  const d = directive(r, 'opus', { ORCA_TERMINAL_HANDLE: 'term_x' });
+  assert.ok(d.includes('pane run'), 'Orca down-tier build should name pane run');
+  assert.ok(d.includes('term_x'), 'Orca down-tier build should name the terminal handle');
+  assert.ok(d.includes('--detach'), 'Orca down-tier build should mention detach/background operation');
+  assert.ok(!d.includes('Delegate to the "'), 'Orca down-tier build should not default to Agent-tool delegation');
+});
+
+test('down-tier build directives keep Agent-tool wording without Orca', () => {
+  const r = {
+    tier: 'sonnet',
+    kind: 'build',
+    confidence: 'high',
+    effort: 'medium',
+    matched: [],
+    scores: {},
+    words: 10,
+  };
+  const d = directive(r, 'opus', {});
+  assert.ok(d.includes('Delegate to the "'), 'non-Orca down-tier build should keep Agent-tool wording');
+  assert.ok(!d.includes('pane run'), 'non-Orca down-tier build should not name pane run');
+});
+
+test('down-tier scout directives keep Agent-tool wording even with Orca', () => {
+  const r = {
+    tier: 'haiku',
+    kind: 'scout',
+    confidence: 'high',
+    effort: 'low',
+    matched: [],
+    scores: {},
+    words: 10,
+  };
+  const d = directive(r, 'opus', { ORCA_TERMINAL_HANDLE: 'term_x' });
+  assert.ok(d.includes('Delegate to the "'), 'scout work should stay on Agent-tool delegation');
+  assert.ok(!d.includes('pane run'), 'scout work should not switch to pane run');
+});
+
 test('docs mirror TIERS cost values exactly (sync check)', () => {
   const matrix = fs.readFileSync(path.join(REPO_ROOT, 'docs', 'ROUTING-MATRIX.md'), 'utf8');
   const skill = fs.readFileSync(path.join(REPO_ROOT, 'skills', 'vzt-route', 'SKILL.md'), 'utf8');
