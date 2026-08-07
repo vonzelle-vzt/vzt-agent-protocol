@@ -111,6 +111,20 @@ function readJson(file, fallback) {
   }
 }
 
+function listFilesRecursive(root, base = root) {
+  if (!fs.existsSync(root)) return [];
+  const files = [];
+  for (const entry of fs.readdirSync(root, { withFileTypes: true })) {
+    const p = path.join(root, entry.name);
+    if (entry.isDirectory()) {
+      files.push(...listFilesRecursive(p, base));
+    } else if (entry.isFile()) {
+      files.push(path.relative(base, p));
+    }
+  }
+  return files;
+}
+
 /** Non-destructive merge of our hooks into settings.json. */
 function wireSettings(dotClaude, { portable = false } = {}) {
   const settingsPath = path.join(dotClaude, 'settings.json');
@@ -309,6 +323,32 @@ function doctor(args) {
   const skillDirs = fs.existsSync(SKILLS_DIR) ? fs.readdirSync(SKILLS_DIR) : [];
   const skillsOk = skillDirs.every((d) => fs.existsSync(path.join(dotClaude, 'skills', d, 'SKILL.md')));
   checks.push([`skills installed (${skillDirs.join(', ')})`, skillsOk && skillDirs.length > 0]);
+  const driftedSkills = [];
+  for (const d of skillDirs) {
+    const srcDir = path.join(SKILLS_DIR, d);
+    const destDir = path.join(dotClaude, 'skills', d);
+    if (!fs.existsSync(destDir)) continue; // absence is the "installed" check's job
+    let drifted = false;
+    for (const rel of listFilesRecursive(srcDir)) {
+      const src = path.join(srcDir, rel);
+      const dest = path.join(destDir, rel);
+      try {
+        if (!fs.existsSync(dest) || !fs.readFileSync(src).equals(fs.readFileSync(dest))) {
+          drifted = true;
+          break;
+        }
+      } catch {
+        drifted = true;
+        break;
+      }
+    }
+    if (drifted) driftedSkills.push(d);
+  }
+  for (const d of driftedSkills) checks.push([`DRIFT: ${d} (re-run install)`, false]);
+  checks.push([
+    driftedSkills.length ? `skill drift detected (${driftedSkills.length})` : 'installed skills match this version',
+    driftedSkills.length === 0,
+  ]);
   // The v1.4.0 bug was a doctrine reference to a file install() never copied.
   // Doctor now checks the artifacts the doctrine points at, not just the agents.
   const templateFiles = fs.existsSync(TEMPLATES_DIR) ? fs.readdirSync(TEMPLATES_DIR) : [];

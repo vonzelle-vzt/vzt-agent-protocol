@@ -247,3 +247,30 @@ test('doctor detects a STALE installed copy, not just a missing one', () => {
     fs.rmSync(target, { recursive: true, force: true });
   }
 });
+
+test('doctor reports skill DRIFT when installed skill bytes differ', () => {
+  const target = fs.mkdtempSync(path.join(os.tmpdir(), 'vzt-skill-drift-'));
+  try {
+    run(['install', '--target', target]);
+
+    const fresh = run(['doctor', '--target', target]);
+    assert.match(fresh, /installed skills match this version/);
+    assert.ok(!/DRIFT:/.test(fresh), `a just-installed target must not report skill drift:\n${fresh}`);
+
+    const installedSkill = path.join(target, '.claude', 'skills', 'vzt-ship', 'SKILL.md');
+    fs.appendFileSync(installedSkill, '\nlocal edit that should be detected\n');
+
+    assert.throws(
+      () => run(['doctor', '--target', target], { stdio: 'pipe' }),
+      (e) => {
+        const out = `${e.stdout || ''}${e.stderr || ''}`;
+        assert.equal(e.status, 1, 'skill drift must make doctor exit non-zero');
+        assert.match(out, /DRIFT: vzt-ship \(re-run install\)/);
+        assert.match(out, /skill drift detected \(1\)/);
+        return true;
+      },
+    );
+  } finally {
+    fs.rmSync(target, { recursive: true, force: true });
+  }
+});
