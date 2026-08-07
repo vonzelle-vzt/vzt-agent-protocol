@@ -57,6 +57,22 @@ from `.claude/templates/spec.md`:
    A check invented after the diff exists tests what was built, not what was
    asked. **If you cannot name the command that proves a unit is done, the unit
    is not specified — decompose again.**
+
+   🔴 **For a MOVE or WIRE unit, `exit 0` proves nothing.** A unit once wrote a
+   462-line component, never imported it, left the original in place, and passed
+   typecheck + lint + the entire test suite — because dead code typechecks
+   perfectly. The build cannot tell *moved* from *copied*. So when the job is
+   extraction, rewiring, deletion or "retire X", the oracle must also assert on
+   **what must NO LONGER exist**:
+
+   ```bash
+   grep -c 'NewThing' path/to/consumer   # >= 2  (import + usage)
+   grep -c '<OldThing' path/to/consumer  # == 0  (the original is GONE)
+   wc -l < path/to/consumer              # materially smaller
+   ```
+
+   Name the absence, not just the compile. This is the same unwired-seam failure
+   the spec exists to prevent, arriving through the oracle instead of the code.
 7. Fill the `<!-- vzt-spec -->` JSON block. It is the machine truth.
 
 ## Phase 2 — GATE (a command, not an opinion)
