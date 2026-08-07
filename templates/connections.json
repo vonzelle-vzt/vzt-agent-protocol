@@ -1,0 +1,44 @@
+{
+  "_readme": [
+    "Copy to <repo>/.vzt/connections.json. This is the EXTERNAL side-effect registry —",
+    "the boundary FILES_IN_SCOPE draws inside the repo, drawn one axis out.",
+    "",
+    "A ship unit or worker brief may name a connection id in CONNECTIONS_IN_SCOPE only if",
+    "it is registered here; `vzt-agent ship-check` exits non-zero otherwise. Declaring",
+    "nothing means no outbound calls at all — default-deny, not unrestricted.",
+    "",
+    "This file is GIT-TRACKED and must never contain a credential. Name the env var that",
+    "holds it in credentialEnv. ship-check rejects a `token`/`secret`/`apiKey`/`key`/",
+    "`credential`/`password` field outright.",
+    "",
+    "Required per entry: id, service, mode, credentialEnv, allow (non-empty).",
+    "Delete this _readme key in a real registry."
+  ],
+  "version": 1,
+  "connections": [
+    {
+      "id": "stripe-test",
+      "service": "stripe",
+      "mode": "test",
+      "credentialEnv": "STRIPE_TEST_SECRET_KEY",
+      "allow": ["read", "write"],
+      "note": "Test-mode keys only. A unit that needs live billing is not a unit — it is a human decision."
+    },
+    {
+      "id": "hubspot-sandbox",
+      "service": "hubspot",
+      "mode": "sandbox",
+      "credentialEnv": "HUBSPOT_SANDBOX_TOKEN",
+      "allow": ["read"],
+      "note": "Read-only against the sandbox portal — no contact writes from an agent."
+    },
+    {
+      "id": "resend-prod",
+      "service": "resend",
+      "mode": "live",
+      "credentialEnv": "RESEND_API_KEY",
+      "allow": ["read"],
+      "note": "Live and outbound: reading delivery status is fine, sending mail is a human action. Narrow allow lists are the point."
+    }
+  ]
+}

@@ -17,7 +17,7 @@ import path from 'node:path';
 import os from 'node:os';
 import { execFileSync, spawn } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
-import { parseSpec, validateSpec, planWaves, depsOf, pathInScope, reduceLedger, nextAction, unitLine } from './ship-lib.mjs';
+import { parseSpec, parseConnections, connectionsOf, validateSpec, planWaves, depsOf, pathInScope, reduceLedger, nextAction, unitLine } from './ship-lib.mjs';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const PKG_ROOT = path.resolve(__dirname, '..');
@@ -109,6 +109,20 @@ function readJson(file, fallback) {
   } catch {
     return fallback;
   }
+}
+
+function listFilesRecursive(root, base = root) {
+  if (!fs.existsSync(root)) return [];
+  const files = [];
+  for (const entry of fs.readdirSync(root, { withFileTypes: true })) {
+    const p = path.join(root, entry.name);
+    if (entry.isDirectory()) {
+      files.push(...listFilesRecursive(p, base));
+    } else if (entry.isFile()) {
+      files.push(path.relative(base, p));
+    }
+  }
+  return files;
 }
 
 /** Non-destructive merge of our hooks into settings.json. */
@@ -203,7 +217,11 @@ function install(args) {
   const agents = copyDirContents(AGENT_FILES_DIR, path.join(dotClaude, 'agents'), { ext: '.md' });
   const skills = copyDirContents(SKILLS_DIR, path.join(dotClaude, 'skills'));
   const hooks = copyDirContents(HOOKS_DIR, path.join(dotClaude, 'hooks', 'vzt-router'));
-  const templates = copyDirContents(TEMPLATES_DIR, path.join(dotClaude, 'templates'), { ext: '.md' });
+  // No `ext` filter: templates/ is not all markdown any more (connections.json,
+  // the external side-effect registry). An `.md`-only copy would have shipped
+  // doctrine referencing a template the installer silently skipped — precisely
+  // the v1.4.0 bug noted below. Install whatever templates/ holds.
+  const templates = copyDirContents(TEMPLATES_DIR, path.join(dotClaude, 'templates'));
   const workflows = copyDirContents(WORKFLOWS_DIR, path.join(dotClaude, 'workflows'), { ext: '.js' });
   // The skills tell a running session to "see docs/VSCODE.md" and
   // docs/ROUTING-MATRIX.md, but install() never copied docs/ — so from the
@@ -227,7 +245,7 @@ function install(args) {
   const skillNames = fs.existsSync(SKILLS_DIR) ? fs.readdirSync(SKILLS_DIR).sort() : [];
   console.log(`  skills:   ${skills.length} files installed (${skillNames.map((s) => `/${s}`).join(' ')})`);
   console.log(`  hooks:    ${hooks.length} installed (SessionStart chair-profile + UserPromptSubmit classifier + vscode-mux lifecycle sentinels on SessionStart/PermissionRequest/Stop)`);
-  console.log(`  templates: ${templates.length} installed (worker-brief delegation contract, ship spec, DESIGN.md taste cache)`);
+  console.log(`  templates: ${templates.length} installed (worker-brief delegation contract, ship spec, DESIGN.md taste cache, connections registry)`);
   console.log(`  workflows: ${workflows.length} installed (vzt-ship long-horizon orchestration)`);
   console.log(`  docs:     ${docs.length} installed (VSCODE, ROUTING-MATRIX, CHAIR-PROFILES — the skills reference these by path)`);
   console.log(`  orca:     ${orca.length} helper(s) → ${ORCA_VZT_DIR} (worktree-bootstrap for ship-dispatch/ship-watch)`);
@@ -305,9 +323,35 @@ function doctor(args) {
   const skillDirs = fs.existsSync(SKILLS_DIR) ? fs.readdirSync(SKILLS_DIR) : [];
   const skillsOk = skillDirs.every((d) => fs.existsSync(path.join(dotClaude, 'skills', d, 'SKILL.md')));
   checks.push([`skills installed (${skillDirs.join(', ')})`, skillsOk && skillDirs.length > 0]);
+  const driftedSkills = [];
+  for (const d of skillDirs) {
+    const srcDir = path.join(SKILLS_DIR, d);
+    const destDir = path.join(dotClaude, 'skills', d);
+    if (!fs.existsSync(destDir)) continue; // absence is the "installed" check's job
+    let drifted = false;
+    for (const rel of listFilesRecursive(srcDir)) {
+      const src = path.join(srcDir, rel);
+      const dest = path.join(destDir, rel);
+      try {
+        if (!fs.existsSync(dest) || !fs.readFileSync(src).equals(fs.readFileSync(dest))) {
+          drifted = true;
+          break;
+        }
+      } catch {
+        drifted = true;
+        break;
+      }
+    }
+    if (drifted) driftedSkills.push(d);
+  }
+  for (const d of driftedSkills) checks.push([`DRIFT: ${d} (re-run install)`, false]);
+  checks.push([
+    driftedSkills.length ? `skill drift detected (${driftedSkills.length})` : 'installed skills match this version',
+    driftedSkills.length === 0,
+  ]);
   // The v1.4.0 bug was a doctrine reference to a file install() never copied.
   // Doctor now checks the artifacts the doctrine points at, not just the agents.
-  const templateFiles = fs.existsSync(TEMPLATES_DIR) ? fs.readdirSync(TEMPLATES_DIR).filter((f) => f.endsWith('.md')) : [];
+  const templateFiles = fs.existsSync(TEMPLATES_DIR) ? fs.readdirSync(TEMPLATES_DIR) : [];
   const templatesOk = templateFiles.length > 0 && templateFiles.every((f) => fs.existsSync(path.join(dotClaude, 'templates', f)));
   checks.push([`templates installed (${templateFiles.join(', ')})`, templatesOk]);
   const workflowFiles = fs.existsSync(WORKFLOWS_DIR) ? fs.readdirSync(WORKFLOWS_DIR).filter((f) => f.endsWith('.js')) : [];
@@ -332,7 +376,7 @@ function doctor(args) {
   // artifact that exists but no longer says what the doctrine assumes.
   const stale = [];
   for (const [srcDir, destSub, filter] of [
-    [TEMPLATES_DIR, 'templates', (f) => f.endsWith('.md')],
+    [TEMPLATES_DIR, 'templates', () => true],
     [AGENT_FILES_DIR, 'agents', (f) => f.endsWith('.md')],
     [WORKFLOWS_DIR, 'workflows', (f) => f.endsWith('.js')],
     [DOCS_DIR, 'docs', (f) => f.endsWith('.md')],
@@ -592,6 +636,30 @@ function loadSpec(specPath) {
   return spec;
 }
 
+/** Path to a repo's external side-effect registry. */
+function connectionsPathFor(spec) {
+  const root = spec && typeof spec.root === 'string' && spec.root ? spec.root : null;
+  return root ? path.join(root, '.vzt', 'connections.json') : null;
+}
+
+/**
+ * Gate a spec: filesystem collision boundary AND external side-effect boundary.
+ *
+ * ship-lib is pure and does no I/O, so the registry is read here and handed in.
+ * Every caller that refuses to run on a red gate goes through this — a second
+ * entry point that skipped the connections check would make the boundary
+ * advisory again for whichever command forgot it.
+ */
+function gateSpec(spec) {
+  const p = connectionsPathFor(spec);
+  if (!p || !fs.existsSync(p)) return validateSpec(spec, { connections: null });
+  const { connections, errors } = parseConnections(fs.readFileSync(p, 'utf8'));
+  return [
+    ...errors.map((e) => `.vzt/connections.json: ${e}`),
+    ...validateSpec(spec, { connections: connections ? connections.map((c) => c.id) : null }),
+  ];
+}
+
 /**
  * The gate. This is what turns "FILES_IN_SCOPE must be pairwise disjoint" from
  * doctrine a model might honour into a command that exits non-zero.
@@ -599,7 +667,7 @@ function loadSpec(specPath) {
 function shipCheck(args) {
   const specPath = args._[1];
   const spec = loadSpec(specPath);
-  const errs = validateSpec(spec);
+  const errs = gateSpec(spec);
   if (errs.length) {
     console.error(`❌ SPEC invalid — ${errs.length} violation${errs.length === 1 ? '' : 's'}:\n`);
     for (const e of errs) console.error(`  • ${e}`);
@@ -607,8 +675,11 @@ function shipCheck(args) {
     process.exit(1);
   }
   const units = spec.units.length + (spec.barrier ? 1 : 0);
-  const files = [spec.barrier, ...spec.units].filter(Boolean).reduce((n, u) => n + (u.filesInScope || []).length, 0);
+  const all = [spec.barrier, ...spec.units].filter(Boolean);
+  const files = all.reduce((n, u) => n + (u.filesInScope || []).length, 0);
+  const conns = new Set(all.flatMap((u) => connectionsOf(u)));
   console.log(`✅ SPEC valid — ${units} units, ${files} files, scopes pairwise disjoint, every unit has an oracle.`);
+  console.log(`   external: ${conns.size ? `${conns.size} declared connection(s) — ${[...conns].join(', ')}` : 'none declared (repo-local run)'}`);
   console.log(`   slug: ${spec.slug}`);
   console.log(`   next: vzt-agent ship-start ${specPath}`);
 }
@@ -616,7 +687,7 @@ function shipCheck(args) {
 function shipStart(args) {
   const specPath = args._[1];
   const spec = loadSpec(specPath);
-  const errs = validateSpec(spec);
+  const errs = gateSpec(spec);
   if (errs.length) {
     console.error('❌ refusing to start: SPEC does not pass ship-check.');
     process.exit(1);
@@ -722,6 +793,100 @@ const BOOTSTRAP = path.join(ORCA_VZT_DIR, 'worktree-bootstrap.sh');
 // queue/ into native integrated terminals; the Stop hook writes state/*.idle.
 const VZT_VSCODE_DIR = process.env.VZT_VSCODE_DIR || path.join(os.homedir(), '.vzt', 'vscode-mux');
 
+// ——— agent lifecycle sentinels — shared by the vscode and orca backends ———————
+//
+// `~/.claude/hooks/vzt-router/vzt-vscode-agent-state.sh` is installed GLOBALLY on
+// SessionStart/PermissionRequest/Stop and no-ops unless VZT_VSCODE_MUX=1 and
+// VZT_VSCODE_UNIT are in the agent's env. It writes <unit>.started / .blocked /
+// .idle. The signal comes from claude's OWN lifecycle, so unlike anything derived
+// from screen output it cannot be faked by a prompt echo or missed during a slow
+// tool call.
+//
+// The orca backend uses this too — hence the extraction. Orca offers only
+// `terminal wait --for tui-idle`, and that was measured returning WHILE the agent
+// was still working (vzt-orca-flow's pane_await carries the same finding from a
+// codex pane still printing "Working"). Grading on tui-idle grades a unit
+// mid-sentence. The env names keep their VZT_VSCODE_ prefix because the installed
+// hook reads exactly those; the mechanism is not vscode-specific.
+const SENTINEL_ENV = 'VZT_VSCODE_MUX';
+const SENTINEL_UNIT_ENV = 'VZT_VSCODE_UNIT';
+
+/** Sentinel file paths for one unit key, plus a best-effort mkdir of their dir. */
+function sentinelPaths(stateDir, unitKey) {
+  try { fs.mkdirSync(stateDir, { recursive: true }); } catch { /* unwritable — caller degrades */ }
+  return {
+    unitKey,
+    startedFile: path.join(stateDir, `${unitKey}.started`),
+    blockedFile: path.join(stateDir, `${unitKey}.blocked`),
+    idleFile: path.join(stateDir, `${unitKey}.idle`),
+  };
+}
+
+/** Clear every sentinel from a PRIOR run of this unit key.
+ *  Not just `.idle`: a stale `.started` satisfies phase 1 instantly and puts us
+ *  straight back to grading an empty worktree. */
+function sentinelReset(stateDir, unitKey) {
+  for (const ext of ['started', 'blocked', 'idle', 'status']) {
+    try { fs.unlinkSync(path.join(stateDir, `${unitKey}.${ext}`)); } catch { /* none */ }
+  }
+}
+
+/** TWO-PHASE wait: prove the agent STARTED, then wait for it to go idle.
+ *  Waiting on `.idle` alone cannot tell "still working" from "never launched" —
+ *  observed live 2026-07-28, where a swallowed command burned the whole unit
+ *  timeout before being graded FAIL against an untouched worktree.
+ *  Returns 'idle' | 'no-start' | 'timeout'. Never throws: the oracle is the
+ *  authority, so a broken sentinel must degrade to verifying, not to failing. */
+function waitOnSentinels(h, t) {
+  const startGrace = Number(process.env.VZT_START_GRACE_MS || 90_000);
+  const startDeadline = Date.now() + Math.min(t, startGrace);
+  let started = false;
+  while (Date.now() < startDeadline) {
+    if (fs.existsSync(h.startedFile) || fs.existsSync(h.blockedFile)) { started = true; break; }
+    if (fs.existsSync(h.idleFile)) return 'idle'; // finished faster than we looked
+    sleepSync(500);
+  }
+  if (!started) return 'no-start';
+
+  const deadline = Date.now() + t;
+  while (Date.now() < deadline) {
+    if (fs.existsSync(h.idleFile)) return 'idle';
+    sleepSync(1000);
+  }
+  return 'timeout';
+}
+
+/**
+ * The external-side-effect boundary, as the worker sees it.
+ *
+ * This block is the reason `connectionsInScope` is not decoration. A boundary
+ * declared in the SPEC and gated by ship-check but never rendered into the
+ * prompt would bind the plan and not the agent — the worktree still has the
+ * symlinked `.env`, so the only enforcement that reaches the worker is the
+ * sentence telling it the rule. Default-deny is stated on EVERY unit, including
+ * the ones declaring nothing, because silence reads as permission.
+ */
+function connectionsBlock(u) {
+  const conns = connectionsOf(u);
+  if (!conns.length) {
+    return [
+      'CONNECTIONS_IN_SCOPE — none. This unit is repo-local: do not call any external',
+      'service, write to any live API, or send anything outward. Your worktree has the',
+      'repo\'s .env symlinked in; holding a credential is not permission to use it.',
+      '',
+    ];
+  }
+  return [
+    'CONNECTIONS_IN_SCOPE — the ONLY external services you may reach:',
+    ...conns.map((c) => `    - ${c}   (see .vzt/connections.json for its mode and allowed operations)`),
+    'Every other external service is out of bounds. Stay inside the declared mode —',
+    'a connection registered as test/sandbox must never be pointed at live data. If the',
+    'task appears to require an undeclared connection, STOP and report it, exactly as',
+    'you would for a file outside FILES_IN_SCOPE.',
+    '',
+  ];
+}
+
 function unitPrompt(spec, u, extras = {}) {
   const files = (u.filesInScope || []).map((f) => `    - ${f}`).join('\n');
   const seeded = extras.seeded && extras.seeded.length
@@ -746,6 +911,7 @@ function unitPrompt(spec, u, extras = {}) {
     'FILES_IN_SCOPE — touch ONLY these; they are your collision boundary:',
     files,
     '',
+    ...connectionsBlock(u),
     `This unit is DONE only when this command passes:  ${u.machineCheck}`,
     `Expected:  ${u.expect}`,
     '',
@@ -925,6 +1091,21 @@ function envJson(bin, argv) {
   return d && d.result ? d.result : d;
 }
 
+/** Terminal handle out of an `orca terminal create|split --json` result.
+ *  Orca wraps the payload in a per-verb node (`result.split.handle`,
+ *  `result.create.handle`), so SCAN rather than guessing one key: guessing wrong
+ *  returns null, and a null handle makes waitIdle return instantly and grade a
+ *  worktree the agent never touched. */
+function paneHandle(res) {
+  if (!res || typeof res !== 'object') return null;
+  if (res.handle) return res.handle;
+  for (const k of ['split', 'create', 'terminal', 'startupTerminal', 'session']) {
+    if (res[k] && res[k].handle) return res[k].handle;
+  }
+  for (const v of Object.values(res)) if (v && typeof v === 'object' && v.handle) return v.handle;
+  return null;
+}
+
 function orcaBackend(args) {
   const bin = args.orca || process.env.ORCA_CLI || DEFAULT_ORCA;
   const key = (spec, u) => `${spec.slug}-${u.id}`;
@@ -949,17 +1130,72 @@ function orcaBackend(args) {
   // would poll an idle shell and grade the unit the instant it launched.
   const createArgv = (spec, u) => ['worktree', 'create', '--repo', `path:${spec.root}`,
     '--name', key(spec, u), '--no-parent', '--setup', 'run', '--json'];
+  const stateDir = path.join(VZT_VSCODE_DIR, 'state');
+  // The lifecycle env rides INSIDE the --command string because neither
+  // `orca terminal create` nor `orca terminal split` has an --env flag
+  // (vzt-orca-flow carries VZT_PANE_DEPTH into child panes the same way).
+  // VZT_VSCODE_DIR is passed explicitly rather than left to default: the pane's
+  // shell need not inherit this process's env, and a hook writing sentinels to a
+  // different directory than waitIdle polls is indistinguishable from an agent
+  // that never started.
+  const sentinelEnv = (spec, u) =>
+    `${SENTINEL_ENV}=1 ${SENTINEL_UNIT_ENV}=${shq(key(spec, u))} VZT_VSCODE_DIR=${shq(VZT_VSCODE_DIR)} `;
   const claudeCmd = (spec, u, extras) =>
-    `claude ${skipPerms ? '--dangerously-skip-permissions ' : ''}${shq(unitPrompt(spec, u, extras))}`;
-  const termArgv = (spec, u, wtId, extras) => ['terminal', 'create',
+    `${sentinelEnv(spec, u)}claude ${skipPerms ? '--dangerously-skip-permissions ' : ''}${shq(unitPrompt(spec, u, extras))}`;
+
+  // PANES, NOT A TAB PER UNIT. `terminal create` opens a whole TAB, so a 9-unit
+  // run buried the operator in 9 agent tabs (plus 9 fallback shells) with no way
+  // to watch two agents at once — the entire point of running them in parallel.
+  // Units after the first in a tab are SPLIT off that tab's first pane instead.
+  //
+  // The cap exists because agent TUIs degrade badly when squeezed: past
+  // VZT_PANES_PER_TAB the next unit opens a fresh tab and becomes its anchor.
+  const PANES_PER_TAB = Math.max(1, Number(process.env.VZT_PANES_PER_TAB || 3));
+  let anchor = null;      // first pane of the current ship tab; every split hangs off it
+  let panesInTab = 0;
+  // handle -> sentinel paths. The 5-method interface hands waitIdle only the
+  // terminal handle, and the handle stays a plain string because shipWatch
+  // compares and closes it — so the lifecycle files are looked up here rather
+  // than by widening the handle contract for one backend.
+  const sentinelsByHandle = new Map();
+  let plannedPanes = 0;   // dry-run only (plan()), never touched by a real dispatch
+  const tabArgv = (spec, u, wtId, extras) => ['terminal', 'create',
     ...(wtId ? ['--worktree', wtId] : []),
-    '--title', key(spec, u), '--command', claudeCmd(spec, u, extras), '--json'];
+    '--title', `ship/${spec.slug}`, '--command', claudeCmd(spec, u, extras), '--json'];
+  // `terminal split` has NO --worktree flag: the new pane inherits the ANCHOR's
+  // worktree, so the command must cd into this unit's checkout itself. Cost of
+  // that, stated plainly: `orca terminal list` reports split panes under the
+  // anchor's worktreePath. Nothing here reads it — resolve() goes through
+  // `worktree list`, stamp() through `name:<ws>`, waitIdle() through the handle
+  // — so grading is unaffected; only Orca's own label for the pane is.
+  //
+  // Direction alternates so a capped tab forms a grid rather than three slivers.
+  // `--title` is not available on split, and `terminal rename` renames the whole
+  // TAB, which would clobber every sibling — so units are attributed on stdout.
+  const splitArgv = (spec, u, wpath, extras) => ['terminal', 'split',
+    '--terminal', anchor,
+    '--direction', panesInTab % 2 === 1 ? 'vertical' : 'horizontal',
+    '--command', `cd ${shq(wpath)} && ${claudeCmd(spec, u, extras)}`, '--json'];
+  const paneArgv = (spec, u, wtId, wpath, extras) =>
+    (anchor && panesInTab < PANES_PER_TAB && wpath
+      ? splitArgv(spec, u, wpath, extras)
+      : tabArgv(spec, u, wtId, extras));
   const be = {
     name: 'orca', bin,
+    // Dry-run. No pane exists yet, so the layout is SIMULATED with the same rule
+    // dispatch uses — otherwise ship-dispatch would print a tab per unit and
+    // misrepresent what the real run does.
     plan(spec, u) {
+      const slot = plannedPanes % PANES_PER_TAB;   // 0 = first pane of a new tab
+      plannedPanes += 1;
+      const planned = slot === 0
+        ? tabArgv(spec, u, '<WORKTREE_ID>')
+        : ['terminal', 'split', '--terminal', '<FIRST_PANE_HANDLE>',
+          '--direction', slot % 2 === 1 ? 'vertical' : 'horizontal',
+          '--command', `cd '<WORKTREE_PATH>' && ${claudeCmd(spec, u)}`, '--json'];
       return [
         `${shq(bin)} ${createArgv(spec, u).map(shq).join(' ')}`,
-        `${shq(bin)} ${termArgv(spec, u, '<WORKTREE_ID>').map(shq).join(' ')}`,
+        `${shq(bin)} ${planned.map(shq).join(' ')}`,
       ];
     },
     dispatch(spec, u) {
@@ -976,16 +1212,51 @@ function orcaBackend(args) {
       // against. Throws on a seed conflict rather than launching on a bad base.
       const { baseSha, seeded } = wpath ? seedFromDeps(be, spec, u, wpath) : { baseSha: null, seeded: [] };
 
-      // The agent handle comes from `terminal create`, NEVER from the worktree.
+      // The agent handle comes from the pane we open, NEVER from the worktree.
       // A bare `worktree create` (no --agent) leaves a fallback SHELL as the
       // first terminal; waiting on that reports tui-idle immediately and grades
-      // the unit before the agent has done anything.
+      // the unit before the agent has done anything. That shell is closed once
+      // this unit has been graded — see shipWatch; closing it earlier would kill
+      // the repo setup hook that runs in it, and `terminal wait --for` offers
+      // only exit|tui-idle, neither of which a plain shell ever reports.
+      const startupHandle = res.startupTerminal?.handle || null;
+      // Clear a prior run's sentinels BEFORE the pane opens, so the agent's own
+      // hooks are the only thing that can create them.
+      sentinelReset(stateDir, key(spec, u));
+      const sentinels = sentinelPaths(stateDir, key(spec, u));
+      const argv = paneArgv(spec, u, wtId, wpath, { seeded });
+      let mode = argv[1]; // 'create' (new tab) | 'split' (pane in the current tab)
       let handle = null;
       try {
-        const term = envJson(bin, termArgv(spec, u, wtId, { seeded }));
-        handle = term.handle || term.terminal?.handle || term.startupTerminal?.handle || null;
+        const term = envJson(bin, argv);
+        handle = paneHandle(term);
       } catch (e) {
-        console.error(`  ${u.id}: orca terminal create failed — ${(e.message || '').trim().split('\n')[0]}`);
+        console.error(`  ${u.id}: orca terminal ${mode} failed — ${(e.message || '').trim().split('\n')[0]}`);
+      }
+      // A split is anchored on a pane that may be GONE — the operator closed it,
+      // or its agent exited and Orca reaped it. Layout must never cost a unit its
+      // agent, so fall back to the tab this replaced. Worst case is the old
+      // behaviour, not a unit that silently launched nothing.
+      if (!handle && mode === 'split') {
+        console.error(`  ${u.id}: anchor pane unusable — opening a tab instead`);
+        anchor = null; panesInTab = 0; mode = 'create';
+        try {
+          handle = paneHandle(envJson(bin, tabArgv(spec, u, wtId, { seeded })));
+        } catch (e) {
+          console.error(`  ${u.id}: orca terminal create failed — ${(e.message || '').trim().split('\n')[0]}`);
+        }
+      }
+      if (handle) {
+        sentinelsByHandle.set(handle, sentinels);
+        if (mode === 'split') {
+          panesInTab += 1;
+        } else {
+          anchor = handle;   // splits hang off the tab's FIRST pane, not a chain
+          panesInTab = 1;
+        }
+        // split takes no --title and rename retitles the whole tab, so stdout is
+        // the only place a pane can be attributed back to its unit.
+        console.log(`  ${u.id} → ${mode === 'split' ? `pane ${panesInTab}/${PANES_PER_TAB}` : `tab ship/${spec.slug}`}  ${handle}`);
       }
       // A null handle means waitIdle has nothing to wait ON: it returns instantly
       // and the oracle grades a worktree the agent may not have touched yet.
@@ -993,46 +1264,76 @@ function orcaBackend(args) {
       if (!handle) {
         console.error(`  ${u.id}: no orca agent terminal handle — cannot wait for idle, so the oracle may grade an unfinished worktree.`);
       }
-      return { path: wpath, ws: key(spec, u), baseSha, seeded, handle };
+      return { path: wpath, ws: key(spec, u), baseSha, seeded, handle, startupHandle, sentinels };
     },
-    // TWO-PHASE, matching herdr and vscode: prove the agent STARTED before
-    // waiting for it to stop. Orca exposes no agent status states, but
-    // `terminal read` returns a monotonic `latestCursor` — output is proof of
-    // life, and no output within the start grace means it never ran.
+    // Best-effort tidy of the fallback shell `worktree create` left behind. Only
+    // safe once the unit has been GRADED: the repo setup hook runs in that shell,
+    // and there is no CLI signal for "setup finished". Never throws — a stray tab
+    // costs one command, a failed run costs the work.
+    closeStartup(startupHandle) {
+      if (!startupHandle) return;
+      try {
+        execFileSync(bin, ['terminal', 'close', '--terminal', startupHandle, '--tab', '--json'],
+          { stdio: ['ignore', 'ignore', 'ignore'] });
+      } catch { /* already gone, or Orca not live */ }
+    },
+    // TWO-PHASE on the agent's OWN lifecycle hooks — see waitOnSentinels.
     //
-    // Written from Orca's documented CLI contract and NOT exercised end-to-end
-    // (no Orca runtime on the machine this was written on), so it degrades on
-    // purpose: if a cursor cannot be read the phase is skipped entirely and we
-    // fall through to the single-phase wait that shipped before. Worst case is
-    // today's behaviour, not a broken default backend.
+    // What this replaced, and why: a `latestCursor` delta for "started" plus
+    // `orca terminal wait --for tui-idle` for "finished". Both are screen-derived
+    // and both were measured wrong. tui-idle returns WHILE the agent is still
+    // working, so a unit got graded mid-sentence; and cursor movement cannot tell
+    // a booting agent from a shell echoing its own prompt. The sentinels come from
+    // claude's SessionStart/Stop hooks instead, which is the same signal the
+    // vscode backend has run on since 2026-07-28.
+    //
+    // Degrades rather than throws: no sentinels recorded for this handle (an older
+    // dispatch, or an unwritable state dir) falls back to the tui-idle wait that
+    // shipped before. Worst case is the previous behaviour, not a stalled run.
     waitIdle(handle, t) {
       if (!handle) return;
-      const startGrace = Number(process.env.VZT_START_GRACE_MS || 90_000);
-      const cursor = () => {
-        try {
-          const r = envJson(bin, ['terminal', 'read', '--terminal', handle, '--limit', '1', '--json']);
-          const c = r.latestCursor ?? r.nextCursor ?? null;
-          return typeof c === 'number' ? c : null;
-        } catch {
-          return null;
-        }
-      };
-      const base = cursor();
-      if (base !== null) {
-        const deadline = Date.now() + Math.min(t, startGrace);
-        let started = base > 0;
-        while (!started && Date.now() < deadline) {
-          sleepSync(1000);
-          const c = cursor();
-          if (c === null) { started = true; break; } // lost the signal — don't stall on it
-          if (c > base) started = true;
-        }
-        if (!started) {
-          console.error(`  orca: no output within ${Math.round(Math.min(t, startGrace) / 1000)}s — the agent likely never started; verifying anyway`);
-          return;
-        }
+      const h = sentinelsByHandle.get(handle);
+      if (!h) {
+        try { execFileSync(bin, ['terminal', 'wait', '--terminal', handle, '--for', 'tui-idle', '--timeout-ms', String(t), '--json'], { stdio: ['ignore', 'ignore', 'ignore'] }); } catch { /* timed out/stale — verify anyway */ }
+        return;
       }
-      try { execFileSync(bin, ['terminal', 'wait', '--terminal', handle, '--for', 'tui-idle', '--timeout-ms', String(t), '--json'], { stdio: ['ignore', 'ignore', 'ignore'] }); } catch { /* timed out/stale — verify anyway */ }
+      const r = waitOnSentinels(h, t);
+      if (r === 'no-start') {
+        const s = Math.round(Math.min(t, Number(process.env.VZT_START_GRACE_MS || 90_000)) / 1000);
+        console.error(`  ${h.unitKey}: no start signal within ${s}s — the pane never ran its agent; verifying anyway`);
+        console.error('    A pane sitting at a shell prompt means DISPATCH failed, not that the unit is slow.');
+        console.error('    Check it with: orca terminal read --terminal ' + handle + ' --limit 40 --json');
+      }
+    },
+    // Free a wave slot when whichever unit finishes FIRST does, not when the one
+    // the loop named first does. Cheap here because every unit's completion is a
+    // file: polling N of them costs no more than polling one.
+    waitAny(handles, t) {
+      const watched = handles.filter((x) => x && sentinelsByHandle.has(x));
+      if (!watched.length) return handles[0];
+      const startGrace = Number(process.env.VZT_START_GRACE_MS || 90_000);
+      const deadline = Date.now() + t;
+      let startDeadline = Date.now() + Math.min(t, startGrace);
+      while (Date.now() < deadline) {
+        for (const x of watched) {
+          if (fs.existsSync(sentinelsByHandle.get(x).idleFile)) return x;
+        }
+        // A unit that never started must not hold the slot for the full budget —
+        // same failure the single-handle path reports, applied to the whole wave.
+        if (Date.now() > startDeadline) {
+          const dead = watched.find((x) => {
+            const s = sentinelsByHandle.get(x);
+            return !fs.existsSync(s.startedFile) && !fs.existsSync(s.blockedFile);
+          });
+          if (dead) {
+            console.error(`  ${sentinelsByHandle.get(dead).unitKey}: no start signal — the pane never ran its agent; verifying anyway`);
+            return dead;
+          }
+          startDeadline = Infinity; // all alive; only idle decides from here
+        }
+        sleepSync(1000);
+      }
+      return watched[0];
     },
     resolve(spec, u) {
       try {
@@ -1070,40 +1371,114 @@ function herdrBackend(args) {
   // the first tool prompt, the idle-wait returns, and the oracle grades an
   // empty worktree. Opt out per-run with VZT_HERDR_SKIP_PERMISSIONS=0.
   const skipPerms = process.env.VZT_HERDR_SKIP_PERMISSIONS !== '0';
-  const claudeArgv = (prompt) => ['claude', ...(skipPerms ? ['--dangerously-skip-permissions'] : []), prompt];
+  // herdr 0.7.5: `agent start <NAME> --kind <KIND> --pane <ID> [-- AGENT_ARG...]`.
+  // The KIND supplies the executable, so the args after `--` are claude's FLAGS
+  // only — passing `claude` again would run `claude claude <prompt>`.
+  //
+  // 🔴 This shape is a BREAKING CHANGE from the one this backend used to send
+  // (`--workspace <ws> --cwd <path> --no-focus --env … -- claude …`), and herdr
+  // rejects the old one with a bare `unknown option: --workspace`. Every unit
+  // therefore created its worktree, started NOTHING, and was graded on an empty
+  // tree — silently, because the throw was swallowed into a one-line warning.
+  // `agent wait` drifted the same way: `--status` became `--until`.
+  const agentArgs = (prompt) => [...(skipPerms ? ['--dangerously-skip-permissions'] : []), prompt];
+  // PANES, NOT A WORKSPACE PER UNIT. `worktree create` opens a workspace holding
+  // one pane, so a 9-unit run produced 9 separate surfaces and the operator could
+  // never watch two units at once. Units after the first are SPLIT into the first
+  // unit's workspace instead — `pane split --cwd` puts the new pane in the right
+  // checkout with no cd, and the now-empty per-unit workspace is closed.
+  // Shares VZT_PANES_PER_TAB with the orca backend: one knob for "how many agents
+  // share a surface", because agent TUIs degrade badly when squeezed.
+  const PANES_PER_WS = Math.max(1, Number(process.env.VZT_PANES_PER_TAB || 3));
+  // A freshly split pane is NOT yet at its shell prompt, and herdr answers
+  // `agent_pane_busy` — which reads as "pane in use" rather than "not ready yet".
+  // Retry against a deadline: shell startup time depends on the user's rc files,
+  // so a slept constant is a guess that fails on someone else's machine.
+  const PANE_READY_MS = Number(process.env.VZT_HERDR_PANE_READY_MS || 30_000);
+  let anchor = null;      // first agent pane; every split hangs off it
+  let panesInWs = 0;
+  const paneId = (r) => r?.pane?.pane_id || r?.agent?.pane_id || r?.root_pane?.pane_id || null;
+  const quietly = (argv) => {
+    try { execFileSync(bin, argv, { stdio: ['ignore', 'ignore', 'ignore'] }); return true; } catch { return false; }
+  };
   // herdr enforces GLOBALLY-UNIQUE agent instance names. The `<name>` positional
-  // of `agent start <name>` is the instance name, NOT the agent type — the type
-  // (claude/codex/…) is auto-detected from the running process. So naming every
-  // unit's agent "claude" made the first unit claim the name and every later
-  // `agent start claude` die with `agent_name_taken`, launching nothing and
-  // grading empty worktrees. Name each agent by its unit key (already unique).
+  // of `agent start <name>` is the instance name, NOT the agent type. So naming
+  // every unit's agent "claude" made the first unit claim the name and every later
+  // start die with `agent_name_taken`, launching nothing and grading empty
+  // worktrees. Name each agent by its unit key, and salt a RE-RUN of the same unit
+  // (whose previous agent may still hold the name) rather than launching nothing.
+  const startAgent = (name, pane, prompt) => {
+    const deadline = Date.now() + PANE_READY_MS;
+    for (let attempt = 0; ; attempt += 1) {
+      const instance = attempt === 0 ? name : `${name}-${attempt}`;
+      try {
+        return paneId(envJson(bin, ['agent', 'start', instance, '--kind', 'claude', '--pane', pane,
+          '--timeout', String(PANE_READY_MS), '--', ...agentArgs(prompt)]));
+      } catch (e) {
+        const msg = (e.message || '').trim();
+        if (/agent_name_taken/.test(msg) && attempt < 3) continue;      // stale name from a re-run
+        if (/busy|not ready|agent_pane_busy/i.test(msg) && Date.now() < deadline) { sleepSync(1000); continue; }
+        throw e;
+      }
+    }
+  };
   const be = {
     name: 'herdr', bin,
     plan(spec, u) {
       const b = branch(spec, u);
-      const cargv = claudeArgv(unitPrompt(spec, u)).map(shq).join(' ');
+      const aargv = agentArgs(unitPrompt(spec, u)).map(shq).join(' ');
       return [
         `${shq(bin)} worktree create --cwd ${shq(spec.root)} --branch ${shq(b)} --label ${shq(b)} --no-focus --json`,
-        `${shq(bin)} agent start ${shq(b)} --workspace <WS> --cwd <WT_PATH> --no-focus --env PATH="$PATH" -- ${cargv}`,
+        `${shq(bin)} pane split --pane <ANCHOR_PANE> --direction down --cwd <WT_PATH> --env PATH="$PATH" --no-focus`,
+        `${shq(bin)} agent start ${shq(b)} --kind claude --pane <PANE> -- ${aargv}`,
       ];
     },
     dispatch(spec, u) {
       const b = branch(spec, u);
       const wt = envJson(bin, ['worktree', 'create', '--cwd', spec.root, '--branch', b, '--label', b, '--no-focus', '--json']);
       const ws = wt.workspace?.workspace_id || wt.worktree?.open_workspace_id || null;
-      const wpath = wt.worktree?.path || wt.workspace?.worktree?.checkout_path || null;
+      const wpath = wt.worktree?.path || wt.root_pane?.cwd || wt.workspace?.worktree?.checkout_path || null;
       // Seed dependencies into the worktree BEFORE the agent boots. herdr creates
       // the branch from the repo's current HEAD, so a dependent would otherwise
       // open a tree missing everything it was told to build against.
       const { baseSha, seeded } = wpath ? seedFromDeps(be, spec, u, wpath) : { baseSha: null, seeded: [] };
-      let handle = null;
-      if (ws && wpath) {
+
+      // Where the agent will live: a split of the shared ship workspace when one
+      // is open, otherwise this unit's own root pane (which then becomes the
+      // anchor every later unit splits off).
+      let pane = null;
+      let paneWs = ws;
+      if (anchor && panesInWs < PANES_PER_WS && wpath) {
         try {
-          const ag = envJson(bin, ['agent', 'start', b, '--workspace', ws, '--cwd', wpath, '--no-focus', ...envPath, '--', ...claudeArgv(unitPrompt(spec, u, { seeded }))]);
-          handle = ag.agent?.pane_id || null;
-        } catch (e) { console.error(`  ${u.id}: herdr agent start failed — ${e.message}`); }
+          pane = paneId(envJson(bin, ['pane', 'split', '--pane', anchor, '--direction',
+            panesInWs % 2 === 1 ? 'down' : 'right', '--cwd', wpath, ...envPath, '--no-focus']));
+        } catch (e) { console.error(`  ${u.id}: herdr pane split failed — ${(e.message || '').trim().split('\n')[0]}`); }
+        if (pane) {
+          panesInWs += 1;
+          paneWs = null;              // the agent lives in the SHARED workspace now
+          if (ws) quietly(['workspace', 'close', ws]);   // this unit's own surface is empty
+        }
       }
-      return { path: wpath, ws, baseSha, seeded, handle };
+      if (!pane) {
+        pane = wt.root_pane?.pane_id || null;
+        if (pane) { anchor = pane; panesInWs = 1; }
+      }
+
+      let handle = null;
+      if (pane) {
+        try {
+          handle = startAgent(b, pane, unitPrompt(spec, u, { seeded }));
+        } catch (e) { console.error(`  ${u.id}: herdr agent start failed — ${(e.message || '').trim().split('\n')[0]}`); }
+      } else {
+        console.error(`  ${u.id}: herdr gave no pane to start in — the unit will be graded on an untouched worktree.`);
+      }
+      if (handle) {
+        // `pane rename` labels THIS unit's pane. Renaming the workspace would
+        // clobber every sibling sharing it — the same trap as retitling a tab.
+        quietly(['pane', 'rename', handle, b]);
+        console.log(`  ${u.id} → ${paneWs ? 'workspace' : `pane ${panesInWs}/${PANES_PER_WS}`}  ${handle}`);
+      }
+      return { path: wpath, ws, baseSha, seeded, handle, paneWs };
     },
     waitIdle(handle, t) {
       if (!handle) return;
@@ -1116,21 +1491,21 @@ function herdrBackend(args) {
       // `blocked` counts as started too — an agent sitting on a permission
       // prompt has clearly begun, and we want the idle wait (not a 1s false
       // FAIL) to be what governs it.
-      const started = ['working', 'blocked'].some((st) => {
-        try {
-          execFileSync(bin, ['agent', 'wait', handle, '--status', st, '--timeout', String(Math.min(t, START_GRACE_MS))],
-            { stdio: ['ignore', 'ignore', 'ignore'] });
-          return true;
-        } catch { return false; }
-      });
+      //
+      // The flag is `--until`, NOT `--status`: herdr rejects the latter outright,
+      // and because every wait here is wrapped in a catch, the rejection made
+      // waitIdle return in milliseconds — so the oracle graded each worktree the
+      // instant it was created. A silent no-op wait is worse than no wait at all.
+      const started = ['working', 'blocked'].some((st) =>
+        quietly(['agent', 'wait', handle, '--until', st, '--timeout', String(Math.min(t, START_GRACE_MS))]));
       if (!started) {
         // Never observed running. Either it died on launch, or it finished
         // faster than we looked. Don't grade yet — the oracle is the authority,
         // but give the filesystem a beat so a fast unit isn't failed on a race.
-        try { execFileSync(bin, ['agent', 'wait', handle, '--status', 'idle', '--timeout', String(Math.min(t, START_GRACE_MS))], { stdio: ['ignore', 'ignore', 'ignore'] }); } catch { /* fall through */ }
+        quietly(['agent', 'wait', handle, '--until', 'idle', '--timeout', String(Math.min(t, START_GRACE_MS))]);
         return;
       }
-      try { execFileSync(bin, ['agent', 'wait', handle, '--status', 'idle', '--timeout', String(t)], { stdio: ['ignore', 'ignore', 'ignore'] }); } catch { /* timed out/stale — verify anyway */ }
+      quietly(['agent', 'wait', handle, '--until', 'idle', '--timeout', String(t)]);
     },
     resolve(spec, u) {
       try {
@@ -1140,9 +1515,14 @@ function herdrBackend(args) {
         return hit ? { path: hit.path, ws: hit.open_workspace_id } : null;
       } catch { return null; }
     },
+    // The verdict goes on whatever surface this unit actually OWNS. A unit that
+    // shares the ship workspace owns only its pane; renaming the workspace there
+    // would overwrite the label of every sibling in it.
     stamp(spec, u, info, status /* , pass */) {
-      if (!info.ws) return;
-      try { execFileSync(bin, ['workspace', 'rename', info.ws, `${branch(spec, u)} oracle:${status}`], { stdio: ['ignore', 'ignore', 'ignore'] }); } catch { /* not live */ }
+      const label = `${branch(spec, u)} oracle:${status}`;
+      if (info.handle && !info.paneWs) { quietly(['pane', 'rename', info.handle, label]); return; }
+      const ws = info.paneWs || info.ws;
+      if (ws) quietly(['workspace', 'rename', ws, label]);
     },
   };
   return be;
@@ -1237,17 +1617,10 @@ function vscodeBackend(/* args */) {
       // breach scope rebuilding what it cannot see. Throws on a seed conflict,
       // which shipWatch records as a dispatch failure with the reason.
       const { baseSha, seeded } = seedFromDeps(be, spec, u, wtPath);
-      // Clear EVERY sentinel from a prior run of this unit key, not just idle —
-      // a stale `.started` would satisfy the start phase instantly and put us
-      // right back to grading an empty worktree.
-      for (const f of [`${k}.idle`, `${k}.status`, `${k}.started`, `${k}.blocked`]) {
-        try { fs.unlinkSync(path.join(stateDir, f)); } catch { /* none */ }
-      }
+      sentinelReset(stateDir, k);
       const promptFile = path.join(promptDir, `${k}.txt`);
       fs.writeFileSync(promptFile, unitPrompt(spec, u, { seeded, drift: fresh ? null : baseDriftBlock(spec.root, k) }));
-      const idleFile = path.join(stateDir, `${k}.idle`);
-      const startedFile = path.join(stateDir, `${k}.started`);
-      const blockedFile = path.join(stateDir, `${k}.blocked`);
+      const { idleFile, startedFile, blockedFile } = sentinelPaths(stateDir, k);
       const cmd = claudeCmd(promptFile);
       const queueFile = path.join(queueDir, `${k}.json`);
       // `workspaceRoot` is what SCOPES this record to a window.
@@ -1267,7 +1640,7 @@ function vscodeBackend(/* args */) {
         unitKey: k,
         cwd: wtPath,
         workspaceRoot: spec.root,
-        env: { VZT_VSCODE_MUX: '1', VZT_VSCODE_UNIT: k },
+        env: { [SENTINEL_ENV]: '1', [SENTINEL_UNIT_ENV]: k },
         cmd,
       }, null, 2));
       // Persistent twin for the tree view: survives the queue record's deletion
@@ -1329,30 +1702,14 @@ function vscodeBackend(/* args */) {
         return;
       }
 
-      // Phase 1 — wait for evidence the agent actually STARTED. `blocked` counts
-      // as started (it is sitting on a prompt, which is a live agent), and so
-      // does `idle` itself for a unit that finished faster than we looked.
-      const startGrace = Number(process.env.VZT_START_GRACE_MS || 90_000);
-      const startDeadline = Date.now() + Math.min(t, startGrace);
-      let started = false;
-      while (Date.now() < startDeadline) {
-        if (fs.existsSync(handle.startedFile) || fs.existsSync(handle.blockedFile)) { started = true; break; }
-        if (fs.existsSync(handle.idleFile)) return; // finished already
-        sleepSync(500);
-      }
-      if (!started) {
+      // Phase 1 proves the agent STARTED, phase 2 waits for it to go idle. Shared
+      // with the orca backend — see waitOnSentinels for the incident behind it.
+      if (waitOnSentinels(handle, t) === 'no-start') {
         // Never observed running inside the grace window. Don't spend the rest of
         // the unit budget waiting on a sentinel that is not coming — the oracle
         // is still the authority and will run against the worktree.
-        console.error(`  ${handle.unitKey}: no start signal within ${Math.round(Math.min(t, startGrace) / 1000)}s — terminal likely never ran its command; verifying anyway`);
-        return;
-      }
-
-      // Phase 2 — it is alive; now the full unit budget governs.
-      const deadline = Date.now() + t;
-      while (Date.now() < deadline) {
-        if (fs.existsSync(handle.idleFile)) return;
-        sleepSync(1000);
+        const s = Math.round(Math.min(t, Number(process.env.VZT_START_GRACE_MS || 90_000)) / 1000);
+        console.error(`  ${handle.unitKey}: no start signal within ${s}s — terminal likely never ran its command; verifying anyway`);
       }
     },
     resolve(spec, u) {
@@ -1402,15 +1759,20 @@ function vscodeBackend(/* args */) {
 function getBackend(args) {
   const explicit = args.mux || process.env.VZT_MUX;
   const name = (explicit || 'orca').toLowerCase();
-  // Orca is the historical default AND the least hardened backend: alone among
-  // the three it has no start-grace phase in waitIdle and cannot pass
-  // skip-permissions to its agent (see orcaBackend). Falling into it silently,
-  // because neither --mux nor VZT_MUX was set, is how someone ends up debugging
-  // "the oracle graded an empty worktree" without knowing which substrate they
-  // were on. Say it out loud; do not change the default under them.
-  if (!explicit) {
-    console.error('note: no --mux and no VZT_MUX — defaulting to orca, the least-hardened backend.');
-    console.error('      prefer `--mux herdr` or `--mux vscode`, or export VZT_MUX, unless you mean orca.');
+  // Orca is the default and, since it gained the shared lifecycle sentinels and
+  // skip-permissions, no longer the least-hardened one — that comment stood here
+  // until 2026-08-06 and steered runs onto herdr, which is where they broke.
+  //
+  // Herdr's `agent start` is a two-step protocol (split a pane, wait for it to
+  // reach a shell prompt, type the agent in, detect that it booted) and it lost
+  // that race on 2026-08-04 and again on 2026-08-06: panes opened, no agent ever
+  // ran in them, and both runs fell back to the headless driver — which has no
+  // panes at all, so the operator watched an empty window for an hour. Orca
+  // passes the agent as the pane's startup --command, so there is no prompt
+  // detection step to lose. Prefer it, and say so when someone asks for herdr.
+  if (name === 'herdr') {
+    console.error('note: --mux herdr starts agents in a SECOND step that has failed twice');
+    console.error('      (2026-08-04, 2026-08-06: panes opened, zero agents ran). Prefer --mux orca.');
   }
   if (name === 'herdr') return herdrBackend(args);
   if (name === 'orca') return orcaBackend(args);
@@ -1441,7 +1803,7 @@ function seedLine(spec, u, info) {
 function shipDispatch(args) {
   const specPath = args._[1];
   const spec = loadSpec(specPath);
-  const errs = validateSpec(spec);
+  const errs = gateSpec(spec);
   if (errs.length) {
     console.error('❌ refusing to dispatch: SPEC does not pass ship-check. Run `vzt-agent ship-check` first.');
     process.exit(1);
@@ -1773,7 +2135,7 @@ function runIntegrationGate(spec, be, units) {
 function shipSupervise(args) {
   const specPath = args._[1];
   const spec = loadSpec(specPath);
-  const errs = validateSpec(spec);
+  const errs = gateSpec(spec);
   if (errs.length) {
     console.error('❌ refusing to supervise: SPEC does not pass ship-check.');
     process.exit(1);
@@ -1850,7 +2212,7 @@ function keepAwake() {
 function shipWatch(args) {
   const specPath = args._[1];
   const spec = loadSpec(specPath);
-  const errs = validateSpec(spec);
+  const errs = gateSpec(spec);
   if (errs.length) {
     console.error('❌ refusing to watch: SPEC does not pass ship-check. Run `vzt-agent ship-check` first.');
     process.exit(1);
@@ -1901,6 +2263,17 @@ function shipWatch(args) {
     }
   };
 
+  // Grade a finished unit, then let the backend tidy anything it opened purely to
+  // get the agent running — for orca, the fallback shell tab `worktree create`
+  // leaves behind. Deliberately AFTER the oracle: that shell runs the repo setup
+  // hook and there is no CLI signal for "setup finished", so a unit that has been
+  // graded is the first moment closing it is provably safe.
+  const grade = (u, info) => {
+    const pass = verifyAndRecord(be, spec, u, specPath, info, 'ship-watch');
+    if (be.closeStartup) be.closeStartup(info && info.startupHandle);
+    return pass;
+  };
+
   // Phase 1 — barrier gates everything.
   if (spec.barrier) {
     console.log('\n## barrier (runs first; its oracle grades every unit)');
@@ -1908,7 +2281,7 @@ function shipWatch(args) {
     let barrierOk = false;
     if (!b.dispatchFailed) {
       be.waitIdle(b.info.handle, timeoutMs);
-      barrierOk = verifyAndRecord(be, spec, spec.barrier, specPath, b.info, 'ship-watch');
+      barrierOk = grade(spec.barrier, b.info);
     }
     if (!barrierOk) {
       console.error('\n❌ barrier FAILED — aborting before dispatching units. Fix the barrier worktree, then re-run.');
@@ -1964,7 +2337,7 @@ function shipWatch(args) {
       }
       if (!inflight.length) break;
       const w = takeFinished(be, inflight, timeoutMs);
-      if (verifyAndRecord(be, spec, w.u, specPath, w.info, 'ship-watch')) {
+      if (grade(w.u, w.info)) {
         verdict.set(w.u.id, 'PASS');
         passed++;
         passedUnits.push(w.u);
@@ -2051,7 +2424,8 @@ Usage:
   vzt-agent matrix
 
 Long-horizon runs (/vzt-ship):
-  vzt-agent ship-check <SPEC.md>          gate the spec — disjoint scopes, an oracle per unit
+  vzt-agent ship-check <SPEC.md>          gate the spec — disjoint scopes, an oracle per unit,
+                                          declared connections (.vzt/connections.json)
   vzt-agent ship-start <SPEC.md>          open the run ledger
   vzt-agent ship-note  <SPEC.md> '<json>' append one ledger line
   vzt-agent ship-status [--target <dir>]  reconstruct run state from disk (use after a compaction)

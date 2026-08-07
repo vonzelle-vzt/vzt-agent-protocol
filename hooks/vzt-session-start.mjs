@@ -33,6 +33,7 @@ try {
 const model = (payload.model || '').toLowerCase();
 let chair = 'unknown';
 for (const t of ['fable', 'opus', 'sonnet', 'haiku']) if (model.includes(t)) chair = t;
+const orcaHandle = process.env.ORCA_TERMINAL_HANDLE || '';
 
 // Persist chair state keyed by session, plus a `latest` fallback.
 try {
@@ -54,6 +55,20 @@ try {
   /* best-effort */
 }
 
+const NO_ORCA_PARALLELISM = '- VISIBLE PARALLELISM — not available: no Orca terminal detected (ORCA_TERMINAL_HANDLE unset). Use Agent-tool subagents and say so.';
+
+function visibleParallelism(rest) {
+  if (!orcaHandle) return NO_ORCA_PARALLELISM;
+  return `- VISIBLE PARALLELISM — you ARE inside an Orca terminal (handle ${orcaHandle}): ${rest}`;
+}
+
+const VISIBLE_PARALLELISM = {
+  fable: 'delegate execution DOWN as REAL agent panes rather than invisible in-process subagents: `vzt-orca-flow pane run --agent claude|codex --task "<worker brief>" --title <short-name>` per track, all in ONE message so they work concurrently. Each splits a pane, runs a real CLI, and closes itself when the agent signals `pane done`; one that never signals is left open on purpose. Pass `--detach` when the chair should continue immediately while a watcher reaps the pane. `--agent codex` runs GPT-5.5 and burns NO Anthropic quota at all — from this chair especially, prefer codex panes for execution so Fable tokens stay on reasoning. Capped by VZT_PANE_MAX (default 4), spawn depth 2. Every repo, not just vzt-orca-flow.',
+  opus: 'dispatch a parallel wave as REAL agent panes, not invisible in-process subagents: `vzt-orca-flow pane run --agent claude|codex --task "<worker brief>" --title <short-name>` per track, each in ONE message so they work concurrently. Each opens a split pane, runs a real CLI, and CLOSES ITSELF when the agent signals `pane done`; an agent that never signals is left open on purpose (a stray pane costs one command, a pane killed mid-task costs the work). Pass `--detach` when the chair should continue immediately while a watcher reaps the pane. `--agent codex` runs GPT-5.5 (`codex --yolo`) and burns NO Anthropic quota — use it to widen a wave past what Opus/Sonnet quota alone would allow, and mix lanes freely within one wave. Use `--tab` for a separate tab, `--keep` to inspect afterwards, `vzt-orca-flow pane list` to see what is live. Bounded by VZT_PANE_MAX (default 4, well under the 20-agent cap) and a spawn-depth ceiling of 2, so a pane agent cannot recursively fan out. This applies in EVERY repo, not just vzt-orca-flow. Agent-tool subagents run in-process and can never appear in a pane — if the user expects to watch agents work, panes are the only mechanism that shows them.',
+  sonnet: 'dispatch a parallel wave as REAL agent panes rather than invisible in-process subagents: `vzt-orca-flow pane run --agent claude|codex --task "<worker brief>" --title <short-name>` per track, all in ONE message so they work concurrently. Each splits a pane, runs a real CLI, and closes itself when the agent signals `pane done`; one that never signals is left open on purpose. Pass `--detach` when the chair should continue immediately while a watcher reaps the pane. `--agent codex` runs GPT-5.5 and burns NO Anthropic quota — reach for it to widen a wave past the Sonnet bucket. Capped by VZT_PANE_MAX (default 4), spawn depth 2. Every repo, not just vzt-orca-flow.',
+  haiku: 'dispatch independent tracks as REAL agent panes rather than invisible in-process subagents: `vzt-orca-flow pane run --agent claude|codex --task "<worker brief>" --title <short-name>` per track, all in ONE message so they work concurrently. Each splits a pane, runs a real CLI, and closes itself when the agent signals `pane done`; one that never signals is left open on purpose. Pass `--detach` when the chair should continue immediately while a watcher reaps the pane. `--agent codex` runs GPT-5.5 and burns NO Anthropic quota — a dispatcher chair should reach for it first. Capped by VZT_PANE_MAX (default 4), spawn depth 2. Every repo, not just vzt-orca-flow.',
+};
+
 const PROFILES = {
   fable: `Chair = Fable 5. Fable tokens are the scarcest resource in this session.
 - Do planning, architecture, and root-cause reasoning INLINE (that is what this chair is for).
@@ -64,6 +79,7 @@ const PROFILES = {
 - When orchestrating multi-step work: you design and verify; workers (vzt-builder/vzt-mechanic) execute and report back — equal results at a fraction of the cost. Never promote a worker step to your own tier without a stated reason.
 - Delegate with a worker brief: FILES_IN_SCOPE (collision boundary), one-shot operation spec, MACHINE_CHECK chosen BEFORE dispatch (${templateRef('worker-brief.md')}).
 - Parallel waves: dispatch independent steps as multiple Agent calls in ONE message. FILES_IN_SCOPE sets must be pairwise disjoint. Fan out for divergence/evidence, never for correctness — Sonnet/Haiku only, never Opus/Fable. On a hard bug, /vzt-diagnose (N≤4 read-only probes in parallel) BEFORE burning this chair on serial grep work.
+${visibleParallelism(VISIBLE_PARALLELISM.fable)}
 - Reporting ≠ persistence: verify worker artifacts on disk (git diff, re-run the check) before accepting a report.`,
   opus: `Chair = Opus 5. Wall-clock and Opus quota are the constraints.
 - Wall-clock lever: /fast runs this Opus chair at up to ~2.5× output speed (same Opus 5 model, premium tokens: $10/$50 per MTok — i.e. Fable-tier PRICE for Opus-tier intelligence). Reach for it when latency matters more than token cost, e.g. a long interactive build you're watching; it is a bad default.
@@ -77,9 +93,11 @@ const PROFILES = {
 - Delegate with a worker brief: FILES_IN_SCOPE (collision boundary), one-shot operation spec, MACHINE_CHECK chosen BEFORE dispatch (${templateRef('worker-brief.md')}).
 - DELEGATION CAP — this chair over-reaches for subagents by default, so bound it. Do NOT delegate work you could finish in a handful of tool calls; a subagent re-establishes context, re-explores, reports back, and then you re-read the report. Prefer ONE subagent over several. Keep spawn counts low, and never exceed 20 parallel agents unless explicitly asked. Once you delegate, COMMIT: never redo a worker's work or re-derive its findings.
 - Parallel waves are for genuinely independent tracks (unrelated modules, a wide multi-file sweep), NOT for splitting one modest job into pieces. When steps really are independent, dispatch them as multiple Agent calls in ONE message with pairwise-disjoint FILES_IN_SCOPE. Fan out for divergence/evidence, never for correctness — Sonnet/Haiku only, never Opus/Fable.
+${visibleParallelism(VISIBLE_PARALLELISM.opus)}
 - Verification belongs in THIS loop. Verify external artifacts relentlessly: run the oracle yourself, and check worker output on disk (git diff, re-run the check) before accepting a report — reporting ≠ persistence. But do NOT spawn a subagent to double-check your OWN inline work, and do not pad turns with re-verification passes; this chair already self-checks without being told, so extra verify instructions buy nothing.
 - Scope and concision: deliver what was asked at the scope intended. No unrequested refactors, abstractions, helpers, or error handling for cases that cannot happen. Lead with the outcome — say what happened first, detail after.
-- LONG-HORIZON: when a task feels "too big for one shot" (a whole subsystem, a greenfield feature, an end-to-end migration, a sweep across dozens of files), do NOT start implementing and do NOT escalate to Fable. Run /vzt-ship: spec to disk FIRST, with pairwise-disjoint FILES_IN_SCOPE and one machine-checkable oracle per unit, chosen BEFORE the unit is built. Drive the supervised run in a live agent multiplexer BY DEFAULT — \`vzt-agent ship-watch <SPEC.md>\` (Herdr via \`VZT_MUX=herdr\`, omit \`--mux\`; or \`--mux vscode\` for native VS Code integrated terminals) so each unit runs as a real claude agent in a watchable/attachable worktree pane; fall back to the headless Workflow driver only when no mux is live, and say which you used. Never auto-merge — ship-watch stops at the green gate.
+- LONG-HORIZON: when a task feels "too big for one shot" (a whole subsystem, a greenfield feature, an end-to-end migration, a sweep across dozens of files), do NOT start implementing and do NOT escalate to Fable. Run /vzt-ship: spec to disk FIRST, with pairwise-disjoint FILES_IN_SCOPE and one machine-checkable oracle per unit, chosen BEFORE the unit is built. Drive the supervised run in a live agent multiplexer BY DEFAULT — \`vzt-agent ship-watch <SPEC.md>\` (Orca is the default mux, omit \`--mux\`; \`--mux vscode\` for native VS Code integrated terminals; \`--mux herdr\` ONLY when you need panes that outlive the editor) so each unit runs as a real claude agent in a watchable/attachable worktree pane. Never auto-merge — ship-watch stops at the green gate.
+- SHIP DISPATCH IS NOT ASSUMED TO WORK — check it, because it silently did not. On 2026-08-04 and 2026-08-06 herdr's \`agent start\` failed on every unit: the panes opened, no agent ever ran in them, and ship-watch fell back to the HEADLESS driver, which has no panes at all. Both runs looked alive and produced nothing. So: run \`vzt-orca-flow doctor\` BEFORE a ship run — it verifies the effective mux, that Orca's agent status hooks are on, and takes a live pane census. And treat a unit pane sitting at a bare shell prompt as DISPATCH FAILED, not as a slow unit: stop the run, do not grade it. A headless fallback is a last resort you announce, never a silent one.
 - Escalate the PROCESS, not the MODEL. Long-horizon work fails when context compaction eats the plan mid-run — a slower model does not fix that; a plan on disk does. Fable is for genuinely hard debugging (/vzt-fix) and no-prior-art architecture, and stays ≤10% of turns.
 - Externalized coherence: the SPEC (.vzt/ship/<slug>/SPEC.md) and the LEDGER (LEDGER.jsonl) survive compaction; your memory of them does not. After any compaction, run \`vzt-agent ship-status\` and re-read the SPEC before acting.
 - Supervise, don't spawn-and-block: dispatch NAMED background workers, verify their artifacts on disk (git diff + re-run the oracle yourself), and CORRECT a failing worker via SendMessage (≤2 rounds) rather than re-briefing it from scratch. A named agent resumes from its transcript; an unnamed one cannot be corrected at all.
@@ -89,9 +107,11 @@ const PROFILES = {
 - Escalate UP only when a task earns it, and stop at the FIRST rung that can do the job: planning/architecture → "vzt-architect" (Opus 5 @ max), heavy multi-file implementation → "vzt-heavy-builder" (Opus 5), load-bearing review → "vzt-reviewer" (Opus 5).
 - Fable is the LAST rung, not the first: "vzt-planner" only for planning with no prior art (novel/greenfield architecture, one-way-door distributed-systems calls), "vzt-oracle" only for impossible bugs. Routine architecture is an opus@max job now.
 - For up-tier work that needs full conversation context, prefer the turn skills — /vzt-design (Opus @ max) for planning, /vzt-plan and /vzt-fix (Fable) for the rare frontier turn — over subagents.
-- VISUAL work: if the repo has a DESIGN.md, this chair is the right tier — read it FIRST and make every value trace to a token; a missing token is a gap you report, never a value you invent. If there is NO DESIGN.md, escalate UP exactly once to "vzt-art-director" (Opus) or /vzt-ui to write it, after which visual work routes back here permanently.`,
+- VISUAL work: if the repo has a DESIGN.md, this chair is the right tier — read it FIRST and make every value trace to a token; a missing token is a gap you report, never a value you invent. If there is NO DESIGN.md, escalate UP exactly once to "vzt-art-director" (Opus) or /vzt-ui to write it, after which visual work routes back here permanently.
+${visibleParallelism(VISIBLE_PARALLELISM.sonnet)}`,
   haiku: `Chair = Haiku 4.5. Recon chair — treat it as a dispatcher.
-- Handle only trivial mechanical tasks inline. Delegate standard builds to "vzt-builder" (Sonnet 5) and anything requiring judgment to "vzt-planner"/"vzt-heavy-builder".`,
+- Handle only trivial mechanical tasks inline. Delegate standard builds to "vzt-builder" (Sonnet 5) and anything requiring judgment to "vzt-planner"/"vzt-heavy-builder".
+${visibleParallelism(VISIBLE_PARALLELISM.haiku)}`,
   unknown: `Chair model unknown. Apply the standard ladder: recon/mechanical → Haiku agents, routine execution → Sonnet ("vzt-builder"), heavy implementation/review → Opus agents, planning/architecture → "vzt-architect" (Opus 5 @ max) or /vzt-design, and ONLY no-prior-art architecture or impossible bugs → Fable agents (/vzt-plan, /vzt-fix for in-context turns).`,
 };
 

@@ -216,6 +216,53 @@ test('the opus@max directive names the plan agent and explains why it is not Fab
   assert.ok(d.includes('/vzt-design'), 'directive does not offer the turn skill');
 });
 
+test('down-tier build directives use visible Orca panes when available', () => {
+  const r = {
+    tier: 'sonnet',
+    kind: 'build',
+    confidence: 'high',
+    effort: 'medium',
+    matched: [],
+    scores: {},
+    words: 10,
+  };
+  const d = directive(r, 'opus', { ORCA_TERMINAL_HANDLE: 'term_x' });
+  assert.ok(d.includes('pane run'), 'Orca down-tier build should name pane run');
+  assert.ok(d.includes('term_x'), 'Orca down-tier build should name the terminal handle');
+  assert.ok(d.includes('--detach'), 'Orca down-tier build should mention detach/background operation');
+  assert.ok(!d.includes('Delegate to the "'), 'Orca down-tier build should not default to Agent-tool delegation');
+});
+
+test('down-tier build directives keep Agent-tool wording without Orca', () => {
+  const r = {
+    tier: 'sonnet',
+    kind: 'build',
+    confidence: 'high',
+    effort: 'medium',
+    matched: [],
+    scores: {},
+    words: 10,
+  };
+  const d = directive(r, 'opus', {});
+  assert.ok(d.includes('Delegate to the "'), 'non-Orca down-tier build should keep Agent-tool wording');
+  assert.ok(!d.includes('pane run'), 'non-Orca down-tier build should not name pane run');
+});
+
+test('down-tier scout directives keep Agent-tool wording even with Orca', () => {
+  const r = {
+    tier: 'haiku',
+    kind: 'scout',
+    confidence: 'high',
+    effort: 'low',
+    matched: [],
+    scores: {},
+    words: 10,
+  };
+  const d = directive(r, 'opus', { ORCA_TERMINAL_HANDLE: 'term_x' });
+  assert.ok(d.includes('Delegate to the "'), 'scout work should stay on Agent-tool delegation');
+  assert.ok(!d.includes('pane run'), 'scout work should not switch to pane run');
+});
+
 test('docs mirror TIERS cost values exactly (sync check)', () => {
   const matrix = fs.readFileSync(path.join(REPO_ROOT, 'docs', 'ROUTING-MATRIX.md'), 'utf8');
   const skill = fs.readFileSync(path.join(REPO_ROOT, 'skills', 'vzt-route', 'SKILL.md'), 'utf8');
@@ -564,6 +611,17 @@ test('/vzt-ship ships, authorizes Workflow, and carries its own kill-switch', ()
   }
 });
 
+test('/vzt-ship defaults to Orca and gates liveness before dispatch', () => {
+  const skill = fs.readFileSync(path.join(REPO_ROOT, 'skills', 'vzt-ship', 'SKILL.md'), 'utf8');
+  assert.ok(skill.includes('Default substrate — Orca'), 'skills/vzt-ship/SKILL.md must name Orca as the default substrate');
+  assert.ok(skill.includes('orca terminal list --json'), 'skills/vzt-ship/SKILL.md must use Orca terminal liveness as the default probe');
+  assert.ok(skill.includes('vzt-orca-flow doctor'), 'skills/vzt-ship/SKILL.md must name the full pre-run gate');
+  assert.ok(!skill.includes('Default substrate — a live agent multiplexer (Herdr)'), 'Herdr must not remain the default substrate');
+  assert.ok(skill.indexOf('herdr worktree list --cwd . --json') > skill.indexOf('Non-default alternatives'),
+    'Herdr probe should appear only as a non-default alternative');
+  assert.ok(skill.includes('last resort and announce the fallback'), 'headless fallback must stay last-resort-and-announced');
+});
+
 test('vzt-diagnose ships and encodes the fan-out limits', () => {
   const skill = fs.readFileSync(path.join(REPO_ROOT, 'skills', 'vzt-diagnose', 'SKILL.md'), 'utf8');
   for (const phrase of ['CONFIRMED', 'REFUTED', 'INCONCLUSIVE', 'read-only', 'confirmed_idx']) {
@@ -595,6 +653,26 @@ test('every Opus surface carries the fable-mode gates (always-on discipline)', (
   assert.ok(opusDirective.includes('fable-mode gates'), 'opus [VZT-ROUTE] directive missing the gates line');
   const sonnetDirective = directive({ tier: 'sonnet', kind: 'build', confidence: 'high', effort: 'medium', matched: [], scores: {}, words: 10 }, 'sonnet');
   assert.ok(!sonnetDirective.includes('fable-mode gates'), 'sonnet directive should not carry the opus gates line');
+});
+
+// This doctrine once lived ONLY in the installed copy under ~/.claude and was
+// absent from this repo — so the next `install --global` would have overwritten
+// the hook and silently deleted it from every project at once. The chair would
+// then go back to in-process subagents, which can never appear in a pane, and the
+// user would see no agents working with nothing to explain why. Pin it at the
+// SOURCE, which is the only copy install can preserve.
+test('every chair profile tells the chair to dispatch waves as real panes', () => {
+  const sessionStart = fs.readFileSync(path.join(REPO_ROOT, 'hooks', 'vzt-session-start.mjs'), 'utf8');
+  assert.ok(sessionStart.includes('const VISIBLE_PARALLELISM = {'), 'session-start lost the visible parallelism text map');
+  for (const chair of ['fable', 'opus', 'sonnet', 'haiku']) {
+    const profile = new RegExp(`${chair}: \`[^\`\\\\]*(?:\\\\.[^\`\\\\]*)*`, 's').exec(sessionStart);
+    assert.ok(profile, `no ${chair} chair profile found`);
+    assert.ok(profile[0].includes(`visibleParallelism(VISIBLE_PARALLELISM.${chair})`),
+      `${chair} chair profile lost the VISIBLE PARALLELISM doctrine`);
+    // The doctrine is only actionable if it names the command that splits a pane.
+    assert.ok(new RegExp(`${chair}: '.*vzt-orca-flow pane run`, 's').test(sessionStart),
+      `${chair} visible parallelism text names no pane command`);
+  }
 });
 
 test('vzt-route skill references the worker-brief template', () => {

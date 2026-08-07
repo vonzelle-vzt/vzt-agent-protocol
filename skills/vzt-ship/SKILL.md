@@ -57,6 +57,22 @@ from `.claude/templates/spec.md`:
    A check invented after the diff exists tests what was built, not what was
    asked. **If you cannot name the command that proves a unit is done, the unit
    is not specified — decompose again.**
+
+   🔴 **For a MOVE or WIRE unit, `exit 0` proves nothing.** A unit once wrote a
+   462-line component, never imported it, left the original in place, and passed
+   typecheck + lint + the entire test suite — because dead code typechecks
+   perfectly. The build cannot tell *moved* from *copied*. So when the job is
+   extraction, rewiring, deletion or "retire X", the oracle must also assert on
+   **what must NO LONGER exist**:
+
+   ```bash
+   grep -c 'NewThing' path/to/consumer   # >= 2  (import + usage)
+   grep -c '<OldThing' path/to/consumer  # == 0  (the original is GONE)
+   wc -l < path/to/consumer              # materially smaller
+   ```
+
+   Name the absence, not just the compile. This is the same unwired-seam failure
+   the spec exists to prevent, arriving through the oracle instead of the code.
 7. Fill the `<!-- vzt-spec -->` JSON block. It is the machine truth.
 
 ## Phase 2 — GATE (a command, not an opinion)
@@ -66,7 +82,8 @@ vzt-agent ship-check .vzt/ship/<slug>/SPEC.md
 ```
 
 Exits non-zero on: overlapping FILES_IN_SCOPE, a manifest file no unit owns, a
-unit with no oracle, an unknown agentType, a `dependsOn` cycle or unknown id. **Do not proceed on a red gate.**
+unit with no oracle, an unknown agentType, a `dependsOn` cycle or unknown id, or a
+`connectionsInScope` id absent from `.vzt/connections.json`. **Do not proceed on a red gate.**
 This is Gate 4 pointed at the plan itself.
 
 **Bring the spec to the user for approval before spending anything.** The spec is
@@ -80,11 +97,12 @@ vzt-agent ship-start .vzt/ship/<slug>/SPEC.md
 
 ## Phase 3 — RUN
 
-**Default substrate — a live agent multiplexer (Herdr).** If `vzt-agent` is on
-`PATH` and a mux is live (`herdr worktree list --cwd . --json` succeeds), drive the
-run there by default — you do NOT need to be asked. Each pairwise-disjoint unit
-becomes a **real `claude` agent in its own worktree pane** you can watch and attach,
-including over SSH/mobile:
+**Default substrate — Orca, a live agent multiplexer.** If `vzt-agent` is on
+`PATH` and Orca is reachable (`orca terminal list --json` succeeds), drive the
+run there by default — you do NOT need to be asked. Run `vzt-orca-flow doctor`
+before dispatch as the full gate: it verifies the effective mux, Orca agent
+status hooks, and the live pane census. Each pairwise-disjoint unit becomes a
+**real `claude` agent in its own worktree pane** you can watch and attach:
 
 ```bash
 vzt-agent ship-watch .vzt/ship/<slug>/SPEC.md      # dispatch → idle-wait → independent oracle → integration gate
@@ -93,15 +111,14 @@ vzt-agent ship-watch .vzt/ship/<slug>/SPEC.md --max-concurrent 2  # cap units in
 
 The built-in default is **orca** — `--mux` beats `VZT_MUX`, which beats orca. Export
 `VZT_MUX=herdr` (or `vscode`) to change it, or pass `--mux herdr|vscode|orca` per run.
-`--mux vscode` opens each unit as a native VS Code integrated terminal and adds a Ship
-Run tree — per-unit status, the unit's worktree diff readable mid-run, and one-click
-oracle re-runs. Units run in dependency **waves**: a unit still waiting on an unmet
-`dependsOn` shows `waiting` (grey) in that tree — do not mistake it for `blocked`
-(amber), which means the unit is live and parked on a permission prompt; `waiting`
-means it hasn't been dispatched at all. The CLI still warns when it falls through to
-orca implicitly, because orca is where an unverified path remains: its
-skip-permissions and start-grace are written from Orca's documented CLI contract but
-not exercised end-to-end.
+Non-default alternatives have their own liveness probes: Herdr uses
+`herdr worktree list --cwd . --json`; VS Code uses the native integrated-terminal
+backend. `--mux vscode` opens each unit as a native VS Code integrated terminal and
+adds a Ship Run tree — per-unit status, the unit's worktree diff readable mid-run,
+and one-click oracle re-runs. Units run in dependency **waves**: a unit still waiting
+on an unmet `dependsOn` shows `waiting` (grey) in that tree — do not mistake it for
+`blocked` (amber), which means the unit is live and parked on a permission prompt;
+`waiting` means it hasn't been dispatched at all.
 
 **When a unit FAILs, read what it prints** — the oracle command, the oracle's own
 output, the worktree, and the agent's Claude Code transcript path. "agent transcript:
@@ -113,9 +130,10 @@ script is normal in-session work, not a ship run. See `~/.orca/vzt/README.md` fo
 backends and `.claude/docs/VSCODE.md` for the native VS Code backend.
 
 **Fallback substrate — the headless Workflow tool** (no mux live, or `vzt-agent`
-off `PATH`). Resumable + content-cached, but not watchable. **Say which driver you
-used.** Read the `<!-- vzt-spec -->` block and pass it in — Workflow scripts have
-**no filesystem access**, so the script cannot read the spec itself:
+off `PATH`). Resumable + content-cached, but not watchable; use it only as a
+last resort and announce the fallback. **Say which driver you used.** Read the
+`<!-- vzt-spec -->` block and pass it in — Workflow scripts have **no filesystem access**,
+so the script cannot read the spec itself:
 
 ```
 Workflow({ scriptPath: "<~/.claude|$CLAUDE_PROJECT_DIR/.claude>/workflows/vzt-ship.js",

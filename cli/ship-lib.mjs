@@ -8,10 +8,11 @@
  * the conversation; it cannot eat a file.
  *
  * This module is the part of that which must not be left to a model's judgment:
- *   parseSpec     — pull the machine-readable block out of SPEC.md
- *   validateSpec  — turn the collision boundary into a non-zero exit code
- *   planWaves     — turn `dependsOn` into the order units may actually run in
- *   reduceLedger  — reconstruct run state from an append-only log
+ *   parseSpec        — pull the machine-readable block out of SPEC.md
+ *   parseConnections — read the external side-effect registry
+ *   validateSpec     — turn the collision boundary into a non-zero exit code
+ *   planWaves        — turn `dependsOn` into the order units may actually run in
+ *   reduceLedger     — reconstruct run state from an append-only log
  *
  * Pure, zero-dep, no I/O. The CLI does the reading; this does the thinking.
  */
@@ -100,6 +101,78 @@ export function pathInScope(p, scope) {
   });
 }
 
+/**
+ * Fields that must never appear in `.vzt/connections.json`.
+ *
+ * The registry is a git-tracked file describing which external services a unit
+ * may touch. The obvious failure is someone pasting the actual token into it,
+ * at which point a file whose entire purpose is to bound blast radius becomes
+ * the largest blast radius in the repo. The registry names the ENV VAR that
+ * holds the credential (`credentialEnv`); it never holds the credential.
+ */
+const FORBIDDEN_CREDENTIAL_FIELDS = ['credential', 'secret', 'token', 'apiKey', 'api_key', 'password', 'key'];
+
+/**
+ * Parse and validate `.vzt/connections.json` — the external side-effect registry.
+ *
+ * FILES_IN_SCOPE bounds what a unit may write INSIDE the repo. Nothing bounded
+ * what it could reach OUTSIDE the repo, and the ship path makes that gap sharp:
+ * `worktree-bootstrap.sh` symlinks `.env*` from the primary checkout into every
+ * unit's worktree, so a parallel fan-out of agents starts life holding whatever
+ * production credentials the repo holds. The only thing standing between a
+ * builder and a live customer API was that nobody had told it to call one.
+ *
+ * So external access gets the same treatment as filesystem access: DECLARED in
+ * the spec, CHECKED by a command, default-deny. A unit that names no connection
+ * is repo-local work, which is nearly all work.
+ *
+ * @returns {{connections: object[]|null, errors: string[]}}
+ */
+export function parseConnections(text) {
+  let doc;
+  try {
+    doc = JSON.parse(text);
+  } catch (e) {
+    return { connections: null, errors: [`not valid JSON: ${e.message}`] };
+  }
+  if (!doc || typeof doc !== 'object' || Array.isArray(doc)) return { connections: null, errors: ['top level must be an object'] };
+  if (!Array.isArray(doc.connections)) return { connections: null, errors: ['missing "connections" array'] };
+
+  const errors = [];
+  const seen = new Set();
+  for (const c of doc.connections) {
+    if (!c || typeof c !== 'object' || Array.isArray(c)) {
+      errors.push('a connection entry is not an object');
+      continue;
+    }
+    const id = typeof c.id === 'string' ? c.id.trim() : '';
+    if (!id) errors.push('a connection entry has no id');
+    else if (seen.has(id)) errors.push(`duplicate connection id: ${id}`);
+    seen.add(id);
+
+    const label = id || '<unnamed>';
+    for (const f of ['service', 'mode', 'credentialEnv']) {
+      if (!c[f] || typeof c[f] !== 'string' || !c[f].trim()) errors.push(`connection ${label}: missing required field: ${f}`);
+    }
+    // `allow` is the operation boundary — the connection-level analogue of
+    // FILES_IN_SCOPE. An entry with no allow list grants nothing, which is a
+    // spec bug rather than a safe default: the unit will be blocked at runtime
+    // for a reason found nowhere in the spec.
+    if (!Array.isArray(c.allow) || c.allow.length === 0) errors.push(`connection ${label}: empty allow — a connection that permits no operation cannot be used`);
+    else if (c.allow.some((a) => typeof a !== 'string' || !a.trim())) errors.push(`connection ${label}: allow entries must be non-empty strings`);
+
+    for (const f of FORBIDDEN_CREDENTIAL_FIELDS) {
+      if (f in c) errors.push(`connection ${label}: field "${f}" is forbidden — this file is git-tracked; name the env var in credentialEnv instead of storing the value`);
+    }
+  }
+  return { connections: errors.length ? null : doc.connections, errors };
+}
+
+/** Read a unit's declared external connections as a clean array of ids. */
+export function connectionsOf(u) {
+  return Array.isArray(u && u.connectionsInScope) ? u.connectionsInScope.filter((c) => typeof c === 'string' && c.trim()) : [];
+}
+
 /** Every unit that owns files: the barrier (if present) plus the units. */
 function allUnits(spec) {
   return [spec.barrier, ...(Array.isArray(spec.units) ? spec.units : [])].filter(Boolean);
@@ -114,9 +187,14 @@ function allUnits(spec) {
  * a problem — silent failure is the worst kind, so it gets caught before any
  * agent is spawned, not after.
  */
-export function validateSpec(spec) {
+export function validateSpec(spec, opts = {}) {
   const errs = [];
   if (!spec || typeof spec !== 'object') return ['spec is not an object'];
+
+  // Known connection ids from `.vzt/connections.json`, or null when the repo has
+  // no registry. null is NOT "anything goes" — it is "nothing is declared", so a
+  // unit naming a connection fails. Default-deny is the whole point.
+  const known = Array.isArray(opts.connections) ? opts.connections : null;
 
   for (const f of ['slug', 'title', 'root', 'contract']) {
     if (!spec[f] || typeof spec[f] !== 'string' || !spec[f].trim()) errs.push(`missing required field: ${f}`);
@@ -162,6 +240,17 @@ export function validateSpec(spec) {
     for (const f of scope) {
       if (owner.has(f)) errs.push(`FILES_IN_SCOPE collision: "${f}" is claimed by both ${owner.get(f)} and ${id}`);
       else owner.set(f, id);
+    }
+
+    // CONNECTIONS_IN_SCOPE — the same rule one axis out. Omitted means repo-local
+    // work, which is the overwhelming majority of units and stays frictionless.
+    if ('connectionsInScope' in u && !Array.isArray(u.connectionsInScope)) {
+      errs.push(`unit ${id}: connectionsInScope must be an array of connection ids`);
+    } else {
+      for (const c of connectionsOf(u)) {
+        if (!known) errs.push(`unit ${id}: declares connection "${c}" but the repo has no .vzt/connections.json — an external side effect must be registered before a unit may claim it`);
+        else if (!known.includes(c)) errs.push(`unit ${id}: connection "${c}" is not in .vzt/connections.json (registered: ${known.join(', ') || 'none'})`);
+      }
     }
   }
 

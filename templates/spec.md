@@ -49,6 +49,17 @@ work, one wave later. Leave it off when units are genuinely independent; a spec
 with no edges is a single wave, i.e. the plain parallel fan-out.
 The barrier is an implicit dependency of every unit — never name it in dependsOn.
 
+Disjointness and `dependsOn` both bound what happens INSIDE the repo. For what a
+unit may reach OUTSIDE it, declare `"connectionsInScope": ["<id>"]` against
+`.vzt/connections.json`. Omit it for repo-local work — which is nearly all work.
+Omitted means NO outbound calls, not unrestricted ones: every worktree gets the
+primary checkout's `.env*` symlinked in, so every unit starts holding the repo's
+credentials whether it needs them or not. ship-check rejects an unregistered id —
+which is why the example below declares none: register the connection first
+(`templates/connections.json` → `.vzt/connections.json`), then claim it.
+
+    "connectionsInScope": ["stripe-test"],     // beside "filesInScope"
+
 Each unit gets ONE machine-checkable oracle, chosen NOW, before any code exists.
 A check invented after the diff exists tests what was built, not what was asked.
 

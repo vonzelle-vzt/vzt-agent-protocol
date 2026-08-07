@@ -167,20 +167,57 @@ test('vscodeBackend.waitIdle is TWO-PHASE — start signal before idle wait', ()
   const fn = src.slice(src.indexOf('function vscodeBackend'));
   const body = fn.slice(0, fn.indexOf('\nfunction '));
 
-  assert.ok(body.includes('startedFile'), 'waitIdle must consult a start sentinel');
-  assert.ok(body.includes('blockedFile'), 'blocked must count as started');
-  assert.ok(body.includes('VZT_START_GRACE_MS'), 'must honour the same start-grace env var as herdr');
+  // The two-phase wait now lives in the SHARED helper, so that is where the
+  // structure is guarded — which also makes this test cover the orca backend.
+  const waiter = src.slice(src.indexOf('function waitOnSentinels'));
+  const waitBody = waiter.slice(0, waiter.indexOf('\nfunction '));
+  assert.ok(waitBody.includes('startedFile'), 'the wait must consult a start sentinel');
+  assert.ok(waitBody.includes('blockedFile'), 'blocked must count as started');
+  assert.ok(waitBody.includes('VZT_START_GRACE_MS'), 'must honour the same start-grace env var as herdr');
 
   // Phase order matters: the start check has to precede the idle wait.
-  const startIdx = body.indexOf('startedFile');
-  const graceIdx = body.indexOf('VZT_START_GRACE_MS');
-  assert.ok(startIdx > 0 && graceIdx > 0, 'expected both markers present');
+  assert.ok(
+    waitBody.indexOf('startedFile') < waitBody.lastIndexOf('idleFile'),
+    'the start phase must precede the idle wait'
+  );
+  assert.ok(body.includes('waitOnSentinels'), 'vscodeBackend must use the shared two-phase wait');
 
   // dispatch must clear ALL sentinels — a stale `.started` would satisfy phase 1
   // instantly and reintroduce the empty-worktree grading.
-  for (const s of ['.started', '.blocked', '.idle', '.status']) {
-    assert.ok(body.includes(`${s}\``) || body.includes(`}${s}`), `dispatch must clear ${s} from a prior run`);
+  assert.ok(body.includes('sentinelReset('), 'dispatch must reset sentinels from a prior run');
+  const reset = src.slice(src.indexOf('function sentinelReset'));
+  const resetBody = reset.slice(0, reset.indexOf('\nfunction '));
+  for (const s of ['started', 'blocked', 'idle', 'status']) {
+    assert.ok(resetBody.includes(`'${s}'`), `sentinelReset must clear .${s} from a prior run`);
   }
+});
+
+test('orcaBackend runs on the SAME lifecycle sentinels, not on tui-idle', () => {
+  // The bug this exists for: on 2026-08-06 every ship unit opened a pane that sat
+  // at a bare `%` prompt because `herdr agent start` failed, and the run fell back
+  // to a headless driver with no panes at all. Orca dispatch is the fix — but only
+  // if it can tell a working agent from an idle one. `orca terminal wait --for
+  // tui-idle` cannot: it returns while the agent is still printing.
+  const src = fs.readFileSync(CLI, 'utf8');
+  const fn = src.slice(src.indexOf('function orcaBackend'));
+  const body = fn.slice(0, fn.indexOf('\nfunction '));
+
+  // The lifecycle env must ride inside --command: orca terminal create/split
+  // have no --env flag, so this is the only channel into the pane.
+  assert.ok(body.includes('SENTINEL_ENV'), 'the pane command must carry the lifecycle env');
+  assert.ok(body.includes('SENTINEL_UNIT_ENV'), 'the pane command must carry the unit key');
+  assert.ok(body.includes('VZT_VSCODE_DIR='), 'the pane must be told which state dir to write to');
+  assert.ok(body.includes('waitOnSentinels'), 'orcaBackend must use the shared two-phase wait');
+  assert.ok(body.includes('sentinelReset('), 'orca dispatch must reset sentinels from a prior run');
+
+  // tui-idle may survive ONLY as the degraded fallback for a handle with no
+  // recorded sentinels — never as the primary completion signal.
+  const idx = body.indexOf("'tui-idle'"); // the quoted argv entry, not the prose above it
+  assert.ok(idx > 0, 'the fallback wait should still exist');
+  assert.ok(
+    body.slice(Math.max(0, idx - 400), idx).includes('sentinelsByHandle.get(handle)'),
+    'tui-idle must be reachable only when no sentinels were recorded for the handle'
+  );
 });
 
 test('dispatch writes a PERSISTENT unit record the tree can read after a reload', () => {
