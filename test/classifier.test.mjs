@@ -611,6 +611,17 @@ test('/vzt-ship ships, authorizes Workflow, and carries its own kill-switch', ()
   }
 });
 
+test('/vzt-ship defaults to Orca and gates liveness before dispatch', () => {
+  const skill = fs.readFileSync(path.join(REPO_ROOT, 'skills', 'vzt-ship', 'SKILL.md'), 'utf8');
+  assert.ok(skill.includes('Default substrate — Orca'), 'skills/vzt-ship/SKILL.md must name Orca as the default substrate');
+  assert.ok(skill.includes('orca terminal list --json'), 'skills/vzt-ship/SKILL.md must use Orca terminal liveness as the default probe');
+  assert.ok(skill.includes('vzt-orca-flow doctor'), 'skills/vzt-ship/SKILL.md must name the full pre-run gate');
+  assert.ok(!skill.includes('Default substrate — a live agent multiplexer (Herdr)'), 'Herdr must not remain the default substrate');
+  assert.ok(skill.indexOf('herdr worktree list --cwd . --json') > skill.indexOf('Non-default alternatives'),
+    'Herdr probe should appear only as a non-default alternative');
+  assert.ok(skill.includes('last resort and announce the fallback'), 'headless fallback must stay last-resort-and-announced');
+});
+
 test('vzt-diagnose ships and encodes the fan-out limits', () => {
   const skill = fs.readFileSync(path.join(REPO_ROOT, 'skills', 'vzt-diagnose', 'SKILL.md'), 'utf8');
   for (const phrase of ['CONFIRMED', 'REFUTED', 'INCONCLUSIVE', 'read-only', 'confirmed_idx']) {
