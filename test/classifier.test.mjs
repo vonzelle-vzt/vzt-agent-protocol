@@ -652,14 +652,15 @@ test('every Opus surface carries the fable-mode gates (always-on discipline)', (
 // SOURCE, which is the only copy install can preserve.
 test('every chair profile tells the chair to dispatch waves as real panes', () => {
   const sessionStart = fs.readFileSync(path.join(REPO_ROOT, 'hooks', 'vzt-session-start.mjs'), 'utf8');
+  assert.ok(sessionStart.includes('const VISIBLE_PARALLELISM = {'), 'session-start lost the visible parallelism text map');
   for (const chair of ['fable', 'opus', 'sonnet', 'haiku']) {
     const profile = new RegExp(`${chair}: \`[^\`\\\\]*(?:\\\\.[^\`\\\\]*)*`, 's').exec(sessionStart);
     assert.ok(profile, `no ${chair} chair profile found`);
-    assert.ok(profile[0].includes('VISIBLE PARALLELISM'),
+    assert.ok(profile[0].includes(`visibleParallelism(VISIBLE_PARALLELISM.${chair})`),
       `${chair} chair profile lost the VISIBLE PARALLELISM doctrine`);
     // The doctrine is only actionable if it names the command that splits a pane.
-    assert.ok(profile[0].includes('vzt-orca-flow pane run'),
-      `${chair} chair profile names no pane command`);
+    assert.ok(new RegExp(`${chair}: '.*vzt-orca-flow pane run`, 's').test(sessionStart),
+      `${chair} visible parallelism text names no pane command`);
   }
 });
 
