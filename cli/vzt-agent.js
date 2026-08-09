@@ -125,6 +125,20 @@ function listFilesRecursive(root, base = root) {
   return files;
 }
 
+function compareVersions(a, b) {
+  const pa = String(a).split(/[.-]/).map((x) => (/^\d+$/.test(x) ? Number(x) : x));
+  const pb = String(b).split(/[.-]/).map((x) => (/^\d+$/.test(x) ? Number(x) : x));
+  const n = Math.max(pa.length, pb.length);
+  for (let i = 0; i < n; i++) {
+    const x = pa[i] ?? 0;
+    const y = pb[i] ?? 0;
+    if (x === y) continue;
+    if (typeof x === 'number' && typeof y === 'number') return x - y;
+    return String(x).localeCompare(String(y));
+  }
+  return 0;
+}
+
 /** Non-destructive merge of our hooks into settings.json. */
 function wireSettings(dotClaude, { portable = false } = {}) {
   const settingsPath = path.join(dotClaude, 'settings.json');
@@ -433,7 +447,7 @@ function doctor(args) {
       found = fs.readdirSync(installedDir).filter((d) => d.startsWith('vzt.vzt-mux-'))
         .map((d) => readJson(path.join(installedDir, d, 'package.json'), {}).version)
         .filter(Boolean)
-        .sort()
+        .sort(compareVersions)
         .pop() || null;
     } catch { /* no vscode extensions dir */ }
     checks.push([`vscode extension ${want} installed${found ? ` (found ${found})` : ' (not found — --mux vscode degrades to manual)'}`, found === want]);

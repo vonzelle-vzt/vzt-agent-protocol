@@ -10,10 +10,18 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const CLI = path.join(__dirname, '..', 'cli', 'vzt-agent.js');
 
 const STATE_DIR = fs.mkdtempSync(path.join(os.tmpdir(), 'vzt-router-state-'));
-const HOOK_ENV = { ...process.env, VZT_ROUTER_STATE_DIR: STATE_DIR };
+const TEST_HOME = fs.mkdtempSync(path.join(os.tmpdir(), 'vzt-agent-home-'));
+const VSCODE_VERSION = JSON.parse(
+  fs.readFileSync(path.join(__dirname, '..', 'vscode', 'package.json'), 'utf8')
+).version;
+const EXT_DIR = path.join(TEST_HOME, '.vscode', 'extensions', `vzt.vzt-mux-${VSCODE_VERSION}`);
+fs.mkdirSync(EXT_DIR, { recursive: true });
+fs.writeFileSync(path.join(EXT_DIR, 'package.json'), JSON.stringify({ version: VSCODE_VERSION }));
+const TEST_ENV = { ...process.env, HOME: TEST_HOME };
+const HOOK_ENV = { ...TEST_ENV, VZT_ROUTER_STATE_DIR: STATE_DIR };
 
 function run(args, opts = {}) {
-  return execFileSync('node', [CLI, ...args], { encoding: 'utf8', ...opts });
+  return execFileSync('node', [CLI, ...args], { encoding: 'utf8', env: TEST_ENV, ...opts });
 }
 
 test('install → doctor → uninstall round-trip in a temp target', () => {
@@ -273,4 +281,18 @@ test('doctor reports skill DRIFT when installed skill bytes differ', () => {
   } finally {
     fs.rmSync(target, { recursive: true, force: true });
   }
+});
+
+test('doctor chooses the newest installed VS Code extension semantically', () => {
+  const src = fs.readFileSync(CLI, 'utf8');
+  const start = src.indexOf('function compareVersions');
+  assert.ok(start > 0, 'compareVersions missing from CLI');
+  const rest = src.slice(start);
+  const end = rest.indexOf('\nfunction ', 1);
+  const fnSrc = end > 0 ? rest.slice(0, end) : rest;
+  const compareVersions = new Function(`${fnSrc}\nreturn compareVersions;`)();
+
+  const versions = ['0.6.1', '0.10.0', '0.9.9', '0.6.0'];
+  assert.deepEqual(versions.sort(compareVersions), ['0.6.0', '0.6.1', '0.9.9', '0.10.0']);
+  assert.ok(src.includes('.sort(compareVersions)'), 'doctor must use the semantic comparator for installed VS Code extensions');
 });

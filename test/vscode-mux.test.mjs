@@ -454,3 +454,35 @@ test('the extension does not send a unit command into an uninitialised shell', (
   // And a failed createTerminal must not silently lose the unit.
   assert.ok(/createTerminal failed/.test(ext), 'createTerminal must fail loudly, not silently');
 });
+
+test('the VS Code companion exposes always-active readiness commands and settings', () => {
+  const manifest = JSON.parse(fs.readFileSync(path.join(REPO_ROOT, 'vscode', 'package.json'), 'utf8'));
+  assert.equal(manifest.icon, 'media/ship-icon.png', 'Extensions view needs a top-level gallery icon');
+  assert.ok(fs.existsSync(path.join(REPO_ROOT, 'vscode', manifest.icon)), 'gallery icon must be packaged');
+  const commands = new Set((manifest.contributes.commands || []).map((c) => c.command));
+  for (const cmd of [
+    'vzt-mux.doctor',
+    'vzt-mux.installProject',
+    'vzt-mux.installGlobal',
+    'vzt-mux.openShipRun',
+    'vzt-mux.startShipWatchFromSpec',
+  ]) {
+    assert.ok(commands.has(cmd), `${cmd} must be contributed so it is usable from VS Code`);
+  }
+
+  const props = manifest.contributes.configuration.properties || {};
+  assert.equal(props['vztMux.autoDoctorOnStartup']?.default, true, 'startup readiness check should default on');
+  assert.equal(props['vztMux.showSetupPrompts']?.default, true, 'setup prompt should default on');
+  assert.ok(props['vztMux.baseDir'], 'mux base directory must be configurable for daily project use');
+  const containers = manifest.contributes.viewsContainers.activitybar || [];
+  for (const icon of containers.map((c) => c.icon)) {
+    assert.match(icon, /^media\/.+\.svg$/, 'activity bar containers need packaged SVG icons, not codicon labels');
+    assert.ok(fs.existsSync(path.join(REPO_ROOT, 'vscode', icon)), `${icon} must exist`);
+  }
+
+  const ext = fs.readFileSync(path.join(REPO_ROOT, 'vscode', 'src', 'extension.ts'), 'utf8');
+  assert.ok(ext.includes('maybePromptSetup'), 'activation must check whether the protocol is installed');
+  assert.ok(ext.includes('vzt-route-classifier.mjs'), 'readiness must verify the routing hook, not just any .claude folder');
+  assert.ok(ext.includes('vzt-session-start.mjs'), 'readiness must verify the chair-profile hook');
+  assert.ok(ext.includes('npx github:vonzelle-vzt/vzt-agent-protocol'), 'installed VSIX commands need a CLI fallback');
+});

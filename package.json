@@ -51,6 +51,8 @@
     "audit:root": "npm audit",
     "audit:vscode": "npm --prefix vscode audit",
     "compile:vscode": "npm --prefix vscode run compile",
+    "package:vscode": "npm --prefix vscode run package",
+    "install:vscode:local": "npm run package:vscode && code --uninstall-extension vzt.vzt-mux || true && VSIX=$(ls -t vscode/vzt-mux-*.vsix | head -n1) && code --install-extension \"$VSIX\" --force",
     "pack:dry": "npm pack --dry-run",
     "verify": "npm test && npm run audit:root && npm run audit:vscode && npm run compile:vscode && npm run pack:dry"
   },

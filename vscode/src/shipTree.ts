@@ -56,7 +56,13 @@ export interface UnitRecord {
 }
 
 export function baseDir(): string {
-  return process.env.VZT_VSCODE_DIR || path.join(os.homedir(), ".vzt", "vscode-mux");
+  const configured = vscode.workspace.getConfiguration("vztMux").get<string>("baseDir") || "";
+  return process.env.VZT_VSCODE_DIR || expandHome(configured) || path.join(os.homedir(), ".vzt", "vscode-mux");
+}
+
+function expandHome(p: string): string {
+  if (!p) return "";
+  return p === "~" ? os.homedir() : p.startsWith("~/") ? path.join(os.homedir(), p.slice(2)) : p;
 }
 
 /**

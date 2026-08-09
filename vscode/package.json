@@ -2,8 +2,9 @@
   "name": "vzt-mux",
   "displayName": "VZT Ship Mux",
   "description": "Runs VZT Agent Protocol ship units as native VS Code integrated terminals, with a live Ship Run tree — per-unit status, worktree diffs mid-run, and one-click oracle re-runs.",
-  "version": "0.6.0",
+  "version": "0.6.2",
   "publisher": "vzt",
+  "icon": "media/ship-icon.png",
   "engines": {
     "vscode": "^1.85.0"
   },
@@ -20,12 +21,12 @@
         {
           "id": "vztShip",
           "title": "VZT Ship",
-          "icon": "$(rocket)"
+          "icon": "media/ship.svg"
         },
         {
           "id": "herdrFleet",
           "title": "Herdr Fleet",
-          "icon": "$(server-process)"
+          "icon": "media/fleet.svg"
         }
       ]
     },
@@ -59,6 +60,31 @@
       {
         "command": "vzt-mux.watchShipRun",
         "title": "VZT: Watch Ship Run"
+      },
+      {
+        "command": "vzt-mux.doctor",
+        "title": "VZT: Doctor",
+        "icon": "$(pulse)"
+      },
+      {
+        "command": "vzt-mux.installProject",
+        "title": "VZT: Install Protocol In This Project",
+        "icon": "$(cloud-download)"
+      },
+      {
+        "command": "vzt-mux.installGlobal",
+        "title": "VZT: Install Protocol Globally",
+        "icon": "$(cloud-download)"
+      },
+      {
+        "command": "vzt-mux.openShipRun",
+        "title": "VZT: Open Ship Run",
+        "icon": "$(rocket)"
+      },
+      {
+        "command": "vzt-mux.startShipWatchFromSpec",
+        "title": "VZT: Start Ship Watch From Spec",
+        "icon": "$(play)"
       },
       {
         "command": "vzt-mux.refresh",
@@ -120,6 +146,21 @@
     "configuration": {
       "title": "VZT Ship Mux",
       "properties": {
+        "vztMux.baseDir": {
+          "type": "string",
+          "default": "",
+          "description": "Filesystem contract directory for native VS Code ship runs. Empty means ~/.vzt/vscode-mux. VZT_VSCODE_DIR still wins when set."
+        },
+        "vztMux.autoDoctorOnStartup": {
+          "type": "boolean",
+          "default": true,
+          "description": "Run a lightweight VZT readiness check when a VS Code workspace opens."
+        },
+        "vztMux.showSetupPrompts": {
+          "type": "boolean",
+          "default": true,
+          "description": "Show a one-time setup prompt when a workspace opens without project or global VZT protocol hooks."
+        },
         "vztMux.herdr.enabled": {
           "type": "boolean",
           "default": true,
@@ -135,9 +176,14 @@
     "menus": {
       "view/title": [
         {
-          "command": "vzt-mux.refresh",
+          "command": "vzt-mux.doctor",
           "when": "view == vztShipRun",
           "group": "navigation"
+        },
+        {
+          "command": "vzt-mux.refresh",
+          "when": "view == vztShipRun",
+          "group": "navigation@2"
         },
         {
           "command": "vzt-mux.herdr.refresh",
