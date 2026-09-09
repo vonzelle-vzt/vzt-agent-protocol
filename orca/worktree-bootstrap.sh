@@ -29,6 +29,52 @@ if [ -z "${PRIMARY:-}" ]; then
 fi
 WT_TOP=$(git rev-parse --show-toplevel 2>/dev/null || echo "$WT")
 
+# --- Cross-model adversarial review activation -------------------------------
+# WHY: the pipeline gate stores its state in <repo>/.pipeline/, which is gitignored
+# in every project that uses it. A fresh git worktree therefore starts with NO
+# state, and `pipeline.js check` treats missing state as "nothing to enforce" and
+# exits 0. The gate was silently inert in every worktree it was supposed to guard.
+# Initializing here is what makes the review gate hold "all the time" rather than
+# only in the one checkout where someone happened to run init by hand.
+#
+# STRICTLY OPT-IN: this does nothing unless the repo has committed a
+# `.pipeline-required` marker at its root. The marker is tracked on purpose — an
+# untracked or gitignored marker cannot survive `git worktree add`, which is the
+# exact failure this block exists to prevent. Repos without the marker behave
+# byte-for-byte as they did before, so this is safe in every repo the managed
+# orca.yaml hook was fanned into.
+#
+# Never fails the worktree create: every path here ends in success.
+activate_cross_model_pipeline() {
+  [ -f "$WT_TOP/.pipeline-required" ] || return 0
+
+  if ! command -v node >/dev/null 2>&1; then
+    echo "vzt-bootstrap: .pipeline-required present but node is not on PATH — gate NOT armed" >&2
+    return 0
+  fi
+
+  # Prefer the repo's own checkout so a worktree tests the code it contains;
+  # fall back to the globally installed shim.
+  pipeline=""
+  for cand in "$WT_TOP/scripts/pipeline.js" "$HOME/.local/bin/pipeline.js"; do
+    [ -f "$cand" ] && { pipeline="$cand"; break; }
+  done
+  if [ -z "$pipeline" ]; then
+    echo "vzt-bootstrap: .pipeline-required present but pipeline.js not found — gate NOT armed" >&2
+    return 0
+  fi
+
+  # `init` is idempotent and lock-protected; it never clobbers existing state.
+  if (cd "$WT_TOP" && node "$pipeline" init >/dev/null 2>&1); then
+    echo "vzt-bootstrap: cross-model review gate armed (pipeline state initialized)"
+  else
+    echo "vzt-bootstrap: pipeline.js init failed — gate NOT armed, commits will be blocked until you run: node $pipeline init" >&2
+  fi
+  return 0
+}
+
+activate_cross_model_pipeline
+
 if [ "$PRIMARY" = "$WT_TOP" ]; then
   echo "vzt-bootstrap: this IS the primary checkout — nothing to link" >&2
   exit 0
