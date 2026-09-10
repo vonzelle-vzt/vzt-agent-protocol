@@ -350,6 +350,37 @@ Template: [`templates/connections.json`](templates/connections.json). Same move 
 `SPEC.md` and `DESIGN.md`, one axis out: put the boundary on disk, and a command
 can enforce what doctrine only requested.
 
+## Mobile store releases — approval is not delivery
+
+The furthest-outside side effect the protocol touches is a store release, and it
+is the one place where **the absence of an error is not evidence of success**.
+Every failure shape here is silent: nothing throws, no test goes red, the console
+is green, and users simply never receive what you shipped.
+
+Shipping is **three** events, not one — the store approves, the storefront starts
+serving, and *users are told*. The third is usually a row in your own database
+that nothing updates on its own. Measured twice on real releases: the storefront
+moved to a new version while the release row still named the old one, so the
+in-app "update available" banner stayed dark for **every** install until a human
+ran the sync.
+
+The rest of the doctrine — an OTA reaching exactly one runtime (a version bump
+orphans everyone else, and publishing into an audience of zero looks identical to
+publishing well); store policy declarations that deadlock the API; a permission a
+dependency's manifest added for you; the rule that a capability gate and its
+permissions must move together because *both* ways of getting it wrong ship
+rather than fail a build; the Play service-account chain including the
+`iam.disableServiceAccountKeyCreation` org policy that is on by default — lives
+in [`skills/vzt-mobile-release/SKILL.md`](skills/vzt-mobile-release/SKILL.md).
+
+Two habits generalise beyond mobile and are worth stating here:
+
+- **Verify the artifact, not the build log** — and include a *control*, something
+  that should still be present, so a passing check cannot be a broken extraction.
+- **An oracle you have never seen fail is not an oracle.** Break the invariant on
+  purpose, watch the test go red, restore it. Cheap, and the only thing that
+  distinguishes a real check from a comfortable one.
+
 ## Guardrails
 
 - **Escalation ladder** — two failures at a rung escalates exactly one rung
@@ -364,6 +395,9 @@ can enforce what doctrine only requested.
   calls; prefer one sub-agent over several; once delegated, commit. Verify
   *external* artifacts (run the oracle, `git diff` the worker's output); never
   spawn a sub-agent to double-check your own inline work.
+- **Store releases are measured, not assumed** — approval, serving and
+  *announcing* are three separate events; ask the public storefront, never the
+  console. See [Mobile store releases](#mobile-store-releases--approval-is-not-delivery).
 - **No frontier execution** — plans always hand execution to cheaper tiers.
 - **Advisory, not authoritarian** — directives are context injections; Claude
   overrides them only with a stated reason.

@@ -44,3 +44,11 @@ mirror the corresponding docs/templates there in the same update pass.
 The sibling repo may already have unrelated dirty work. Patch only the files
 needed for sync, never overwrite local deletions or unrelated changes, and
 summarize both repos' final `git status --short`.
+
+## Mobile store releases
+
+Before any `eas build` / `eas update` / `eas submit`, an app version bump, a
+store rollout, or when an in-app update banner is wrong or silent, read
+`skills/vzt-mobile-release/SKILL.md`. Approval, the storefront serving a
+build, and users being told are three separate events — each can succeed
+while the next never happens, and none of them fail loudly.
