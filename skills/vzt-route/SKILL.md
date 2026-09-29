@@ -15,9 +15,9 @@ can do it well. This skill is the canonical decision procedure; the
 | Tier | Model | Owns | Fleet agents | Cost | Intelligence | Taste |
 |------|-------|------|--------------|------|--------------|-------|
 | 4 | **Fable 5** | Planning with **no prior art**: novel/greenfield architecture, from-scratch design, one-way-door sharding/replication/consensus/multi-tenancy. Impossible bugs, root-cause, security analysis | `vzt-planner`, `vzt-oracle` | 10× | 10 | 10 |
-| 3+ | **Opus 5** @ `max` | **Routine planning** — architecture, tech specs, roadmaps, migration plans, PRD breakdown, approach selection (the `opus@max` rung) | `vzt-architect` | 5× | 9 | 9 |
-| 3 | **Opus 5** | Large refactors, migrations, dense algorithms, performance/concurrency surgery, load-bearing review, **authoring visual taste** | `vzt-heavy-builder`, `vzt-reviewer`, `vzt-art-director` | 5× | 9 | 9 |
-| 2 | **Sonnet 5** | Standard implementation, features, bug fixes, tests, endpoints, components — the default. **Applying visual taste** | `vzt-builder`, `vzt-stylist` | 3× | 8 | 8 |
+| 3+ | **Opus 5.5** @ `max` | **Routine planning** — architecture, tech specs, roadmaps, migration plans, PRD breakdown, approach selection (the `opus@max` rung) | `vzt-architect` | 5× | 9 | 9 |
+| 3 | **Opus 5.5** | Large refactors, migrations, dense algorithms, performance/concurrency surgery, load-bearing review, **authoring visual taste** | `vzt-heavy-builder`, `vzt-reviewer`, `vzt-art-director` | 5× | 9 | 9 |
+| 2 | **Sonnet 5.5** | Standard implementation, features, bug fixes, tests, endpoints, components — the default. **Applying visual taste** | `vzt-builder`, `vzt-stylist` | 3× | 8 | 8 |
 | 1 | **Haiku 4.5** | Search/recon, summaries, renames, typos, formatting, version bumps, commit messages, file moves | `vzt-scout`, `vzt-mechanic` | 1× | 5 | 4 |
 
 ## Decision procedure
@@ -104,9 +104,10 @@ written down, applying it is execution rather than judgement — so it routes do
   place the classifier suggests `max`. (The older "never suggests max"
   invariant was retired when the rung was added.)
 - Start `xhigh` for coding/agentic work and `high` elsewhere, then sweep
-  **down** — Opus 5 is unusually strong at `low`/`medium`, so effort defaults
+  **down** — Opus 5.5 is unusually strong at `low`/`medium`, so effort defaults
   carried over from earlier models over-spend. `xhigh` stays right for the
   heavy-builder's dense work.
+- The per-tier effort defaults above were set for Opus 5 / Sonnet 5 and should be re-swept for 5.5.
 
 ## Delegation vs. turn-switch
 

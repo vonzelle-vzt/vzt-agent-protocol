@@ -10,9 +10,9 @@ burns the quota this protocol exists to protect.
 | Tier | Model | Alias | Owns | Fleet agents | Turn skill | Cost | Intelligence | Taste |
 |------|-------|-------|------|--------------|------------|------|--------------|-------|
 | 4 | Claude Fable 5 | `fable` | Planning with **no prior art**: novel/greenfield architecture, from-scratch system design, one-way-door sharding/replication/consensus/multi-tenancy calls. Impossible bugs, root-cause analysis, security analysis | `vzt-planner`, `vzt-oracle` | `/vzt-plan`, `/vzt-fix` | 10× | 10 | 10 |
-| 3+ | Claude Opus 5 @ `max` | `opus@max` | **Routine planning** — architecture, tech specs, roadmaps, migration plans, PRD breakdown, approach selection | `vzt-architect` | `/vzt-design` | 5× | 9 | 9 |
-| 3 | Claude Opus 5 | `opus` | Large refactors, migrations, dense algorithms, performance/concurrency surgery, load-bearing review. **Authoring visual taste** when no `DESIGN.md` exists | `vzt-heavy-builder`, `vzt-reviewer`, `vzt-art-director` | `/vzt-ui` | 5× | 9 | 9 |
-| 2 | Claude Sonnet 5 | `sonnet` | Standard implementation: features, bug fixes, tests, endpoints, components, integration — **the default tier**. **Applying visual taste** from an existing `DESIGN.md` | `vzt-builder`, `vzt-stylist` | `/vzt-build` | 3× | 8 | 8 |
+| 3+ | Claude Opus 5.5 @ `max` | `opus@max` | **Routine planning** — architecture, tech specs, roadmaps, migration plans, PRD breakdown, approach selection | `vzt-architect` | `/vzt-design` | 5× | 9 | 9 |
+| 3 | Claude Opus 5.5 | `opus` | Large refactors, migrations, dense algorithms, performance/concurrency surgery, load-bearing review. **Authoring visual taste** when no `DESIGN.md` exists | `vzt-heavy-builder`, `vzt-reviewer`, `vzt-art-director` | `/vzt-ui` | 5× | 9 | 9 |
+| 2 | Claude Sonnet 5.5 | `sonnet` | Standard implementation: features, bug fixes, tests, endpoints, components, integration — **the default tier**. **Applying visual taste** from an existing `DESIGN.md` | `vzt-builder`, `vzt-stylist` | `/vzt-build` | 3× | 8 | 8 |
 | 1 | Claude Haiku 4.5 | `haiku` | Search/recon, summaries, renames, typo fixes, formatting, lint, version bumps, commit messages, file moves | `vzt-scout`, `vzt-mechanic` | `/vzt-quick` | 1× | 5 | 4 |
 
 ## Decision procedure
@@ -50,7 +50,7 @@ MODEL.**
 
 - **Trigger**: the two-factor gate above — scope language **and** a build
   verb, both present in the same prompt.
-- **Action**: route to **Opus 5**, task kind `HORIZON`, and point at
+- **Action**: route to **Opus 5.5**, task kind `HORIZON`, and point at
   `/vzt-ship` — spec-first: write `.vzt/ship/<slug>/SPEC.md` (contract,
   out-of-scope, cross-unit interfaces as a barrier unit, file manifest, units
   with pairwise-disjoint `FILES_IN_SCOPE` and one oracle each) before any
@@ -126,9 +126,10 @@ down a tier.
   only place the classifier suggests `max`. (The older "never suggests max"
   invariant was retired when the rung was added.)
 - Start `xhigh` for coding/agentic work and `high` elsewhere, then sweep
-  **down**: Opus 5 is unusually strong at `low`/`medium`, so effort defaults
+  **down**: Opus 5.5 is unusually strong at `low`/`medium`, so effort defaults
   carried over from earlier models over-spend. `xhigh` remains the right call
   for the heavy-builder's dense work.
+- The per-tier effort defaults above were set for Opus 5 / Sonnet 5 and should be re-swept for 5.5.
 
 **`/vzt-fable-mode` is a separate dial from tier/effort routing above**: it
 carries no `model:` pin and runs on whichever model the router already picked,

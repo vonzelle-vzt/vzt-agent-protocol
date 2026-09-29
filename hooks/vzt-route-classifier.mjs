@@ -4,7 +4,7 @@
  *
  * Runs on every prompt. Scores the prompt against the routing matrix and
  * injects an advisory routing directive as additional context, so the session
- * automatically uses the right model tier (Fable 5 / Opus 5 / Sonnet 5 /
+ * automatically uses the right model tier (Fable 5 / Opus 5.5 / Sonnet 5.5 /
  * Haiku 4.5) without the user ever touching /model.
  *
  * Deterministic, zero-API-cost, <50ms. Chair-aware: reads the session model
@@ -493,7 +493,7 @@ export function directive(result, chair, env = process.env) {
   } else if (result.kind === 'ui' && result.designDoc) {
     lines.push(
       `  action: VISUAL task with a TASTE CACHE on disk (${result.designDoc}). Read that file FIRST — before you open a stylesheet, before you look at the component. It is the spec, not a suggestion.`,
-      `  how: delegate to the "${t.agents.ui}" subagent (Sonnet 5), or invoke /vzt-ui if the change needs full conversation context (a screenshot, "more like X", a brand conversation).`,
+      `  how: delegate to the "${t.agents.ui}" subagent (Sonnet 5.5), or invoke /vzt-ui if the change needs full conversation context (a screenshot, "more like X", a brand conversation).`,
       '  rule: every value you write traces to a token or a rule in that file — spacing step, color, radius, type step, motion duration. If what you need is not in there, you have found a GAP in the cache: name the gap and stop. Do not invent a value, and do not "improve" one that is already decided — a value invented here is a value the next prompt will invent differently.',
       '  scope: a problem visible only under a scoped variant (a dark theme, an admin skin) is fixed INSIDE that variant. Editing a base token to fix a scoped surface silently restyles every other surface — the most expensive mistake available in this lane.',
       '  why NOT Opus: the taste for this repo has already been bought and written down. Re-buying it on a premium tier once per prompt is exactly how a UI drifts — three Opus turns, three slightly different greys, none of them wrong on its own. A DESIGN.md is to visual work what a SPEC on disk is to long-horizon work: it moves what would otherwise live in the model onto the filesystem, where a cheaper tier can apply it faithfully. Escalate the PROCESS, not the MODEL — same doctrine, one axis over.',
@@ -510,7 +510,7 @@ export function directive(result, chair, env = process.env) {
     );
   } else if (result.kind === 'ui') {
     lines.push(
-      `  action: VISUAL surface change — make exactly the change asked for. Delegate to the "${t.agents.ui}" subagent (Sonnet 5), or handle inline if this chair is Sonnet.`,
+      `  action: VISUAL surface change — make exactly the change asked for. Delegate to the "${t.agents.ui}" subagent (Sonnet 5.5), or handle inline if this chair is Sonnet.`,
       '  constraint: this project has NO DESIGN.md, so nothing on disk constrains the value you pick. Match what the neighbouring components already do, and say in your report which one you matched — an unexplained value is a decision nobody can reproduce.',
       '  offer it once, do not run it uninvited: if this is the second or third visual request in a row, say so and offer /vzt-ui — ONE Opus turn that writes the taste cache, after which every request like this routes to Sonnet permanently. Paying for taste one prompt at a time is the expensive way to buy it.'
     );
@@ -519,7 +519,7 @@ export function directive(result, chair, env = process.env) {
       '  action: PLAN task on the `opus@max` rung — design first, do NOT start implementing. Produce a plan with a step-routing table whose execution steps hand DOWN to "vzt-builder".',
       `  how: inline at effort max if this chair is Opus or Fable; otherwise delegate to the "${t.agents.plan}" subagent, or invoke /vzt-design when the plan needs full conversation context.`,
       result.demotedFrom === 'fable'
-        ? '  why NOT Fable: this is planning with prior art to pattern-match against. Opus 5 covers that band at max effort for half the cost. Fable is reserved for planning with no prior art — a novel/greenfield/from-scratch architecture, distributed-systems or multi-tenancy decisions — and for impossible bugs (/vzt-fix). If this task is genuinely novel and you can say why, escalate one rung and say so.'
+        ? '  why NOT Fable: this is planning with prior art to pattern-match against. Opus 5.5 covers that band at max effort for half the cost. Fable is reserved for planning with no prior art — a novel/greenfield/from-scratch architecture, distributed-systems or multi-tenancy decisions — and for impossible bugs (/vzt-fix). If this task is genuinely novel and you can say why, escalate one rung and say so.'
         : '  escalation: if the design turns out to have no prior art to reason from, escalate one rung to Fable ("vzt-planner" / /vzt-plan) and state the reason.'
     );
   } else if (chair !== 'unknown' && target === RANK[chair] && result.tier !== 'haiku') {
@@ -532,7 +532,7 @@ export function directive(result, chair, env = process.env) {
       `  alternative: if the task needs full conversation context, invoke the matching turn skill instead (/vzt-plan for planning, /vzt-fix for hard debugging) — skill model overrides switch THIS turn to the target tier.`
     );
     if (result.tier === 'fable') {
-      lines.push('  then: hand the approved plan to "vzt-builder" (Sonnet 5) for execution — never execute a routine plan on the frontier tier.');
+      lines.push('  then: hand the approved plan to "vzt-builder" (Sonnet 5.5) for execution — never execute a routine plan on the frontier tier.');
     }
   } else {
     // Down-tier work from an expensive chair: push it down to save quota.
@@ -557,7 +557,7 @@ export function directive(result, chair, env = process.env) {
   lines.push(
     '  escalation ladder: if the chosen tier fails twice on the same problem, escalate exactly one rung (haiku→sonnet→opus→opus@max→fable) and say so.',
     '  budget rules: mechanical/recon work never rises above Haiku; Sonnet burns its own separate weekly bucket — prefer it for all routine execution; keep Fable turns ≤10% of the session (opus@max absorbs the planning that used to go there).',
-    '  effort note: start xhigh for coding/agentic work and high elsewhere, then sweep DOWN — Opus 5 is unusually strong at low/medium, so prior-model effort defaults over-spend. max is the opus@max planning rung, not a routine setting.'
+    '  effort note: start xhigh for coding/agentic work and high elsewhere, then sweep DOWN — Opus 5.5 is unusually strong at low/medium, so prior-model effort defaults over-spend. max is the opus@max planning rung, not a routine setting.'
   );
   return lines.join('\n');
 }
@@ -810,6 +810,19 @@ export function activeShipBlock(cwd) {
   }
 }
 
+// Harness-injected background notifications arrive as UserPromptSubmit but are
+// not user input; routing them pollutes stats and injects bogus advice.
+export function stripPasted(prompt) {
+  return String(prompt || '').replace(/<pasted_content\b[^>]*>[\s\S]*?<\/pasted_content>/g, ' ').trim();
+}
+
+export function shouldSkipPrompt(prompt) {
+  const p = String(prompt || '').trim();
+  if (p.startsWith('[SYSTEM NOTIFICATION') || p.includes('<task-notification>')) return true;
+  const typed = stripPasted(p);
+  return !typed || typed.startsWith('~') || typed.startsWith('/') || typed.startsWith('#') || typed.split(/\s+/).length < 4;
+}
+
 function logDecision(entry) {
   try {
     fs.mkdirSync(STATE_DIR, { recursive: true });
@@ -829,10 +842,11 @@ if (import.meta.url === `file://${process.argv[1]}`) {
   }
   let prompt = (payload.prompt || '').trim();
 
-  // Bypass: "~" prefix, slash commands, memory shorthand, tiny conversational turns.
-  if (!prompt || prompt.startsWith('~') || prompt.startsWith('/') || prompt.startsWith('#') || prompt.split(/\s+/).length < 4) {
-    process.exit(0);
-  }
+  // Bypass: notifications, "~" prefix, slash commands, memory shorthand, tiny
+  // conversational turns, and prompts that are only pasted content.
+  if (shouldSkipPrompt(prompt)) process.exit(0);
+  // Classify on what the user typed, not on what they pasted.
+  prompt = stripPasted(prompt);
 
   // Manual tier override: "@fable ..." / "@opus ..." / "@sonnet ..." / "@haiku ..."
   let override = null;

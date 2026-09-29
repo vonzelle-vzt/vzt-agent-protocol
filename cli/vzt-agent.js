@@ -41,6 +41,8 @@ const DOCS_DIR = path.join(PKG_ROOT, 'docs');
 const HOOKS = [
   { event: 'UserPromptSubmit', basename: 'vzt-route-classifier.mjs', timeout: 10 },
   { event: 'SessionStart', basename: 'vzt-session-start.mjs', timeout: 10 },
+  // Records which subagent was actually dispatched, for `stats` routing compliance.
+  { event: 'SubagentStart', basename: 'vzt-dispatch-log.mjs', timeout: 10 },
   // Agent lifecycle sentinels for the native VS Code mux (--mux vscode). One
   // script, three events, distinguished by the action argument. All three no-op
   // unless VZT_VSCODE_MUX=1 is set in the env — i.e. only inside a unit terminal
@@ -485,6 +487,8 @@ function stats() {
   const lines = fs.readFileSync(file, 'utf8').trim().split('\n').filter(Boolean);
   const byTier = {};
   const ships = [];
+  const dispatches = [];
+  const routeRows = [];
   let routed = 0;
   let deduped = 0;
 
@@ -504,6 +508,7 @@ function stats() {
     let d;
     try { d = JSON.parse(line); } catch { continue; }
     if (d.kind === 'ship') { ships.push(d); continue; }
+    if (d.kind === 'dispatch') { dispatches.push(d); continue; }
     if (!d.tier) continue;
     const key = `${d.ts || ''}|${d.session || ''}`;
     if (d.ts && seen.has(key)) deduped++;
@@ -512,6 +517,7 @@ function stats() {
   let uiTotal = 0;
   let uiHits = 0;
   for (const d of seen.values()) {
+    routeRows.push(d);
     byTier[d.tier] = (byTier[d.tier] || 0) + 1;
     routed++;
     if (d.kind === 'ui') {
@@ -540,6 +546,41 @@ function stats() {
         : `❌ over (${fablePct.toFixed(1)}%) — tighten routing: routine planning belongs on opus@max (/vzt-design), execution on /vzt-build`
     }`
   );
+
+  // Dispatch compliance: did the chair dispatch the tier the router advised?
+  // Tier by substring of the agent's model; compared against the most recent
+  // route row for the same session that precedes the dispatch.
+  const tierOf = (m) => ['fable', 'opus', 'sonnet', 'haiku'].find((t) => String(m || '').toLowerCase().includes(t)) || 'unknown';
+  console.log('\nDispatch compliance:');
+  if (!dispatches.length) {
+    console.log('  no dispatch rows logged yet (SubagentStart hook: vzt-dispatch-log.mjs).');
+  } else {
+    const byDispatchTier = {};
+    for (const d of dispatches) byDispatchTier[tierOf(d.model)] = (byDispatchTier[tierOf(d.model)] || 0) + 1;
+    console.log(`  dispatches: ${dispatches.length} — ` + Object.entries(byDispatchTier).map(([t, n]) => `${t} ${n}`).join(', '));
+    const routesBySession = new Map();
+    for (const r of routeRows) {
+      if (!r.session) continue;
+      if (!routesBySession.has(r.session)) routesBySession.set(r.session, []);
+      routesBySession.get(r.session).push(r);
+    }
+    let compared = 0;
+    let matched = 0;
+    for (const d of dispatches) {
+      const rows = routesBySession.get(d.session);
+      if (!rows) continue;
+      let prev = null;
+      for (const r of rows) if ((r.ts || '') <= (d.ts || '') && (!prev || (r.ts || '') >= (prev.ts || ''))) prev = r;
+      if (!prev) continue;
+      compared++;
+      if (tierOf(d.model) === prev.tier) matched++;
+    }
+    console.log(
+      compared
+        ? `  matched advised tier: ${matched}/${compared} (${Math.round((matched / compared) * 100)}%) across sessions with both route and dispatch rows`
+        : '  no session has both route rows and dispatch rows yet.'
+    );
+  }
 
   // The ui lane ships with the test that can delete it, same as /vzt-ship below.
   // Its entire economic claim is that DESIGN.md moves taste onto disk so visual

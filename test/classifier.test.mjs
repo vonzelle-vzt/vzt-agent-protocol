@@ -774,3 +774,27 @@ test('the ui directives name the right agent and explain why not the other tier'
   assert.ok(miss.includes('why NOT Sonnet') && miss.includes('why NOT Fable'), 'must justify the tier both ways');
   assert.ok(miss.includes('fable-mode gates'), 'an Opus surface must carry the gates');
 });
+
+// ——— prompt skipping: notifications and pasted content ———
+import { shouldSkipPrompt, stripPasted } from '../hooks/vzt-route-classifier.mjs';
+
+test('shouldSkipPrompt: harness notification is skipped', () => {
+  assert.equal(shouldSkipPrompt('[SYSTEM NOTIFICATION - NOT USER INPUT]\nThis is an automated background-task event with many words'), true);
+});
+test('shouldSkipPrompt: task-notification block is skipped', () => {
+  assert.equal(shouldSkipPrompt('Some preamble here for the model\n<task-notification>done</task-notification>'), true);
+});
+test('shouldSkipPrompt: pasted content with no typed text is skipped', () => {
+  assert.equal(shouldSkipPrompt('<pasted_content id="1">' + 'lorem ipsum '.repeat(50) + '</pasted_content>'), true);
+});
+test('shouldSkipPrompt: pasted content plus typed text is classified on typed text only', () => {
+  const p = '<pasted_content id="1">' + 'stack trace race condition deadlock '.repeat(20) + '</pasted_content>\nplease refactor the auth module into services';
+  assert.equal(shouldSkipPrompt(p), false);
+  assert.equal(stripPasted(p), 'please refactor the auth module into services');
+});
+test('shouldSkipPrompt: normal and existing bypass rules', () => {
+  assert.equal(shouldSkipPrompt('Add a settings page with a form to update the user profile'), false);
+  for (const p of ['', '~ hello there my friend', '/vzt-route something long enough', '# remember this thing please', 'too short']) {
+    assert.equal(shouldSkipPrompt(p), true, p);
+  }
+});
