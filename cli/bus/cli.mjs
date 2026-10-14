@@ -11,6 +11,7 @@ import { execFileSync } from 'node:child_process';
 import { parseArgs } from 'node:util';
 import { pathToFileURL } from 'node:url';
 import { AGENT_ARGV, BOOTSTRAP_PROMPT } from '../agent-argv.mjs';
+import { trustClaudeWorkspace } from '../claude-trust.mjs';
 
 export const BUS_HOOK_MARKER = 'vzt-bus-hook-form=1';
 export const BUS_HOOK_EVENTS = ['SessionStart', 'UserPromptSubmit', 'Stop', 'PermissionRequest'];
@@ -255,7 +256,7 @@ async function runHook(event, io) {
 export async function main(argv, io = { out: process.stdout, err: process.stderr }) {
   const [verb, ...rest] = argv;
   if (!verb || verb === 'help' || verb === '--help') {
-    io.err.write('usage: vzt-agent bus <register|argv|bootstrap-prompt|send|check|ack|reply|ask|complete|gate-resolve|agents|inbox|lease|wake-plan|wake-sent|hook|doctor> [--json]\n');
+    io.err.write('usage: vzt-agent bus <register|argv|bootstrap-prompt|trust-claude|send|check|ack|reply|ask|complete|gate-resolve|agents|inbox|lease|wake-plan|wake-sent|hook|doctor> [--json]\n');
     return verb ? 0 : 2;
   }
   if (verb === 'hook') return runHook(rest[0], io);
@@ -284,6 +285,17 @@ export async function main(argv, io = { out: process.stdout, err: process.stderr
       const argvOut = [...AGENT_ARGV[kind]];
       emit(io.out, json ? argvOut : argvOut.map(shellQuote).join(' '), json);
       return 0;
+    }
+    if (verb === 'trust-claude') {
+      // Pre-accept Claude's folder-trust dialog (see cli/claude-trust.mjs) for
+      // the folder claude will start in AND its git workspace. The CALLER owns
+      // the decision: the VS Code pair only calls this when VS Code itself
+      // trusts the workspace.
+      const dirs = [...new Set([fs.realpathSync(path.resolve(values.workspace || process.cwd())), resolveWorkspace(values.workspace)])];
+      const results = dirs.map((d) => ({ dir: d, trusted: trustClaudeWorkspace(d, { log: (m) => io.err.write(m + '\n') }) }));
+      const ok = results.every((r) => r.trusted);
+      emit(io.out, json ? { trusted: ok, dirs: results } : results.map((r) => `${r.trusted ? 'trusted' : 'NOT trusted'} ${r.dir}`).join('\n'), json);
+      return ok ? 0 : 1;
     }
     if (verb === 'bootstrap-prompt') {
       const prompt = BOOTSTRAP_PROMPT(req(values, 'alias'), req(values, 'peer'));

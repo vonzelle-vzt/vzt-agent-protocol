@@ -128,6 +128,16 @@ export function registerAgentBus(
         return;
       }
 
+      // Claude Code 2.1.299 stops on its folder-trust dialog even under
+      // the house permission-bypass flag (cursor on "No, exit"), so a paired
+      // claude would never start. Pre-accept it — but ONLY for a folder VS Code
+      // itself already trusts: the trust decision stays the user's.
+      if (!vscode.workspace.isTrusted) {
+        vscode.window.showErrorMessage("VZT: cannot pair — trust this workspace in VS Code first (Workspaces: Manage Workspace Trust). Claude runs here with permissions bypassed.");
+        return;
+      }
+      await bus.run(["trust-claude", "--workspace", cwd], cwd);
+
       const ids = {} as Record<Kind, string>;
       for (const kind of ["claude", "codex"] as Kind[]) {
         const r = await bus.run<{ agent_id: string }>(

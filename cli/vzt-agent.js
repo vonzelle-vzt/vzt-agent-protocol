@@ -18,6 +18,7 @@ import path from 'node:path';
 import os from 'node:os';
 import { execFileSync, spawn } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
+import { trustClaudeWorkspace } from './claude-trust.mjs';
 import { parseSpec, parseConnections, connectionsOf, validateSpec, planWaves, depsOf, pathInScope, reduceLedger, nextAction, unitLine } from './ship-lib.mjs';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -1282,44 +1283,6 @@ function paneHandle(res) {
   }
   for (const v of Object.values(res)) if (v && typeof v === 'object' && v.handle) return v.handle;
   return null;
-}
-
-/**
- * Pre-accept Claude Code's folder-trust dialog for a fresh unit worktree.
- *
- * Observed 2026-10-14 on Claude Code 2.1.299: a ship unit's pane opened, claude
- * started, and sat forever on "Is this a project you trust?" with the cursor on
- * "No, exit" — --dangerously-skip-permissions does NOT skip it, and trust on a
- * PARENT folder is not inherited (tested). Orca's built-in launcher writes
- * exactly this one-key entry for worktrees it creates with --agent claude; our
- * two-step dispatch bypasses that launcher, so we write the same entry.
- * Read back to verify, because a running claude rewrites this file and can
- * clobber the edit. Never throws: a failure is logged, and the 90 s start-signal
- * check still catches a pane stuck on the dialog.
- */
-function trustClaudeWorkspace(dir) {
-  const configDir = process.env.CLAUDE_CONFIG_DIR || os.homedir();
-  const file = path.join(configDir, '.claude.json');
-  let key;
-  try { key = fs.realpathSync(dir); } catch { key = dir; }
-  for (let attempt = 1; attempt <= 3; attempt++) {
-    try {
-      if (!fs.existsSync(file)) return false;
-      const cfg = JSON.parse(fs.readFileSync(file, 'utf8'));
-      if (cfg.projects?.[key]?.hasTrustDialogAccepted === true) return true;
-      cfg.projects = cfg.projects || {};
-      cfg.projects[key] = { ...(cfg.projects[key] || {}), hasTrustDialogAccepted: true };
-      const tmp = `${file}.vzt-${process.pid}.tmp`;
-      fs.writeFileSync(tmp, JSON.stringify(cfg, null, 2), { mode: fs.statSync(file).mode & 0o777 });
-      fs.renameSync(tmp, file);
-      const back = JSON.parse(fs.readFileSync(file, 'utf8'));
-      if (back.projects?.[key]?.hasTrustDialogAccepted === true) return true;
-    } catch (e) {
-      console.error(`  trust: attempt ${attempt} for ${key} failed — ${e.message}`);
-    }
-  }
-  console.error(`  trust: could not pre-accept Claude's folder-trust dialog for ${key}; the pane may stop on it`);
-  return false;
 }
 
 function orcaBackend(args) {

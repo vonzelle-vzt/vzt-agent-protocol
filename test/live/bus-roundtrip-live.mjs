@@ -212,7 +212,10 @@ async function main() {
     reg[alias] = (await bus(['register', '--alias', alias, '--kind', kind, '--window', window, '--workspace', REPO])).agent_id;
   }
 
-  // 3. Launch both agents exactly as Pair does: house argv + one bootstrap prompt.
+  // 3. Launch both agents exactly as Pair does: pre-accept Claude's folder-trust
+  //    dialog (Pair does this once VS Code trusts the workspace; this repo is
+  //    the operator's own), then house argv + one bootstrap prompt.
+  await bus(['trust-claude', '--workspace', REPO]);
   const byId = new Map();
   for (const [alias, peer] of [['claude', 'codex'], ['codex', 'claude']]) {
     const argv = await bus(['argv', '--kind', alias]);
