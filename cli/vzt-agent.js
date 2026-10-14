@@ -829,6 +829,37 @@ function connectionsPathFor(spec) {
  * entry point that skipped the connections check would make the boundary
  * advisory again for whichever command forgot it.
  */
+/**
+ * Program-order gate. `ship-check` validates ONE spec; it cannot see that
+ * several specs in one repo edit the same files and must never run at once.
+ * When a sibling `.vzt/ship/<program>/PROGRAM.json` lists this spec, its
+ * `program.py gate <slug>` decides whether the spec may be dispatched now
+ * (vzt-orca-flow's editor-intelligence program, 2026-10-14). Returns an error
+ * string, or null to proceed. VZT_PROGRAM_GATE=0 overrides, loudly.
+ */
+function programGate(specPath, spec) {
+  const shipDir = path.dirname(path.dirname(path.resolve(specPath)));
+  let dirs = [];
+  try { dirs = fs.readdirSync(shipDir, { withFileTypes: true }).filter((d) => d.isDirectory()).map((d) => d.name); } catch { return null; }
+  for (const d of dirs) {
+    const progFile = path.join(shipDir, d, 'PROGRAM.json');
+    if (!fs.existsSync(progFile)) continue;
+    let prog;
+    try { prog = JSON.parse(fs.readFileSync(progFile, 'utf8')); } catch { return `${progFile} is not valid JSON`; }
+    const listed = Object.values(prog.lanes || {}).some((l) => (l.order || []).includes(spec.slug));
+    if (!listed) continue;
+    if (process.env.VZT_PROGRAM_GATE === '0') {
+      console.error(`⚠️  VZT_PROGRAM_GATE=0: dispatching ${spec.slug} WITHOUT the ${d} program-order gate.`);
+      return null;
+    }
+    const script = path.join(shipDir, d, 'program.py');
+    if (!fs.existsSync(script)) return `${spec.slug} is listed in ${progFile} but ${script} is missing`;
+    const r = spawnSync('python3', ['-B', script, 'gate', spec.slug], { encoding: 'utf8', timeout: 120000 });
+    if (r.status !== 0) return `${(r.stdout || '').trim() || `program gate exited ${r.status}`} (${d}/program.py)`;
+  }
+  return null;
+}
+
 function gateSpec(spec) {
   const p = connectionsPathFor(spec);
   if (!p || !fs.existsSync(p)) return validateSpec(spec, { connections: null });
@@ -869,6 +900,11 @@ function shipStart(args) {
   const errs = gateSpec(spec);
   if (errs.length) {
     console.error('❌ refusing to start: SPEC does not pass ship-check.');
+    process.exit(1);
+  }
+  const orderErr = programGate(specPath, spec);
+  if (orderErr) {
+    console.error(`❌ refusing to dispatch: ${orderErr}`);
     process.exit(1);
   }
   const stamp = new Date().toISOString().replace(/[-:]/g, '').replace(/\..+/, '');
@@ -2001,6 +2037,11 @@ function shipDispatch(args) {
     console.error('❌ refusing to dispatch: SPEC does not pass ship-check. Run `vzt-agent ship-check` first.');
     process.exit(1);
   }
+  const orderErr = programGate(specPath, spec);
+  if (orderErr) {
+    console.error(`❌ refusing to dispatch: ${orderErr}`);
+    process.exit(1);
+  }
   const be = getBackend(args);
   const phases = [];
   if (spec.barrier) phases.push({ label: 'PHASE 1 — barrier (run FIRST, alone; its oracle grades every unit)', units: [spec.barrier] });
@@ -2460,6 +2501,11 @@ function shipWatch(args) {
   const errs = gateSpec(spec);
   if (errs.length) {
     console.error('❌ refusing to watch: SPEC does not pass ship-check. Run `vzt-agent ship-check` first.');
+    process.exit(1);
+  }
+  const orderErr = programGate(specPath, spec);
+  if (orderErr) {
+    console.error(`❌ refusing to dispatch: ${orderErr}`);
     process.exit(1);
   }
   const be = getBackend(args);

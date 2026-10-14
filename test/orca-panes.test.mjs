@@ -272,3 +272,27 @@ test('the integration gate runs the repo\'s orca.yaml setup hook in its worktree
     fs.rmSync(s.tmp, { recursive: true, force: true });
   }
 });
+
+test('a spec listed in a sibling PROGRAM.json is refused unless its program gate allows it', () => {
+  // ship-check validates one spec; the program gate stops colliding specs from
+  // being dispatched out of order (vzt-orca-flow editor-intelligence, 2026-10-14).
+  for (const [gateRc, refused] of [[1, true], [0, false]]) {
+    const s = scaffold(['u1', 'u2']);
+    try {
+      const prog = path.join(s.repo, '.vzt', 'ship', 'prog');
+      fs.mkdirSync(prog, { recursive: true });
+      fs.writeFileSync(path.join(prog, 'PROGRAM.json'), JSON.stringify({ lanes: { l: { root: s.repo, order: ['panes'] } } }));
+      fs.writeFileSync(path.join(prog, 'program.py'), `import sys\nprint("program order: panes is waiting")\nsys.exit(${gateRc})\n`);
+      const { out, calls } = watch(s);
+      const creates = calls.filter((a) => verbOf(a) === 'worktree create');
+      if (refused) {
+        assert.match(out, /refusing to dispatch: program order: panes is waiting/, out);
+        assert.equal(creates.length, 0, 'nothing may be dispatched once the program refuses');
+      } else {
+        assert.equal(creates.length, 2, out);
+      }
+    } finally {
+      fs.rmSync(s.tmp, { recursive: true, force: true });
+    }
+  }
+});
