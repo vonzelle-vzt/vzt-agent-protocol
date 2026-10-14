@@ -2312,6 +2312,31 @@ function hashString(s) {
  *
  * @returns {{ok: boolean, status: string, output?: string}}
  */
+/**
+ * Symlink the primary checkout's installed node_modules (root and one level
+ * down, e.g. vscode/node_modules) into the bare integration worktree.
+ *
+ * `git worktree add` copies tracked files only. Unit worktrees get their deps
+ * from Orca's setup hook; the integration worktree gets nothing, so any gate that
+ * builds (tsc, a codegen script) died with ERR_MODULE_NOT_FOUND after every
+ * unit had passed — observed 2026-10-14 on vscode-agent-bus. Links, not copies:
+ * worktree removal deletes the link, never the target.
+ */
+function linkDependencyDirs(root, tmp) {
+  let dirs = [''];
+  try {
+    dirs = dirs.concat(fs.readdirSync(root, { withFileTypes: true })
+      .filter((d) => d.isDirectory() && !d.name.startsWith('.') && d.name !== 'node_modules')
+      .map((d) => d.name));
+  } catch { /* unreadable root — nothing to link */ }
+  for (const d of dirs) {
+    const src = path.join(root, d, 'node_modules');
+    const dest = path.join(tmp, d, 'node_modules');
+    if (!fs.existsSync(src) || fs.existsSync(dest) || !fs.existsSync(path.join(tmp, d))) continue;
+    try { fs.symlinkSync(src, dest, 'dir'); } catch { /* best effort — the gate reports what is missing */ }
+  }
+}
+
 function runIntegrationGate(spec, be, units) {
   const check = spec.integration && spec.integration.machineCheck;
   if (!check) { console.log('\nintegration gate: (none declared)'); return { ok: true, status: 'NONE' }; }
@@ -2331,6 +2356,7 @@ function runIntegrationGate(spec, be, units) {
     console.log('    (the gate is only meaningful against merged unit work — not falling back to the primary checkout)');
     return { ok: false, status: 'NO_WORKTREE' };
   }
+  linkDependencyDirs(spec.root, tmp);
 
   try {
     const applied = [];

@@ -67,7 +67,7 @@ if (verb === 'worktree list') out({ worktrees: read().worktrees });
 out({ ok: true });                                                // wait / close / set
 `;
 
-function scaffold(units) {
+function scaffold(units, integrationCheck = 'true') {
   const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'vzt-orca-panes-'));
   const repo = path.join(tmp, 'repo');
   fs.mkdirSync(repo, { recursive: true });
@@ -90,7 +90,7 @@ function scaffold(units) {
       filesInScope: [`${id}.txt`], brief: 'b',
       machineCheck: 'true', expect: 'exit 0',
     })),
-    integration: { machineCheck: 'true', expect: 'exit 0' },
+    integration: { machineCheck: integrationCheck, expect: 'exit 0' },
   };
   const specDir = path.join(repo, '.vzt', 'ship', 'panes');
   fs.mkdirSync(specDir, { recursive: true });
@@ -233,6 +233,28 @@ test('every unit worktree is pre-trusted in the (test) Claude config before its 
     for (const name of ['panes-u1', 'panes-u2']) {
       assert.deepEqual(cfg.projects[path.join(wtRoot, name)], { hasTrustDialogAccepted: true }, out);
     }
+  } finally {
+    fs.rmSync(s.tmp, { recursive: true, force: true });
+  }
+});
+
+test('the integration gate sees the primary checkout\'s installed node_modules', () => {
+  // A bare `git worktree add` has no node_modules, so a gate that builds died
+  // with ERR_MODULE_NOT_FOUND after every unit passed (2026-10-14).
+  const s = scaffold(['u1', 'u2'], 'test -f node_modules/dep/index.js && test -f sub/node_modules/dep2/index.js');
+  try {
+    fs.writeFileSync(path.join(s.repo, '.gitignore'), 'node_modules/\n');
+    fs.mkdirSync(path.join(s.repo, 'sub'), { recursive: true });
+    fs.writeFileSync(path.join(s.repo, 'sub', 'keep.txt'), 'x\n');
+    git(s.repo, 'add', '-A');
+    git(s.repo, 'commit', '-qm', 'sub');
+    for (const p of ['node_modules/dep', 'sub/node_modules/dep2']) {
+      fs.mkdirSync(path.join(s.repo, p), { recursive: true });
+      fs.writeFileSync(path.join(s.repo, p, 'index.js'), '');
+    }
+    const { out } = watch(s);
+    assert.match(out, /integration gate … PASS/, out);
+    assert.ok(fs.existsSync(path.join(s.repo, 'node_modules', 'dep', 'index.js')), 'gate cleanup must never delete the real node_modules');
   } finally {
     fs.rmSync(s.tmp, { recursive: true, force: true });
   }
