@@ -120,6 +120,27 @@ on an unmet `dependsOn` shows `waiting` (grey) in that tree — do not mistake i
 `blocked` (amber), which means the unit is live and parked on a permission prompt;
 `waiting` means it hasn't been dispatched at all.
 
+**Orca backend facts** (each was a silent failure, fixed 2026-10-14):
+- Each unit worktree is pre-trusted in `~/.claude.json` (`cli/claude-trust.mjs`);
+  without it every unit pane sat on the trust dialog and failed the 90 s start check.
+- Unit worktrees are created with `--base-branch <primary HEAD sha>`. Orca otherwise
+  bases them on origin/main, so local unpushed commits (including the run's own
+  SPEC.md) are invisible to units.
+- The integration gate's bare worktree gets the primary checkout's `node_modules`
+  symlinked and runs the repo's `orca.yaml` `setup.command`; before, build gates
+  failed `ERR_MODULE_NOT_FOUND`.
+
+**Several specs in one repo.** `ship-check` validates ONE spec. Specs that edit the
+same files (CLI entry, README, test runner, goldens) must never run concurrently:
+order them as a strict sequence, each cut from a HEAD containing its merged
+predecessors. Worked example: `vzt-orca-flow/.vzt/ship/editor-intelligence/PROGRAM.json`
+plus `program.py` — `check` fails on shared-file specs that are unordered, `next` is
+the only safe dispatch list, and `status --write` generates roadmap status from
+`LEDGER.jsonl`.
+A spec only counts as done when its latest run's gate passed AND a
+`{"kind":"merged","commit":"<sha>"}` ledger note names a commit in HEAD; `claim <slug>`
+takes an exclusive lock before dispatch so two supervisors cannot start the same spec.
+
 **When a unit FAILs, read what it prints** — the oracle command, the oracle's own
 output, the worktree, and the agent's Claude Code transcript path. "agent transcript:
 none" is not missing information; it IS the diagnosis, and it means the agent never

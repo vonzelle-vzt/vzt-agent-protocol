@@ -797,3 +797,61 @@ transition count — the reconnect loop starves its own event loop, so an
 in-process assertion never runs and the suite **hangs** instead of failing. A
 hanging gate is no better than one never run. Same rule as everywhere else in
 this stack: bound any oracle that guards a hang.
+
+## Part 6 — Pair Claude + Codex (agent bus)
+
+Two agents in two split terminals, talking through a durable local bus instead
+of through the terminals. Terminals only host the processes; the transport is a
+WAL SQLite file (`$VZT_BUS_DIR`, default `~/.vzt/bus`) driven by short-lived
+`vzt-agent bus <verb>` calls. Full contract: `.vzt/ship/vscode-agent-bus/SPEC.md`;
+verbs and exit codes are in the README's "VS Code agent bus" section.
+
+### Using it
+
+Run **VZT: Pair Claude + Codex** (extension `vzt-mux` 0.7.0). It splits two
+terminals and fills the `vztBus` sidebar view; the command line it launches is
+the `vztMux.busCommand` setting.
+
+Pair refuses to start unless **VS Code workspace trust is on** and the **Codex
+hooks are trusted**. After that it runs `bus trust-claude`, because Claude Code
+2.1.299 stops on its folder-trust dialog even with permissions bypassed, and
+trust on a parent folder is not inherited.
+
+### One-time setup
+
+```bash
+vzt-agent install --global     # 4 events x Claude and Codex, marker vzt-bus-hook-form=1
+codex                          # then /hooks and trust the 4 vzt-bus hooks
+vzt-agent bus doctor --json
+```
+
+Codex skips new hooks until trusted. The hook command string is byte-stable on
+purpose: changing it silently revokes Codex's trust. Orca's own Codex hooks are
+left untouched.
+
+### 🔴 Why Codex never gets a Stop-hook block
+
+Claude receives mail at the end of a turn through a Stop-hook block (guarded by
+`stop_hook_active`). Codex does not: a Stop-hook block permanently wedges the
+session ([openai/codex#20783](https://github.com/openai/codex/issues/20783)).
+Codex is reached only by the wake line, typed after it goes idle, then a
+separate Enter 400 ms later (Codex's paste-burst handling swallows an Enter
+sent with the text). The wake is confirmed by a `UserPromptSubmit` beat within
+20 s, retried with one Enter, then the agent is flagged `wake_unconfirmed`.
+
+### Lifecycle and limits
+
+- Closing or reloading the window kills both agents. Queued mail survives on
+  disk and re-pairing reuses the agent ids.
+- Inside an Orca pane (`ORCA_TERMINAL_HANDLE` set) bus verbs exit 3; use
+  `orca orchestration` there. `doctor`, `argv` and `bootstrap-prompt` are exempt.
+- Cross-workspace sends need `--cross-workspace`.
+
+### Verifying it works
+
+```bash
+node test/live/bus-roundtrip-live.mjs   # real Claude -> Codex -> Claude round trip
+```
+
+Passed in 31 s on 2026-10-14. It launches real agents and spends quota, so it
+is not part of `npm test`; re-run it after any claude/codex update.

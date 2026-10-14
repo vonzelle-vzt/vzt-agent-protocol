@@ -630,6 +630,41 @@ a vibe.
 
 ## Release notes
 
+### 1.18.0 — the agent bus, and three silent ship-watch failures on Orca
+
+**Agent bus (VS Code).** Claude Code and Codex can now pair in two split VS Code
+terminals and message each other through a durable local bus
+(`vzt-agent bus <verb>`, WAL SQLite at `$VZT_BUS_DIR`, default `~/.vzt/bus`). Typed
+messages, an explicit state machine, idempotency keys, 300 s redelivery, 30 s
+leases, one task in flight per agent. Terminals only ever receive a fixed wake
+line plus a separate Enter. Claude also gets mail via a Stop-hook block; Codex
+never does, because a Stop-hook block can wedge a session
+([openai/codex#20783](https://github.com/openai/codex/issues/20783)). The
+`vzt-mux` extension is 0.7.0 with **VZT: Pair Claude + Codex**, a `vztBus`
+sidebar view and `vztMux.busCommand`. Pair refuses unless workspace trust is on
+and the Codex hooks are trusted, then runs `bus trust-claude` (Claude Code
+2.1.299 stops on its folder-trust dialog even with permissions bypassed). Live
+gate `node test/live/bus-roundtrip-live.mjs` passed in 31 s on 2026-10-14;
+re-run it after any claude/codex update. See [VS Code agent bus](#vs-code-agent-bus)
+and `docs/VSCODE.md`.
+
+**ship-watch on Orca — three silent failures fixed the same day:**
+
+- `e2254e5` pre-trusts each unit worktree in `~/.claude.json`
+  (`cli/claude-trust.mjs`). Before, every unit pane sat on the trust dialog and
+  was failed at the 90 s start check.
+- `ab479b2` creates unit worktrees with `--base-branch <primary HEAD sha>`.
+  Before, Orca based them on origin/main, so local unpushed commits (even the
+  run's own SPEC.md) were invisible to units.
+- `693c5ce` + `5e6d444`: the integration gate's bare worktree now gets the
+  primary checkout's `node_modules` symlinked and runs the repo's `orca.yaml`
+  `setup.command`. Before, gates that build failed `ERR_MODULE_NOT_FOUND`, and
+  vzt-orca-flow's live doctor failed "pipeline state NOT initialized" with every
+  unit green.
+
+`/vzt-ship` also gains the cross-spec ordering rule (specs that share files run
+as a strict sequence).
+
 ### 1.17.0 — a worktree is not seeded, so "build against the interface" was fiction
 
 🔴 **Every `git worktree add` branched from the primary checkout's HEAD, on all

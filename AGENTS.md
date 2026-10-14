@@ -34,6 +34,17 @@ changes, not ordinary app edits.
 - For substantial cross-agent work, write handoff state under `.vzt/team/`:
   `handoff.md`, `decisions.md`, `verification.md`, and dated review notes.
 
+## VS Code agent bus
+
+`vzt-agent bus <verb>` is a durable local message bus (WAL SQLite at
+`$VZT_BUS_DIR`, default `~/.vzt/bus`) for a Claude + Codex pair in VS Code
+(**VZT: Pair Claude + Codex**). Contract: `.vzt/ship/vscode-agent-bus/SPEC.md`.
+
+- Never give Codex a Stop-hook block (openai/codex#20783 wedges sessions).
+- The bus hook command string is byte-stable; changing it revokes Codex trust.
+- Inside an Orca pane bus verbs exit 3; use `orca orchestration` there.
+- Re-run `node test/live/bus-roundtrip-live.mjs` after any claude/codex update.
+
 ## Sibling Protocol Sync
 
 The sibling checkout `../VZT-Tech-Consulting-Protocol` is the broader VZT

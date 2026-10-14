@@ -14,6 +14,12 @@ verification gates. Chat memory is not a protocol boundary.
 | Reviewer | Opposite of implementer | Review the diff for bugs, regressions, security risk, and missing tests. |
 | Verifier | Either agent | Run the detected commands and record skipped checks with reasons. |
 
+In VS Code the two agents can also message each other directly through the
+durable agent bus (`vzt-agent bus`, see `docs/VSCODE.md` Part 6). The bus carries
+typed `task` / `question` / `reply` / `gate` / `report` messages with an explicit
+state machine; it complements, and does not replace, the files under `.vzt/team/`
+for anything that must survive a compaction.
+
 Default flow:
 
 1. Claude decomposes the task and writes the brief.
@@ -81,6 +87,10 @@ to write outside scope, it stops and reports the conflict.
   reviewers; OpenAI documents project agents under `.codex/agents/`.
 - Codex MCP is the shared tool/context bridge for docs, GitHub, browser, Figma,
   and other external systems.
+- The agent bus (`vzt-agent bus`, VS Code **VZT: Pair Claude + Codex**) is the
+  live message channel between a paired Claude and Codex. Claude gets mail via a
+  Stop-hook block; Codex never does (openai/codex#20783) and is reached by a
+  wake line only. Inside Orca use `orca orchestration` instead.
 - Codex worktrees are useful for parallel background work, while `/vzt-ship`
   remains the protocol's gated long-horizon path with explicit scope and oracle
   enforcement.
