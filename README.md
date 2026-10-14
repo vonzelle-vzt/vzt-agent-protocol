@@ -272,6 +272,72 @@ corresponding protocol note into the sibling
 `../VZT-Tech-Consulting-Protocol` checkout before release. If the sibling repo
 is dirty, patch only the relevant docs/templates and preserve unrelated work.
 
+## VS Code agent bus
+
+Claude Code and Codex can sit in two split VS Code terminals and talk to each
+other through a durable local message bus. Terminals only host the processes;
+they are never the transport. Messages live in a WAL SQLite file
+(`$VZT_BUS_DIR`, default `~/.vzt/bus/bus.db`) driven by short-lived
+`vzt-agent bus` calls, so queued mail survives a window reload. The only bytes
+ever typed into an agent terminal are one fixed wake line and, 400 ms later, a
+bare Enter. Full contract: `.vzt/ship/vscode-agent-bus/SPEC.md`.
+
+Messages are typed (`message`, `task`, `question`, `reply`, `gate`, `report`)
+and move through an explicit state machine; tasks need an idempotency `--key`
+and run one at a time per agent.
+
+```bash
+vzt-agent bus register --alias A --kind claude|codex --window W --json
+vzt-agent bus send --to ALIAS --type message|task|question --subject S --body B [--key K]
+vzt-agent bus check --json            # read your mail (agent side, VZT_BUS_AGENT set)
+vzt-agent bus ack --id ID
+vzt-agent bus reply --id ID --body B
+vzt-agent bus ask --to ALIAS --subject S --body B [--timeout-ms N]   # blocks until answered
+vzt-agent bus complete --id TASK --outcome succeeded|failed
+vzt-agent bus gate-resolve --id ID --decision approve|reject
+vzt-agent bus agents --json           # registry with liveness: live | stale | never-started
+vzt-agent bus inbox --json            # threads, for the sidebar
+vzt-agent bus doctor --json           # node:sqlite, hook wiring, Codex hook trust
+# used by the extension: argv, bootstrap-prompt, lease, wake-plan, wake-sent, hook
+```
+
+Exit codes: 0 ok, 2 usage/validation, 3 inside Orca (use `orca orchestration`
+there instead), 4 conflict, 5 `ask` timeout, 70 Node without `node:sqlite`
+(the bus needs Node >= 22.13).
+
+**Install.** `vzt-agent install` wires four lifecycle hooks (SessionStart,
+UserPromptSubmit, Stop, PermissionRequest) into `~/.claude/settings.json` and
+`~/.codex/hooks.json` (`$CODEX_HOME` honoured). They no-op unless the terminal
+carries `VZT_BUS_AGENT`. **Codex skips new hooks until you trust them:** open
+`codex`, run `/hooks`, and trust the 4 vzt-bus hooks. `vzt-agent bus doctor`
+lists untrusted ones, and the VS Code Pair command refuses to launch Codex until
+they are trusted. The hook command is a byte-stable constant, so trust survives
+reinstalls.
+
+**Codex Stop-hook limitation.** Claude receives mail at the end of a turn
+through a Stop-hook `decision: block`. Codex never does: a Stop-hook block can
+permanently wedge a Codex session
+([openai/codex#20783](https://github.com/openai/codex/issues/20783)), so the
+Codex Stop hook prints nothing and Codex is reached only by the wake line,
+typed after it goes idle and confirmed by its next UserPromptSubmit beat (one
+retry Enter, then the agent is flagged `wake_unconfirmed`).
+
+**Live gate.** Offline tests cover the bus; the real round trip is a manual
+gate because it launches real agents and spends quota:
+
+```bash
+vzt-agent install            # then trust the 4 Codex hooks via /hooks
+node test/live/bus-roundtrip-live.mjs
+```
+
+It replays the extension's poller against Claude and Codex running under PTYs
+in this repo: a `harness` alias gives Claude a task to `bus ask` Codex for 6*7
+and write the answer to `.vzt/live-bus/<run>/answer.txt`. Exit 0 needs the
+answer `42`, the task completed/succeeded, and at least one confirmed Codex
+wake within 10 minutes; a failure prints the reason and both screen tails.
+It uses the `vzt-agent` on your PATH (the same one the hooks call), so update
+the global install first.
+
 ## Visual work — `DESIGN.md` is a taste cache
 
 Visual work was the one kind this protocol was blind to. *"Restyle the dashboard"*,

@@ -2,7 +2,7 @@
   "name": "vzt-mux",
   "displayName": "VZT Ship Mux",
   "description": "Runs VZT Agent Protocol ship units as native VS Code integrated terminals, with a live Ship Run tree — per-unit status, worktree diffs mid-run, and one-click oracle re-runs.",
-  "version": "0.6.2",
+  "version": "0.7.0",
   "publisher": "vzt",
   "icon": "media/ship-icon.png",
   "engines": {
@@ -36,6 +36,11 @@
           "id": "vztShipRun",
           "name": "Ship Run",
           "contextualTitle": "VZT Ship Run"
+        },
+        {
+          "id": "vztBus",
+          "name": "Agent Bus",
+          "contextualTitle": "VZT Agent Bus"
         }
       ],
       "herdrFleet": [
@@ -54,6 +59,10 @@
       {
         "view": "herdrFleet.agents",
         "contents": "No herdr server running.\n\nStart one with:\n[herdr]()\n\nThe agents it runs will appear here, badged working / blocked / idle. herdr keeps owning them — closing this window does not stop them."
+      },
+      {
+        "view": "vztBus",
+        "contents": "No paired agents.\n\n[Pair Claude + Codex](command:vzt-mux.bus.pair)\n\nOpens Claude and Codex in split terminals, talking over the local VZT bus. Messages survive window reloads."
       }
     ],
     "commands": [
@@ -141,6 +150,16 @@
         "command": "vzt-mux.herdr.deleteThread",
         "title": "Delete Comment Thread",
         "icon": "$(trash)"
+      },
+      {
+        "command": "vzt-mux.bus.pair",
+        "title": "VZT: Pair Claude + Codex",
+        "icon": "$(organization)"
+      },
+      {
+        "command": "vzt-mux.bus.refresh",
+        "title": "VZT: Refresh Agent Bus",
+        "icon": "$(refresh)"
       }
     ],
     "configuration": {
@@ -170,6 +189,11 @@
           "type": "string",
           "default": "",
           "description": "Path to the herdr server socket. Empty means auto: $HERDR_SOCKET_PATH, else ~/.config/herdr/herdr.sock. Note this is the server socket, not herdr-client.sock."
+        },
+        "vztMux.busCommand": {
+          "type": "string",
+          "default": "",
+          "description": "Command prefix that runs vzt-agent for the agent bus, e.g. `vzt-agent` or `node /path/to/cli/vzt-agent.js`. Empty means auto: `command -v vzt-agent` in your login shell, else the CLI of the repo checkout this extension was built from."
         }
       }
     },
@@ -194,6 +218,16 @@
           "command": "vzt-mux.herdr.reviewChanges",
           "when": "view == herdrFleet.agents",
           "group": "navigation"
+        },
+        {
+          "command": "vzt-mux.bus.pair",
+          "when": "view == vztBus",
+          "group": "navigation"
+        },
+        {
+          "command": "vzt-mux.bus.refresh",
+          "when": "view == vztBus",
+          "group": "navigation@2"
         }
       ],
       "view/item/context": [

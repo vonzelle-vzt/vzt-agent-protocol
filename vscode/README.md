@@ -142,6 +142,30 @@ The CLI is responsible for writing queue and state files per the filesystem
 contract in this repo's ship-watch mux code; this extension only reads and
 reacts to them.
 
+## Pair Claude + Codex
+
+Run **VZT: Pair Claude + Codex** (`vzt-mux.bus.pair`, also the button in the
+**Agent Bus** view) to open Claude in a `claude` terminal and Codex in a
+`codex` terminal split beside it, talking over the local VZT agent bus (see
+the root README, "VS Code agent bus").
+
+- **Before launching**, it runs `vzt-agent bus doctor` and refuses if the CLI's
+  Node lacks `node:sqlite` or Codex's bus hooks are untrusted — open `codex`,
+  run `/hooks`, and trust the 4 vzt-bus hooks.
+- **The extension never touches the database.** It shells out to
+  `vzt-agent bus … --json`; agent argv, the first prompt and every wake come
+  from the CLI. Every 1500 ms it renews the agents' leases and types whatever
+  `bus wake-plan` returns: a fixed wake line, then a bare Enter 400 ms later.
+- **Agent Bus sidebar** lists each paired agent (liveness `live` / `stale` /
+  `never-started`, state, and a warning when a wake went unconfirmed) and the
+  message threads. **VZT: Refresh Agent Bus** reloads it.
+
+**Window-reload caveat.** The terminals — and the agents in them — die with
+the window, like any integrated terminal. The mail does not: it is on disk.
+Leases expire within 30 s; run Pair again and the bus hands back the same agent
+identities with their queues intact. A second window cannot pair an alias whose
+lease is still live elsewhere.
+
 ## Settings
 
 - `vztMux.baseDir` — overrides the mux filesystem directory. Empty means
@@ -150,3 +174,6 @@ reacts to them.
   check when the extension activates.
 - `vztMux.showSetupPrompts` — defaults on; shows a one-time setup prompt in a
   workspace with no project/global VZT hooks.
+- `vztMux.busCommand` — command prefix for the agent bus, e.g. `vzt-agent` or
+  `node /path/to/cli/vzt-agent.js`. Empty means auto: `command -v vzt-agent` in
+  your login shell, else this extension's repo CLI.

@@ -11,6 +11,7 @@
  *   vzt-agent doctor [--global] [--target <dir>]    verify installation health
  *   vzt-agent matrix                                 print the routing matrix
  *   vzt-agent stats                                  routing-decision distribution vs targets
+ *   vzt-agent bus <verb>                             durable Claude + Codex agent bus (cli/bus/cli.mjs)
  */
 import fs from 'node:fs';
 import path from 'node:path';
@@ -57,6 +58,22 @@ const HOOKS = [
   { event: 'Stop', basename: 'vzt-vscode-agent-state.sh', timeout: 10, runner: 'bash', args: 'idle' },
 ];
 const MANAGED_MARKER = 'vzt-agent-protocol';
+// Agent-bus lifecycle hooks (SPEC vscode-agent-bus, "Hooks"). Wired into BOTH
+// Claude settings.json and Codex hooks.json, separately from HOOKS above.
+//
+// The command is a BYTE-STABLE constant on purpose: Codex skips a new or changed
+// hook until the user trusts it via /hooks, and records trust against a hash of
+// the command. Any drift here (an absolute nvm path, a reordered flag) silently
+// revokes that trust on every machine. Calls `vzt-agent` by name for the same
+// reason. Matched on install/uninstall by BUS_HOOK_MARKER, never by basename.
+const BUS_HOOK_MARKER = 'vzt-bus-hook-form=1';
+const busHookCommand = (event) =>
+  `: ${BUS_HOOK_MARKER}; [ -n "\${VZT_BUS_AGENT-}" ] && exec vzt-agent bus hook ${event} || :`;
+const BUS_HOOKS = ['SessionStart', 'UserPromptSubmit', 'Stop', 'PermissionRequest'].map((event) => ({
+  event,
+  command: busHookCommand(event),
+  timeout: 10,
+}));
 // The hooks honour VZT_ROUTER_STATE_DIR; the CLI used to hardcode ~/.claude,
 // so `vzt-agent stats` read a different file than the hooks wrote.
 const STATE_DIR = process.env.VZT_ROUTER_STATE_DIR || path.join(os.homedir(), '.claude', 'vzt-router');
@@ -210,6 +227,72 @@ function unwireSettings(dotClaude) {
   return changed;
 }
 
+const isBusHook = (x) => typeof x?.command === 'string' && x.command.includes(BUS_HOOK_MARKER);
+
+function codexHooksPath() {
+  return path.join(process.env.CODEX_HOME || path.join(os.homedir(), '.codex'), 'hooks.json');
+}
+
+// The bus is per-user (one DB under ~/.vzt/bus, one Codex hooks.json) and
+// `bus doctor` reads exactly ~/.claude/settings.json, so bus hooks are wired
+// only by a --global install. A project install must not reach into the user's
+// Claude and Codex config: tests and checkouts run `install --target` freely.
+function claudeBusSettingsPath() {
+  return path.join(os.homedir(), '.claude', 'settings.json');
+}
+
+/**
+ * Add one marked group per BUS_HOOKS event that has no marked handler yet.
+ * Appends only — existing groups keep their indices, because Codex trust keys
+ * are `<path>:<event>:<group>:<handler>` and shifting them revokes trust.
+ * `extra` is merged into each new handler (Claude gets _managedBy).
+ * Returns the number of events that end up wired.
+ */
+function wireBusHooks(file, extra = {}) {
+  const data = readJson(file, null) || { hooks: {} };
+  data.hooks = data.hooks || {};
+  let changed = !fs.existsSync(file);
+  for (const h of BUS_HOOKS) {
+    const bucket = (data.hooks[h.event] = data.hooks[h.event] || []);
+    const existing = bucket.flatMap((g) => g.hooks || []).filter(isBusHook);
+    if (existing.length) {
+      for (const x of existing) {
+        if (x.command !== h.command) { x.command = h.command; changed = true; }
+      }
+      continue;
+    }
+    bucket.push({ hooks: [{ type: 'command', command: h.command, timeout: h.timeout, ...extra }] });
+    changed = true;
+  }
+  if (changed) {
+    fs.mkdirSync(path.dirname(file), { recursive: true });
+    fs.writeFileSync(file, JSON.stringify(data, null, 2) + '\n');
+  }
+  return BUS_HOOKS.length;
+}
+
+/** Remove exactly the marked handlers; drop groups/events left empty by that. */
+function unwireBusHooks(file) {
+  const data = readJson(file, null);
+  if (!data || !data.hooks) return 0;
+  let removed = 0;
+  for (const event of Object.keys(data.hooks)) {
+    const bucket = data.hooks[event];
+    if (!Array.isArray(bucket) || !bucket.some((g) => (g.hooks || []).some(isBusHook))) continue;
+    const next = [];
+    for (const g of bucket) {
+      const kept = (g.hooks || []).filter((x) => !isBusHook(x));
+      removed += (g.hooks || []).length - kept.length;
+      if (kept.length === (g.hooks || []).length) next.push(g);
+      else if (kept.length) next.push({ ...g, hooks: kept });
+    }
+    if (next.length) data.hooks[event] = next;
+    else delete data.hooks[event];
+  }
+  if (removed) fs.writeFileSync(file, JSON.stringify(data, null, 2) + '\n');
+  return removed;
+}
+
 /** Copy orca/ helper scripts to the fixed ~/.orca/vzt/ home, making .sh executable. */
 function installOrcaHelpers() {
   if (!fs.existsSync(ORCA_SRC_DIR)) return [];
@@ -252,6 +335,9 @@ function install(args) {
   // a committed settings.json works for anyone who clones the repo; a global
   // install (~/.claude) uses the absolute path.
   const settingsPath = wireSettings(dotClaude, { portable: !args.global });
+  const codexHooks = codexHooksPath();
+  const busClaude = args.global ? wireBusHooks(claudeBusSettingsPath(), { _managedBy: MANAGED_MARKER }) : 0;
+  const busCodex = args.global ? wireBusHooks(codexHooks) : 0;
 
   console.log(`  agents:   ${agents.length} installed (fable×2, opus×4, sonnet×2, haiku×2)`);
   // Derived, never restated. This line hardcoded its ten skill names, so adding
@@ -266,6 +352,13 @@ function install(args) {
   console.log(`  docs:     ${docs.length} installed (VSCODE, ROUTING-MATRIX, CHAIR-PROFILES — the skills reference these by path)`);
   console.log(`  orca:     ${orca.length} helper(s) → ${ORCA_VZT_DIR} (worktree-bootstrap for ship-dispatch/ship-watch)`);
   console.log(`  settings: wired ${settingsPath}`);
+  // Its own line: the `hooks:` line above counts hook FILES and is asserted on.
+  if (args.global) {
+    console.log(`  bus hooks: ${busClaude} claude + ${busCodex} codex (${BUS_HOOKS.map((h) => h.event).join('/')}) → ${claudeBusSettingsPath()}, ${codexHooks}`);
+    console.log('  codex:    new hooks are skipped until trusted — open codex, run /hooks, trust the 4 vzt-bus hooks');
+  } else {
+    console.log('  bus hooks: skipped (per-user — run: vzt-agent install --global)');
+  }
   console.log('\nDone. Restart Claude Code to activate.');
   console.log('Chair is up to you — the protocol adapts either way:');
   console.log('  /model opus   → build inline, delegate routine work DOWN to Sonnet/Haiku, Fable for the hard stuff');
@@ -320,6 +413,15 @@ function uninstall(args) {
   }
   const unwired = unwireSettings(dotClaude);
   console.log(`  removed ${removed} paths; hooks ${unwired ? 'unwired' : 'were not wired'}`);
+  // Bus hooks are per-user and only a global install wires them (see
+  // claudeBusSettingsPath), so only a global uninstall removes them.
+  if (args.global) {
+    const busClaude = unwireBusHooks(claudeBusSettingsPath());
+    const busCodex = unwireBusHooks(codexHooksPath());
+    console.log(`  bus hooks: removed ${busClaude} claude + ${busCodex} codex`);
+  } else {
+    console.log('  bus hooks: not touched (per-user; remove with: vzt-agent uninstall --global)');
+  }
 }
 
 function doctor(args) {
@@ -482,10 +584,31 @@ function doctor(args) {
   const major = Number(process.versions.node.split('.')[0]);
   checks.push([`node >= 18 (found ${process.versions.node})`, major >= 18]);
 
+  // Agent bus. Reported, not graded: Codex trust is granted inside codex
+  // (/hooks), so no `vzt-agent install` can fix it and failing on it would
+  // point the user at the wrong command. Same reasoning as the host warning.
+  let bus = null;
+  try {
+    const env = { ...process.env };
+    delete env.ORCA_TERMINAL_HANDLE; // doctor is exempt anyway; keep it that way
+    bus = JSON.parse(execFileSync(process.execPath, [path.join(__dirname, 'bus', 'cli.mjs'), 'doctor', '--json'], { encoding: 'utf8', env }));
+  } catch (err) {
+    warnings.push(`bus doctor failed: ${(err.stderr || err.message || String(err)).toString().trim()}`);
+  }
+
   let ok = true;
   for (const [label, pass] of checks) {
     console.log(`  ${pass ? '✅' : '❌'} ${label}`);
     if (!pass) ok = false;
+  }
+  if (bus) {
+    console.log('\nbus:');
+    console.log(JSON.stringify(bus, null, 2).replace(/^/gm, '  '));
+    if (!bus.node_sqlite) console.log('  ⚠️  ACTION: node:sqlite unavailable — the bus needs Node >= 22.5');
+    if (bus.codex_hooks?.missing?.length) console.log(`  ⚠️  ACTION: codex bus hooks not wired (${bus.codex_hooks.missing.join(', ')}) — run: vzt-agent install`);
+    if (bus.codex_hooks?.untrusted?.length) {
+      console.log(`  ⚠️  ACTION: ${bus.codex_hooks.untrusted.length} codex bus hook(s) untrusted — open codex, run /hooks, trust the 4 vzt-bus hooks`);
+    }
   }
   for (const w of warnings) console.log(`  ⚠️  ${w}`);
   console.log(ok ? '\nAll checks passed.' : '\nSome checks failed — run: vzt-agent install');
@@ -2520,6 +2643,13 @@ switch (cmd) {
   case 'ship-watch':
     shipWatch(args);
     break;
+  case 'bus': {
+    // Raw argv, not parseArgs: the bus has its own strict parser and verbs.
+    const { main } = await import('./bus/cli.mjs');
+    // exitCode, not exit(): exit() can truncate stdout still draining to a pipe.
+    process.exitCode = await main(process.argv.slice(3));
+    break;
+  }
   default:
     console.log(`vzt-agent — VZT Agent Protocol CLI
 
@@ -2529,6 +2659,7 @@ Usage:
   vzt-agent doctor [--global] [--target <dir>]
   vzt-agent stats
   vzt-agent matrix
+  vzt-agent bus <verb> [--json]            Claude + Codex agent bus (vzt-agent bus help)
 
 Long-horizon runs (/vzt-ship):
   vzt-agent ship-check <SPEC.md>          gate the spec — disjoint scopes, an oracle per unit,

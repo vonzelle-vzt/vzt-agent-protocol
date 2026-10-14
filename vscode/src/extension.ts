@@ -19,6 +19,7 @@ import * as os from "os";
 import * as path from "path";
 import { ShipTreeProvider, UnitItem } from "./shipTree";
 import { registerHerdrFleet } from "./herdr/fleet";
+import { registerAgentBus } from "./bus/pair";
 
 // Shape of a queue file written by the CLI.
 interface QueueRecord {
@@ -375,7 +376,10 @@ function processQueue(): void {
  * Fix: send after a plain delay. Shell integration looks like the right signal,
  * but it fires before the PTY is settled for Claude's interactive TUI.
  */
-function sendWhenReady(terminal: vscode.Terminal, record: QueueRecord): void {
+function sendWhenReady(terminal: vscode.Terminal, cmd: string | QueueRecord, label?: string): void {
+  // Ship units pass their queue record; the bus pair passes (cmd, label).
+  const text = typeof cmd === "string" ? cmd : cmd.cmd;
+  const tag = typeof cmd === "string" ? label || "terminal" : `${cmd.unitKey} (${cmd.cwd})`;
   const SEND_DELAY_MS = Number(process.env.VZT_VSCODE_SEND_DELAY_MS || 1200);
   let sent = false;
 
@@ -393,8 +397,8 @@ function sendWhenReady(terminal: vscode.Terminal, record: QueueRecord): void {
     if (sent) return;
     sent = true;
     if (timer) clearTimeout(timer);
-    terminal.sendText(record.cmd, true); // true = execute (send newline)
-    outputChannel.appendLine(`[LAUNCH] ${record.unitKey} (${record.cwd}) [${via}]`);
+    terminal.sendText(text, true); // true = execute (send newline)
+    outputChannel.appendLine(`[LAUNCH] ${tag} [${via}]`);
   };
 
   // A plain delay, deliberately — NOT VS Code's shell-integration signal.
@@ -660,6 +664,12 @@ export function activate(context: vscode.ExtensionContext): void {
   // different transport, different lifecycle. A herdr outage must not touch the
   // ship queue, and vice versa.
   registerHerdrFleet(context, outputChannel);
+
+  // --- Agent Bus -----------------------------------------------------------
+  // Claude + Codex paired in split terminals over the local bus. Everything it
+  // launches or types comes from the `vzt-agent bus` CLI; launches go through
+  // the same delayed sendWhenReady as ship units.
+  registerAgentBus(context, outputChannel, (t, cmd, label) => sendWhenReady(t, cmd, label), () => cliPath(context));
 
   context.subscriptions.push(
     vscode.commands.registerCommand("vzt-mux.watchShipRun", () => {
