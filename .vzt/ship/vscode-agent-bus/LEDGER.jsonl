@@ -1,0 +1,23 @@
+{"ts":"2026-10-14T16:18:07.217Z","kind":"run_started","runId":"ship_20261014T161807_vscode-agent-bus","slug":"vscode-agent-bus","specPath":"/Users/vonzellebrown/github-projects/vzt-agent-protocol/.vzt/ship/vscode-agent-bus/SPEC.md"}
+{"ts":"2026-10-14T16:18:07.217Z","kind":"gate_passed","runId":"ship_20261014T161807_vscode-agent-bus","gate":"ship-check","detail":"4 units, disjoint, oracles present"}
+{"ts":"2026-10-14T16:19:18.423Z","kind":"run_started","runId":"ship_20261014T161918_vscode-agent-bus","slug":"vscode-agent-bus","specPath":"/Users/vonzellebrown/github-projects/vzt-agent-protocol/.vzt/ship/vscode-agent-bus/SPEC.md"}
+{"ts":"2026-10-14T16:19:18.423Z","kind":"gate_passed","runId":"ship_20261014T161918_vscode-agent-bus","gate":"ship-check","detail":"4 units, disjoint, oracles present"}
+{"ts":"2026-10-14T16:20:50.283Z","kind":"unit_result","unit":"u1-bus-core","status":"FAIL","via":"ship-watch","mux":"orca","code":1}
+{"ts":"2026-10-14T16:20:50.557Z","kind":"unit_result","unit":"u2-bus-install","status":"BLOCKED","via":"ship-watch","mux":"orca","code":-1,"output":"not dispatched: dependency u1-bus-core did not pass"}
+{"ts":"2026-10-14T16:20:50.614Z","kind":"unit_result","unit":"u3-vscode","status":"BLOCKED","via":"ship-watch","mux":"orca","code":-1,"output":"not dispatched: dependency u1-bus-core did not pass"}
+{"ts":"2026-10-14T16:20:50.671Z","kind":"unit_result","unit":"u4-live-docs","status":"BLOCKED","via":"ship-watch","mux":"orca","code":-1,"output":"not dispatched: dependency u2-bus-install, u3-vscode did not pass"}
+{"ts":"2026-10-14T16:20:50.725Z","kind":"integration","status":"SKIPPED","output":null}
+{"ts":"2026-10-14T16:20:50.779Z","kind":"ship","units":4,"passed":0,"blocked":4,"corrections":0}
+{"ts":"2026-10-14T16:20:50.833Z","kind":"run_complete","integration":"SKIPPED"}
+{"ts":"2026-10-14T16:23:52.180Z","kind":"run_started","runId":"ship_20261014T162352_vscode-agent-bus","slug":"vscode-agent-bus","specPath":"/Users/vonzellebrown/github-projects/vzt-agent-protocol/.vzt/ship/vscode-agent-bus/SPEC.md"}
+{"ts":"2026-10-14T16:23:52.180Z","kind":"gate_passed","runId":"ship_20261014T162352_vscode-agent-bus","gate":"ship-check","detail":"4 units, disjoint, oracles present"}
+{"ts":"2026-10-14T16:36:50.225Z","kind":"run_started","runId":"ship_20261014T163650_vscode-agent-bus","slug":"vscode-agent-bus","specPath":"/Users/vonzellebrown/github-projects/vzt-agent-protocol/.vzt/ship/vscode-agent-bus/SPEC.md"}
+{"ts":"2026-10-14T16:36:50.225Z","kind":"gate_passed","runId":"ship_20261014T163650_vscode-agent-bus","gate":"ship-check","detail":"4 units, disjoint, oracles present"}
+{"ts":"2026-10-14T16:37:21.112Z","kind":"unit_result","unit":"u1-bus-core","status":"PASS","via":"ship-watch","mux":"orca","code":0}
+{"ts":"2026-10-14T16:41:33.591Z","kind":"unit_result","unit":"u3-vscode","status":"PASS","via":"ship-watch","mux":"orca","code":0}
+{"ts":"2026-10-14T16:46:46.028Z","kind":"unit_result","unit":"u2-bus-install","status":"PASS","via":"ship-watch","mux":"orca","code":0}
+{"ts":"2026-10-14T16:50:54.669Z","kind":"unit_result","unit":"u4-live-docs","status":"PASS","via":"ship-watch","mux":"orca","code":0}
+{"ts":"2026-10-14T16:51:02.692Z","kind":"integration","status":"FAIL","output":":11)\n    at #cachedDefaultResolve (node:internal/modules/esm/loader:691:20)\n    at #resolveAndMaybeBlockOnLoaderThread (node:internal/modules/esm/loader:708:38)\n    at ModuleLoader.resolveSync (node:internal/modules/esm/loader:740:52)\n    at #resolve (node:internal/modules/esm/loader:673:17)\n    at ModuleLoader.getOrCreateModuleJob (node:internal/modules/esm/loader:593:35)\n    at ModuleJob.syncLink (node:internal/modules/esm/module_job:163:33) {\n  code: 'ERR_MODULE_NOT_FOUND'\n}\n\nNode.js v24.16.0"}
+{"ts":"2026-10-14T16:51:02.811Z","kind":"ship","units":4,"passed":4,"blocked":0,"corrections":0}
+{"ts":"2026-10-14T16:51:03.131Z","kind":"run_complete","integration":"FAIL"}
+{"ts":"2026-10-14T16:56:41.034Z","kind":"gate_passed","gate":"integration","detail":"ship-watch gate failed on a bare worktree with no node_modules (fixed in 693c5ce); chair re-ran it on main: npm run compile:vscode && npm test 274/274, all 4 unit oracles green on the combined tree"}
