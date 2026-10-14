@@ -21,3 +21,4 @@
 {"ts":"2026-10-14T16:51:02.811Z","kind":"ship","units":4,"passed":4,"blocked":0,"corrections":0}
 {"ts":"2026-10-14T16:51:03.131Z","kind":"run_complete","integration":"FAIL"}
 {"ts":"2026-10-14T16:56:41.034Z","kind":"gate_passed","gate":"integration","detail":"ship-watch gate failed on a bare worktree with no node_modules (fixed in 693c5ce); chair re-ran it on main: npm run compile:vscode && npm test 274/274, all 4 unit oracles green on the combined tree"}
+{"ts":"2026-10-14T17:04:46.233Z","kind":"gate_passed","gate":"live","detail":"node test/live/bus-roundtrip-live.mjs PASS in 31 s: answer.txt=42, task completed/succeeded, codex wake_confirmed=1 (run-2026-10-14T17-03-59-288Z). First attempt failed on the Claude folder-trust dialog; fixed in 54286f4."}
