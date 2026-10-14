@@ -64,6 +64,7 @@ function ownsWorkspace(record: QueueRecord): boolean {
 }
 
 const POLL_INTERVAL_MS = 1000;
+const SETUP_PROMPT_KEY = "vzt.setupPromptedRoots";
 
 let outputChannel: vscode.OutputChannel;
 let statusBarItem: vscode.StatusBarItem;
@@ -86,7 +87,8 @@ let passCount = 0;
 let failCount = 0;
 
 function baseDir(): string {
-  return path.join(os.homedir(), ".vzt", "vscode-mux");
+  const configured = vscode.workspace.getConfiguration("vztMux").get<string>("baseDir") || "";
+  return process.env.VZT_VSCODE_DIR || expandHome(configured) || path.join(os.homedir(), ".vzt", "vscode-mux");
 }
 function queueDir(): string {
   return path.join(baseDir(), "queue");
@@ -97,16 +99,169 @@ function stateDir(): string {
 function promptsDir(): string {
   return path.join(baseDir(), "prompts");
 }
+function unitsDir(): string {
+  return path.join(baseDir(), "units");
+}
+
+function expandHome(p: string): string {
+  if (!p) return "";
+  return p === "~" ? os.homedir() : p.startsWith("~/") ? path.join(os.homedir(), p.slice(2)) : p;
+}
 
 function ensureDirs(): void {
-  for (const dir of [baseDir(), queueDir(), stateDir(), promptsDir()]) {
+  for (const dir of [baseDir(), queueDir(), stateDir(), promptsDir(), unitsDir()]) {
     fs.mkdirSync(dir, { recursive: true });
   }
 }
 
+function countFiles(dir: string, suffix?: string): number {
+  try {
+    return fs.readdirSync(dir).filter((f) => !suffix || f.endsWith(suffix)).length;
+  } catch {
+    return 0;
+  }
+}
+
+function hasProtocolHook(settingsPath: string): boolean {
+  try {
+    const raw = fs.readFileSync(settingsPath, "utf8");
+    return raw.includes("vzt-route-classifier.mjs") && raw.includes("vzt-session-start.mjs");
+  } catch {
+    return false;
+  }
+}
+
+function workspaceRoots(): string[] {
+  return (vscode.workspace.workspaceFolders || []).map((f) => f.uri.fsPath);
+}
+
+function projectProtocolRoots(): string[] {
+  return workspaceRoots().filter((root) => hasProtocolHook(path.join(root, ".claude", "settings.json")));
+}
+
+function globalProtocolInstalled(): boolean {
+  return hasProtocolHook(path.join(os.homedir(), ".claude", "settings.json"));
+}
+
+interface Readiness {
+  kind: "setup" | "ready" | "running" | "blocked";
+  projectRoots: string[];
+  globalInstalled: boolean;
+  queueCount: number;
+  statusCount: number;
+  unitCount: number;
+  startedCount: number;
+  blockedCount: number;
+}
+
+function readReadiness(): Readiness {
+  const blockedCount = countFiles(stateDir(), ".blocked");
+  const startedCount = countFiles(stateDir(), ".started");
+  const queueCount = countFiles(queueDir(), ".json");
+  const projectRoots = projectProtocolRoots();
+  const globalInstalled = globalProtocolInstalled();
+  let kind: Readiness["kind"] = projectRoots.length || globalInstalled ? "ready" : "setup";
+  if (queueCount > 0 || startedCount > 0 || terminals.size > 0) kind = "running";
+  if (blockedCount > 0) kind = "blocked";
+  return {
+    kind,
+    projectRoots,
+    globalInstalled,
+    queueCount,
+    statusCount: countFiles(stateDir(), ".status"),
+    unitCount: countFiles(unitsDir(), ".json"),
+    startedCount,
+    blockedCount,
+  };
+}
+
 function updateStatusBar(): void {
-  statusBarItem.text = `VZT ship: ${passCount} ✓  ${failCount} ✗`;
+  const readiness = readReadiness();
+  const label = readiness.kind === "setup"
+    ? "setup needed"
+    : readiness.kind === "blocked"
+      ? `blocked ${readiness.blockedCount}`
+      : readiness.kind === "running"
+        ? "running"
+        : "ready";
+  statusBarItem.text = `VZT: ${label}  ${passCount} ✓ ${failCount} ✗`;
+  statusBarItem.command = "vzt-mux.doctor";
+  statusBarItem.tooltip = new vscode.MarkdownString(
+    [
+      `**VZT Agent Protocol** — ${label}`,
+      "",
+      `- mux dir: \`${baseDir()}\``,
+      `- queue: ${readiness.queueCount}`,
+      `- units: ${readiness.unitCount}`,
+      `- status: ${readiness.statusCount}`,
+      `- started: ${readiness.startedCount}`,
+      `- blocked: ${readiness.blockedCount}`,
+      readiness.projectRoots.length ? `- project install: ${readiness.projectRoots.map((r) => `\`${r}\``).join(", ")}` : "",
+      readiness.globalInstalled ? "- global install: yes" : "- global install: no",
+    ].filter(Boolean).join("\n")
+  );
+  statusBarItem.backgroundColor = readiness.kind === "blocked"
+    ? new vscode.ThemeColor("statusBarItem.warningBackground")
+    : readiness.kind === "setup"
+      ? new vscode.ThemeColor("statusBarItem.errorBackground")
+      : undefined;
   statusBarItem.show();
+}
+
+function cliPath(context: vscode.ExtensionContext): string | null {
+  const candidate = path.resolve(context.extensionPath, "..", "cli", "vzt-agent.js");
+  return fs.existsSync(candidate) ? candidate : null;
+}
+
+function cliCommand(context: vscode.ExtensionContext): string {
+  const cli = cliPath(context);
+  return cli ? `node ${shellQuote(cli)}` : "npx github:vonzelle-vzt/vzt-agent-protocol";
+}
+
+function shellQuote(s: string): string {
+  return `'${s.replace(/'/g, "'\\''")}'`;
+}
+
+function runInstallTerminal(context: vscode.ExtensionContext, scope: "project" | "global"): void {
+  const args = scope === "global"
+    ? "--global"
+    : `--target ${shellQuote(workspaceRoots()[0] || process.cwd())}`;
+  const t = vscode.window.createTerminal({ name: `VZT install:${scope}` });
+  t.show(false);
+  t.sendText(`${cliCommand(context)} install ${args}`, true);
+}
+
+function appendDoctor(context: vscode.ExtensionContext): Readiness {
+  const r = readReadiness();
+  const version = (context.extension?.packageJSON?.version as string) || "unknown";
+  outputChannel.appendLine("");
+  outputChannel.appendLine(`[doctor] VZT Ship Mux ${version}`);
+  outputChannel.appendLine(`[doctor] mux dir: ${baseDir()}`);
+  outputChannel.appendLine(`[doctor] project protocol roots: ${r.projectRoots.length ? r.projectRoots.join(", ") : "none"}`);
+  outputChannel.appendLine(`[doctor] global protocol: ${r.globalInstalled ? "installed" : "missing"}`);
+  outputChannel.appendLine(`[doctor] queue=${r.queueCount} units=${r.unitCount} status=${r.statusCount} started=${r.startedCount} blocked=${r.blockedCount}`);
+  outputChannel.appendLine(`[doctor] loaded host: ${path.join(baseDir(), "host.json")}`);
+  return r;
+}
+
+async function maybePromptSetup(context: vscode.ExtensionContext): Promise<void> {
+  const cfg = vscode.workspace.getConfiguration("vztMux");
+  if (cfg.get<boolean>("showSetupPrompts") === false) return;
+  const r = readReadiness();
+  if (r.kind !== "setup") return;
+  const root = workspaceRoots()[0];
+  if (!root) return;
+  const prompted = context.globalState.get<string[]>(SETUP_PROMPT_KEY, []);
+  if (prompted.includes(root)) return;
+  await context.globalState.update(SETUP_PROMPT_KEY, [...prompted, root]);
+  const picked = await vscode.window.showInformationMessage(
+    "VZT is active, but this project is not wired to the protocol yet.",
+    "Install in Project",
+    "Install Globally",
+    "Later"
+  );
+  if (picked === "Install in Project") runInstallTerminal(context, "project");
+  if (picked === "Install Globally") runInstallTerminal(context, "global");
 }
 
 /**
@@ -217,9 +372,8 @@ function processQueue(): void {
  * clean re-run of the very same spec went 2/2 in 17s — i.e. it is a race, and a
  * race that silently costs you a unit is worse than one that errors.
  *
- * Fix: prefer VS Code's shell-integration signal (the shell telling us it is
- * ready), and fall back to a delay when integration is unavailable — it is
- * opt-in and not guaranteed for every shell.
+ * Fix: send after a plain delay. Shell integration looks like the right signal,
+ * but it fires before the PTY is settled for Claude's interactive TUI.
  */
 function sendWhenReady(terminal: vscode.Terminal, record: QueueRecord): void {
   const SEND_DELAY_MS = Number(process.env.VZT_VSCODE_SEND_DELAY_MS || 1200);
@@ -380,6 +534,42 @@ export function activate(context: vscode.ExtensionContext): void {
   context.subscriptions.push(
     vscode.commands.registerCommand("vzt-mux.refresh", () => tree.refresh()),
 
+    vscode.commands.registerCommand("vzt-mux.doctor", () => {
+      const r = appendDoctor(context);
+      outputChannel.show(true);
+      updateStatusBar();
+      if (r.kind === "setup") {
+        vscode.window.showWarningMessage("VZT: protocol setup is missing for this workspace and globally.");
+      } else {
+        vscode.window.showInformationMessage(`VZT: ${r.kind}`);
+      }
+    }),
+
+    vscode.commands.registerCommand("vzt-mux.installProject", () => runInstallTerminal(context, "project")),
+
+    vscode.commands.registerCommand("vzt-mux.installGlobal", () => runInstallTerminal(context, "global")),
+
+    vscode.commands.registerCommand("vzt-mux.openShipRun", async () => {
+      await vscode.commands.executeCommand("workbench.view.extension.vztShip");
+      await vscode.commands.executeCommand("vztShipRun.focus");
+    }),
+
+    vscode.commands.registerCommand("vzt-mux.startShipWatchFromSpec", async () => {
+      const picked = await vscode.window.showOpenDialog({
+        canSelectFiles: true,
+        canSelectFolders: false,
+        canSelectMany: false,
+        filters: { "VZT ship specs": ["md"], "All files": ["*"] },
+        openLabel: "Start Ship Watch",
+      });
+      const spec = picked?.[0]?.fsPath;
+      if (!spec) return;
+      const command = `${cliCommand(context)} ship-watch ${shellQuote(spec)} --mux vscode`;
+      const t = vscode.window.createTerminal({ name: "VZT ship-watch", cwd: path.dirname(spec) });
+      t.show(false);
+      t.sendText(command, true);
+    }),
+
     // Jump to the unit's terminal without leaving the window.
     vscode.commands.registerCommand("vzt-mux.focusTerminal", (item: UnitItem) => {
       const t = terminals.get(item.record.unitKey);
@@ -425,6 +615,7 @@ export function activate(context: vscode.ExtensionContext): void {
     processQueue();
     processStatus();
     tree.refresh();
+    updateStatusBar();
   }, POLL_INTERVAL_MS);
 
   // Ensure the interval is cleared on deactivation via context.subscriptions.
@@ -441,6 +632,21 @@ export function activate(context: vscode.ExtensionContext): void {
           terminals.delete(unitKey);
           break;
         }
+      }
+      updateStatusBar();
+    })
+  );
+
+  context.subscriptions.push(
+    vscode.workspace.onDidChangeWorkspaceFolders(() => {
+      updateStatusBar();
+      void maybePromptSetup(context);
+    }),
+    vscode.workspace.onDidChangeConfiguration((event) => {
+      if (event.affectsConfiguration("vztMux")) {
+        ensureDirs();
+        writeHostHeartbeat(context);
+        updateStatusBar();
       }
     })
   );
@@ -466,6 +672,11 @@ export function activate(context: vscode.ExtensionContext): void {
       }
     })
   );
+
+  if (vscode.workspace.getConfiguration("vztMux").get<boolean>("autoDoctorOnStartup") !== false) {
+    appendDoctor(context);
+  }
+  void maybePromptSetup(context);
 }
 
 export function deactivate(): void {

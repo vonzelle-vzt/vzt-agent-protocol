@@ -4,6 +4,12 @@ A thin VS Code companion extension for the VZT Agent Protocol. It lets
 `vzt-agent ship-watch --mux vscode` open each ship unit as a native VS Code
 integrated terminal instead of a tmux pane.
 
+It is meant to be **passively active** in daily projects: when VS Code opens,
+the extension loads, writes its host heartbeat, checks whether the project or
+global `.claude/settings.json` is wired for VZT, and keeps a `VZT: ...` status
+bar item ready. It does not spawn agents by itself; it only starts work when
+you run Claude Code/VZT commands.
+
 ## What it does
 
 - Polls `~/.vzt/vscode-mux/queue/` for JSON files the CLI writes, one per ship
@@ -29,6 +35,15 @@ integrated terminal instead of a tmux pane.
   state (grey), and a unit that wrote outside its declared `FILES_IN_SCOPE`
   shows **`SCOPE_BREACH`** (red, a different icon from `FAIL`). A run from an
   older CLI has no wave data and renders as a flat list, same as before.
+- Shows readiness in the status bar: `ready`, `setup needed`, `running`, or
+  `blocked`. Clicking it runs **VZT: Doctor** and writes the current mux dir,
+  hook install state, and queue/state/unit counts to the output channel.
+- Offers daily-use commands:
+  - **VZT: Doctor**
+  - **VZT: Install Protocol In This Project**
+  - **VZT: Install Protocol Globally**
+  - **VZT: Open Ship Run**
+  - **VZT: Start Ship Watch From Spec**
 
 ### Will my agents survive a closed window?
 
@@ -61,10 +76,9 @@ channel and the status bar — not on the tab.
 ## Install
 
 ```bash
-cd vscode
 npm install
-npm run package          # → vzt-mux-<version>.vsix
-code --install-extension vzt-mux-*.vsix
+npm --prefix vscode install
+npm run install:vscode:local
 ```
 
 Then **Developer: Reload Window**. The extension host caches its code, so a
@@ -93,6 +107,16 @@ if they don't already exist, then starts polling.
 
 - **VZT: Watch Ship Run** (`vzt-mux.watchShipRun`) — reveals all known ship
   unit terminals. If none are active, shows an info message instead.
+- **VZT: Doctor** (`vzt-mux.doctor`) — reports readiness, mux directory,
+  project/global protocol install state, and queue/state/unit counts.
+- **VZT: Install Protocol In This Project** (`vzt-mux.installProject`) —
+  opens a terminal that runs `vzt-agent install --target <workspace>` using the
+  local repo CLI when available, else the GitHub `npx` entrypoint.
+- **VZT: Install Protocol Globally** (`vzt-mux.installGlobal`) — opens a
+  terminal that runs `vzt-agent install --global` the same way.
+- **VZT: Open Ship Run** (`vzt-mux.openShipRun`) — focuses the VZT Ship view.
+- **VZT: Start Ship Watch From Spec** (`vzt-mux.startShipWatchFromSpec`) —
+  picks a `SPEC.md` and starts `ship-watch --mux vscode` in a terminal.
 - **VZT: Refresh Ship Run** (`vzt-mux.refresh`) — force a tree refresh (it
   also polls every second).
 
@@ -117,3 +141,12 @@ vzt-agent ship-watch --mux vscode
 The CLI is responsible for writing queue and state files per the filesystem
 contract in this repo's ship-watch mux code; this extension only reads and
 reacts to them.
+
+## Settings
+
+- `vztMux.baseDir` — overrides the mux filesystem directory. Empty means
+  `~/.vzt/vscode-mux`; `VZT_VSCODE_DIR` still wins when set.
+- `vztMux.autoDoctorOnStartup` — defaults on; runs a lightweight readiness
+  check when the extension activates.
+- `vztMux.showSetupPrompts` — defaults on; shows a one-time setup prompt in a
+  workspace with no project/global VZT hooks.

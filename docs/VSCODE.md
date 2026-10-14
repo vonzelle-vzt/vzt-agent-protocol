@@ -21,6 +21,13 @@ and the VS Code extension both read. Whatever hooks are wired there —
 **There is no extra setup to make routing work in VS Code.** If `vzt-agent
 doctor --global` is green in a terminal, it's green for the extension too.
 
+The companion extension is deliberately **always ready** in VS Code: it
+activates after startup, writes `~/.vzt/vscode-mux/host.json`, shows a `VZT: ...`
+status-bar item, and reports whether the current workspace or global
+`.claude/settings.json` is wired for VZT. It does **not** auto-start Claude,
+agents, or ship runs; it only keeps the control surface ready for the moment
+you ask for work.
+
 ### The honest caveat
 
 The VS Code extension's chat webview is not the full Claude Code engine. It
@@ -212,16 +219,39 @@ Reading a running agent's diff in the editor is the thing an external
 multiplexer structurally cannot offer, because its panes live outside the
 editor process.
 
+### Daily commands
+
+The extension contributes the commands you need for everyday project use:
+
+| command | what it does |
+|---|---|
+| `VZT: Doctor` | prints extension version, mux directory, hook install state, and queue/state/unit counts |
+| `VZT: Install Protocol In This Project` | opens a terminal running `vzt-agent install --target <workspace>` via the local CLI when available, else GitHub `npx` |
+| `VZT: Install Protocol Globally` | opens a terminal running `vzt-agent install --global` the same way |
+| `VZT: Open Ship Run` | focuses the Ship Run tree |
+| `VZT: Start Ship Watch From Spec` | picks a `SPEC.md` and starts `ship-watch --mux vscode` |
+
+The status bar reports `VZT: ready`, `setup needed`, `running`, or `blocked`.
+Click it to run `VZT: Doctor`.
+
 ### Environment
 
 | variable | default | what it does |
 |---|---|---|
 | `VZT_MUX` | `orca` | default backend when `--mux` is omitted |
-| `VZT_VSCODE_DIR` | `~/.vzt/vscode-mux` | root of the filesystem contract |
+| `VZT_VSCODE_DIR` | `~/.vzt/vscode-mux` | root of the filesystem contract; overrides the `vztMux.baseDir` VS Code setting |
 | `VZT_START_GRACE_MS` | `90000` | how long to wait for a unit to show life before giving up on it |
 | `VZT_VSCODE_SEND_DELAY_MS` | `1200` | fallback delay before sending, when shell integration is unavailable |
 | `VZT_VSCODE_DRAIN_GRACE_MS` | `8000` | how long dispatch waits for the extension to consume a queue record |
 | `VZT_VSCODE_SKIP_PERMISSIONS` | `1` | set `0` to keep permission prompts in unit terminals |
+
+### VS Code settings
+
+| setting | default | what it does |
+|---|---|---|
+| `vztMux.baseDir` | empty | mux filesystem directory; empty means `~/.vzt/vscode-mux` |
+| `vztMux.autoDoctorOnStartup` | `true` | logs a lightweight readiness check when VS Code opens |
+| `vztMux.showSetupPrompts` | `true` | shows a one-time setup prompt when no project/global VZT hooks are found |
 
 ### Queue records are scoped to a window (fixed in 1.13.0)
 

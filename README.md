@@ -228,6 +228,18 @@ for idle detection. Setup + the honest constraints (VS Code can't rename termina
 tabs, so PASS/FAIL shows in a "VZT Ship" output channel + status bar) are in
 [`docs/VSCODE.md`](docs/VSCODE.md).
 
+For daily VS Code use, install the local companion once from this checkout:
+
+```bash
+npm --prefix vscode install
+npm run install:vscode:local
+```
+
+After reloading VS Code, the extension is passively active in every workspace:
+the `VZT: ...` status bar item shows `ready`, `setup needed`, `running`, or
+`blocked`; **VZT: Doctor** reports hook and mux state; and **VZT: Start Ship
+Watch From Spec** launches a `--mux vscode` run from an existing `SPEC.md`.
+
 One command: dispatch each dependency **wave** of units as a `claude` worktree pane, at
 most `--max-concurrent` (default 4, `0` = unlimited) in flight at once → wait for each
 to finish → auto-run its oracle, stamp its card, record the ledger → integration gate →

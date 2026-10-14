@@ -48,6 +48,9 @@ function makeVscodeStub() {
       fire() {}
       dispose() {}
     },
+    workspace: {
+      getConfiguration: () => ({ get: () => '' }),
+    },
   };
 }
 
