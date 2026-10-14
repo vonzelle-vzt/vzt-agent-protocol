@@ -104,6 +104,12 @@ function watch({ tmp, orca, specPath }, env = {}) {
   const log = path.join(tmp, 'orca.log');
   const state = path.join(tmp, 'orca-state.json');
   fs.writeFileSync(log, '');
+  // ship-watch pre-trusts each unit worktree in Claude's config; point it at a
+  // throwaway one so the suite never writes temp paths into ~/.claude.json.
+  const claudeDir = path.join(tmp, 'claude-config');
+  fs.mkdirSync(claudeDir, { recursive: true });
+  if (!fs.existsSync(path.join(claudeDir, '.claude.json'))) fs.writeFileSync(path.join(claudeDir, '.claude.json'), '{"projects":{}}');
+  env = { CLAUDE_CONFIG_DIR: claudeDir, ...env };
   // spawnSync, not execFileSync: the dispatch diagnostics this asserts on go to
   // STDERR, which execFileSync throws away on a zero exit.
   const r = spawnSync(process.execPath, [CLI, 'ship-watch', specPath, '--mux', 'orca', '--orca', orca], {
@@ -200,6 +206,33 @@ test('the fallback shell tab is closed once its unit has been graded', () => {
     const lastWait = calls.map(verbOf).lastIndexOf('terminal wait');
     assert.ok(firstClose > lastWait || lastWait === -1 || firstClose > calls.findIndex((a) => verbOf(a) === 'terminal wait'),
       'the shell was closed before the agent was waited on');
+  } finally {
+    fs.rmSync(s.tmp, { recursive: true, force: true });
+  }
+});
+
+test('every unit worktree is based on the primary checkout HEAD, not the remote default', () => {
+  const s = scaffold(['u1', 'u2']);
+  try {
+    const head = git(s.repo, 'rev-parse', 'HEAD').trim();
+    const { out, calls } = watch(s);
+    const creates = calls.filter((a) => verbOf(a) === 'worktree create');
+    assert.equal(creates.length, 2, out);
+    for (const c of creates) assert.equal(arg(c, '--base-branch'), head, `create lacked --base-branch ${head}: ${JSON.stringify(c)}`);
+  } finally {
+    fs.rmSync(s.tmp, { recursive: true, force: true });
+  }
+});
+
+test('every unit worktree is pre-trusted in the (test) Claude config before its pane opens', () => {
+  const s = scaffold(['u1', 'u2']);
+  try {
+    const { out } = watch(s);
+    const cfg = JSON.parse(fs.readFileSync(path.join(s.tmp, 'claude-config', '.claude.json'), 'utf8'));
+    const wtRoot = fs.realpathSync(path.join(s.tmp, 'wt'));
+    for (const name of ['panes-u1', 'panes-u2']) {
+      assert.deepEqual(cfg.projects[path.join(wtRoot, name)], { hasTrustDialogAccepted: true }, out);
+    }
   } finally {
     fs.rmSync(s.tmp, { recursive: true, force: true });
   }

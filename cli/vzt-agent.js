@@ -1221,8 +1221,21 @@ function orcaBackend(args) {
   // `terminal create` adds the agent. So the agent handle is the one returned
   // by terminal create — never the worktree's startupTerminal — or waitIdle
   // would poll an idle shell and grade the unit the instant it launched.
-  const createArgv = (spec, u) => ['worktree', 'create', '--repo', `path:${spec.root}`,
-    '--name', key(spec, u), '--no-parent', '--setup', 'run', '--json'];
+  // --base-branch pins the unit to the primary checkout's HEAD. Without it Orca
+  // bases every worktree on the repo's default (origin/main), so commits that are
+  // local-only — the SPEC itself, a merge the units build on — are invisible to
+  // the units. Observed 2026-10-14: u1 of vscode-agent-bus started 5 commits
+  // behind, without its own SPEC.md. A sha, not a branch name, so it cannot be
+  // re-resolved against the remote.
+  const baseSha = (spec) => {
+    try { return execFileSync('git', ['-C', spec.root, 'rev-parse', 'HEAD'], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] }).trim(); } catch { return null; }
+  };
+  const createArgv = (spec, u) => {
+    const base = baseSha(spec);
+    return ['worktree', 'create', '--repo', `path:${spec.root}`,
+      '--name', key(spec, u), '--no-parent', '--setup', 'run',
+      ...(base ? ['--base-branch', base] : []), '--json'];
+  };
   const stateDir = path.join(VZT_VSCODE_DIR, 'state');
   // The lifecycle env rides INSIDE the --command string because neither
   // `orca terminal create` nor `orca terminal split` has an --env flag
