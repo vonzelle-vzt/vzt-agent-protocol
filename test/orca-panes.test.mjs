@@ -259,3 +259,16 @@ test('the integration gate sees the primary checkout\'s installed node_modules',
     fs.rmSync(s.tmp, { recursive: true, force: true });
   }
 });
+
+test('the integration gate runs the repo\'s orca.yaml setup hook in its worktree', () => {
+  // vzt-orca-flow's live doctor failed in the bare integration worktree because
+  // the gitignored .pipeline/ state its setup hook creates was missing (2026-10-14).
+  const s = scaffold(['u1', 'u2'], 'test -f .setup-ran');
+  try {
+    fs.writeFileSync(path.join(s.repo, 'orca.yaml'), '# hook\nsetup:\n  # comment\n  command: touch .setup-ran\n');
+    const { out } = watch(s);
+    assert.match(out, /integration gate … PASS/, out);
+  } finally {
+    fs.rmSync(s.tmp, { recursive: true, force: true });
+  }
+});

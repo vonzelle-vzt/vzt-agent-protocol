@@ -16,7 +16,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import os from 'node:os';
-import { execFileSync, spawn } from 'node:child_process';
+import { execFileSync, spawn, spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { trustClaudeWorkspace } from './claude-trust.mjs';
 import { parseSpec, parseConnections, connectionsOf, validateSpec, planWaves, depsOf, pathInScope, reduceLedger, nextAction, unitLine } from './ship-lib.mjs';
@@ -2300,6 +2300,31 @@ function linkDependencyDirs(root, tmp) {
   }
 }
 
+/**
+ * Run the repo's Orca setup hook (`orca.yaml` → `setup.command`) in the bare
+ * integration worktree — the same bootstrap every UNIT worktree gets from
+ * `orca worktree create --setup run`.
+ *
+ * Without it the gate runs in a checkout that is missing all gitignored local
+ * state the units had: vzt-orca-flow's `.pipeline/` review-gate state, so its
+ * `live doctor` check failed ("pipeline state NOT initialized") on
+ * terminal-layout-0 even though both units passed (2026-10-14). Never throws:
+ * a failed hook is reported and the gate then shows what is missing.
+ */
+function runRepoSetup(root, tmp) {
+  let cmd = null;
+  try {
+    const yaml = fs.readFileSync(path.join(root, 'orca.yaml'), 'utf8');
+    const m = yaml.match(/^setup:\s*\n(?:[ \t]+#.*\n)*[ \t]+command:\s*(.+)$/m);
+    if (m) cmd = m[1].trim().replace(/^(['"])(.*)\1$/, '$2');
+  } catch { return; } // no orca.yaml — nothing to run
+  if (!cmd) return;
+  const r = spawnSync('bash', ['-c', cmd], { cwd: tmp, encoding: 'utf8', timeout: 180000 });
+  if (r.status !== 0) {
+    console.log(`\n    integration setup hook failed (${cmd}): ${`${r.stderr || r.error || ''}`.trim().split('\n').slice(-2).join(' / ')}`);
+  }
+}
+
 function runIntegrationGate(spec, be, units) {
   const check = spec.integration && spec.integration.machineCheck;
   if (!check) { console.log('\nintegration gate: (none declared)'); return { ok: true, status: 'NONE' }; }
@@ -2320,6 +2345,7 @@ function runIntegrationGate(spec, be, units) {
     return { ok: false, status: 'NO_WORKTREE' };
   }
   linkDependencyDirs(spec.root, tmp);
+  runRepoSetup(spec.root, tmp);
 
   try {
     const applied = [];
