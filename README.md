@@ -2,7 +2,7 @@
 
 ![VZT Agent Protocol — automatic model routing for Claude Code](assets/banner.jpg)
 
-**Automatic model routing for Claude Code — Fable 5, Opus 5, Sonnet 5, Haiku 4.5. Right model, right task, zero manual switching.**
+**Automatic model routing for Claude Code — Fable 5.1, Opus 5.5, Sonnet 5.5, Haiku 5.5. Right model, right task, zero manual switching.**
 
 Part of the [VZT Tech Consulting Protocol](https://github.com/vonzelle-vzt/VZT-Tech-Consulting-Protocol) ecosystem.
 
@@ -26,22 +26,22 @@ with zero API cost for the routing itself:
 
 | Tier | Model | Owns |
 |------|-------|------|
-| 4 | **Fable 5** | No-prior-art architecture, impossible bugs, root-cause, security analysis |
-| 3+ | **Opus 5** @ `max` | Routine planning — architecture, specs, roadmaps, migration plans (the `opus@max` rung) |
-| 3 | **Opus 5** | Large refactors, dense algorithms, performance surgery, load-bearing review |
-| 2 | **Sonnet 5** | Standard implementation — the default (burns its own separate weekly bucket) |
-| 1 | **Haiku 4.5** | Search, summaries, renames, formatting, commit messages — nearly free |
+| 4 | **Fable 5.1** | No-prior-art architecture, impossible bugs, root-cause, security analysis |
+| 3+ | **Opus 5.5** @ `max` | Routine planning — architecture, specs, roadmaps, migration plans (the `opus@max` rung) |
+| 3 | **Opus 5.5** | Large refactors, dense algorithms, performance surgery, load-bearing review |
+| 2 | **Sonnet 5.5** | Standard implementation — the default (burns its own separate weekly bucket) |
+| 1 | **Haiku 5.5** | Search, summaries, renames, formatting, commit messages — nearly free |
 
 **Why this preserves your limits:** Max plans meter a Sonnet-only weekly bucket
 *separately* from the all-models bucket that Fable/Opus consume. Routing
 execution to Sonnet and mechanical work to Haiku means your premium quota is
 spent only where premium reasoning actually changes the outcome.
 
-**Recommended setup — Opus first line:** sit on Opus 5 (`/model opus`) so strong
+**Recommended setup — Opus first line:** sit on Opus 5.5 (`/model opus`) so strong
 reasoning is always on tap, and let the protocol delegate routine builds *down*
 to Sonnet and mechanical work *down* to Haiku, reaching *up* to Fable only on the
-≤10% of turns that are genuinely frontier-hard. Opus 5 is a step change on deep
-reasoning at half Fable's cost, so planning now runs on the `opus@max` rung
+≤10% of turns that are genuinely frontier-hard. Opus 5.5 is a step change on deep
+reasoning at 40% of Fable's price, so planning now runs on the `opus@max` rung
 rather than the frontier tier. See [Chair Profiles](docs/CHAIR-PROFILES.md) for
 every chair's behavior.
 
@@ -72,11 +72,11 @@ node cli/vzt-agent.js doctor --global
 Restart Claude Code. Pick the chair that matches how you work — the protocol
 adapts the routing doctrine to it either way:
 
-- **Opus 5 chair** (`/model opus`) — build *and plan* inline, delegate routine
+- **Opus 5.5 chair** (`/model opus`) — build *and plan* inline, delegate routine
   execution *down* to Sonnet and mechanical work to Haiku, escalate *up* to Fable
   only for no-prior-art architecture and impossible bugs. Best when you want
   strong first-line reasoning on tap and Sonnet as your workhorse below it.
-- **Sonnet 5 chair** (`/model sonnet`) — most work stays inline on the
+- **Sonnet 5.5 chair** (`/model sonnet`) — most work stays inline on the
   Sonnet-only bucket; escalate *up* to Opus/Fable only when a task earns it.
   Best for maximum quota efficiency.
 
@@ -120,13 +120,13 @@ its pinned model regardless of your session model:
 When up- or down-tier work needs the **full conversation context** (subagents
 start fresh), these switch the *current turn's* model in place:
 
-- `/vzt-design <task>` — plan this turn on **Opus 5 @ `max`** (the `opus@max`
+- `/vzt-design <task>` — plan this turn on **Opus 5.5 @ `max`** (the `opus@max`
   rung — the default planning turn)
-- `/vzt-plan <task>` — plan this turn on **Fable 5** (only when the design has
+- `/vzt-plan <task>` — plan this turn on **Fable 5.1** (only when the design has
   no prior art to reason from)
-- `/vzt-fix <bug>` — root-cause this turn on **Fable 5**
-- `/vzt-build <step>` — execute this turn on **Sonnet 5**
-- `/vzt-quick <task>` — mechanical turn on **Haiku 4.5**
+- `/vzt-fix <bug>` — root-cause this turn on **Fable 5.1**
+- `/vzt-build <step>` — execute this turn on **Sonnet 5.5**
+- `/vzt-quick <task>` — mechanical turn on **Haiku 5.5**
 - `/vzt-ui [extract|apply]` — the **visual lane**: author a repo's `DESIGN.md`
   from its real token layer, then apply it. (No model pin — the tier depends on
   whether the taste cache exists; see below.)
@@ -149,8 +149,8 @@ The session model returns on your next prompt.
 
 ```
 you: "build feature X"  (a non-trivial, multi-part feature)
- └─ PLAN → vzt-architect (Opus 5, effort max)  ·   or /vzt-design for an in-context turn
-     ·    (novel/greenfield design instead? → vzt-planner (Fable 5) or /vzt-plan)
+ └─ PLAN → vzt-architect (Opus 5.5, effort max)  ·   or /vzt-design for an in-context turn
+     ·    (novel/greenfield design instead? → vzt-planner (Fable 5.1) or /vzt-plan)
      └─ plan with step-routing table + load-bearing seam flagged
          ├─ steps tagged sonnet → vzt-builder        (parallel)
          ├─ steps tagged haiku  → vzt-mechanic/scout (parallel)
@@ -617,7 +617,7 @@ a vibe.
 
 - Claude Code ≥ 2.1.170 (skill/agent `model:` frontmatter incl. `fable` alias)
 - Node.js ≥ 18
-- A plan with access to Fable 5 (falls back gracefully: `availableModels`
+- A plan with access to Fable 5.1 (falls back gracefully: `availableModels`
   restrictions make blocked tiers inherit the session model)
 
 ## Docs
@@ -629,6 +629,32 @@ a vibe.
 - [CLAUDE.md snippet for manual installs](templates/CLAUDE-snippet.md)
 
 ## Release notes
+
+### 1.19.0 — the 5.5 lineup: Fable 5.1, Opus 5.5, Sonnet 5.5, Haiku 5.5
+
+The doctrine named the previous generation (Fable 5, Opus 5, Sonnet 5,
+Haiku 4.5) in every hook, agent, skill and doc, while a few surfaces already said
+5.5. That made the lineup inconsistent. Fleet agents pin aliases (`model: opus`),
+so they were already running the new models. Only the prose and the cost math
+were behind.
+
+- **Names.** Every shipped surface now names Fable 5.1 / Opus 5.5 / Sonnet 5.5 /
+  Haiku 5.5. The retired-model guard in `test/classifier.test.mjs` now fails on
+  the old names too, and on `haiku-4-5`. It matches `Opus 5` but not `Opus 5.5`.
+- **Cost ratios re-anchored** to sticker pricing: Fable 5.1 $10/$50, Opus 5.5
+  $4/$20, Sonnet 5.5 $2/$10, Haiku 5.5 $0.10/$0.50 per MTok. The
+  `TIERS.cost` multipliers move from 10/5/3/1 to **100/40/20/1**. Haiku 5.5 is
+  20× cheaper than Sonnet 5.5 (above 100K-token prompts it is $0.50/$2.50, so
+  20/8/4/1). Because of that gap, pushing recon and mechanical work down to Haiku
+  matters more than it did. Opus 5.5 costs 40% of Fable's price, down from half,
+  so the `opus@max` planning rung costs less than before.
+- **`/fast`** on Opus 5.5 is $8/$40 per MTok, 2× standard. Before, the
+  session-start hook quoted Opus 5's $10/$50.
+- **Effort defaults.** On the API, Opus 5.5 and Haiku 5.5 default to `medium`,
+  while Sonnet 5.5 and Fable 5.1 default to `high`. Sonnet 5.5 recalibrated its
+  levels. The routing docs now say to set effort explicitly instead of relying
+  on the default.
+- The routing logic itself is unchanged: same signals, same rungs, same agents.
 
 ### 1.18.0 — the agent bus, and three silent ship-watch failures on Orca
 

@@ -71,7 +71,7 @@ shows them.
 - **The Opus tier always runs the gates — no opt-in.** Every Opus surface
   (`vzt-architect`, `vzt-heavy-builder`, `vzt-reviewer`, the Opus chair profile,
   and every Opus-targeted `[VZT-ROUTE]` directive) carries them by default. The
-  model stays Opus 5; only the working process is Fable's. Same discipline,
+  model stays Opus 5.5; only the working process is Fable's. Same discipline,
   cheaper model — and as the Opus tier climbs, that trade gets better, not
   worse: the gates are why the `opus@max` rung can take planning that used to
   need the frontier tier.

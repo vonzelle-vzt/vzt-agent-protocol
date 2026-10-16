@@ -96,7 +96,7 @@ test('classifier hook emits a directive for a plan prompt', () => {
   });
   const parsed = JSON.parse(out);
   assert.equal(parsed.hookSpecificOutput.hookEventName, 'UserPromptSubmit');
-  assert.match(parsed.hookSpecificOutput.additionalContext, /Fable 5/);
+  assert.match(parsed.hookSpecificOutput.additionalContext, /Fable 5\.1/);
   const ctx = parsed.hookSpecificOutput.additionalContext;
   assert.match(ctx, /@ effort (low|medium|high)/);
 });
@@ -119,7 +119,7 @@ test('session-start hook emits chair profile', () => {
   });
   const parsed = JSON.parse(out);
   assert.equal(parsed.hookSpecificOutput.hookEventName, 'SessionStart');
-  assert.match(parsed.hookSpecificOutput.additionalContext, /Chair = Sonnet 5/);
+  assert.match(parsed.hookSpecificOutput.additionalContext, /Chair = Sonnet 5\.5/);
 });
 
 // ——— v1.5.0: /vzt-ship —————————————————————————————————————————————————————

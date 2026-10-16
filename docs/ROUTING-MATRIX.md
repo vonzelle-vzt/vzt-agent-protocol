@@ -9,11 +9,11 @@ burns the quota this protocol exists to protect.
 <!-- sync: TIERS in hooks/vzt-route-classifier.mjs — test/classifier.test.mjs asserts the Cost column matches -->
 | Tier | Model | Alias | Owns | Fleet agents | Turn skill | Cost | Intelligence | Taste |
 |------|-------|-------|------|--------------|------------|------|--------------|-------|
-| 4 | Claude Fable 5 | `fable` | Planning with **no prior art**: novel/greenfield architecture, from-scratch system design, one-way-door sharding/replication/consensus/multi-tenancy calls. Impossible bugs, root-cause analysis, security analysis | `vzt-planner`, `vzt-oracle` | `/vzt-plan`, `/vzt-fix` | 10× | 10 | 10 |
-| 3+ | Claude Opus 5.5 @ `max` | `opus@max` | **Routine planning** — architecture, tech specs, roadmaps, migration plans, PRD breakdown, approach selection | `vzt-architect` | `/vzt-design` | 5× | 9 | 9 |
-| 3 | Claude Opus 5.5 | `opus` | Large refactors, migrations, dense algorithms, performance/concurrency surgery, load-bearing review. **Authoring visual taste** when no `DESIGN.md` exists | `vzt-heavy-builder`, `vzt-reviewer`, `vzt-art-director` | `/vzt-ui` | 5× | 9 | 9 |
-| 2 | Claude Sonnet 5.5 | `sonnet` | Standard implementation: features, bug fixes, tests, endpoints, components, integration — **the default tier**. **Applying visual taste** from an existing `DESIGN.md` | `vzt-builder`, `vzt-stylist` | `/vzt-build` | 3× | 8 | 8 |
-| 1 | Claude Haiku 4.5 | `haiku` | Search/recon, summaries, renames, typo fixes, formatting, lint, version bumps, commit messages, file moves | `vzt-scout`, `vzt-mechanic` | `/vzt-quick` | 1× | 5 | 4 |
+| 4 | Claude Fable 5.1 | `fable` | Planning with **no prior art**: novel/greenfield architecture, from-scratch system design, one-way-door sharding/replication/consensus/multi-tenancy calls. Impossible bugs, root-cause analysis, security analysis | `vzt-planner`, `vzt-oracle` | `/vzt-plan`, `/vzt-fix` | 100× | 10 | 10 |
+| 3+ | Claude Opus 5.5 @ `max` | `opus@max` | **Routine planning** — architecture, tech specs, roadmaps, migration plans, PRD breakdown, approach selection | `vzt-architect` | `/vzt-design` | 40× | 9 | 9 |
+| 3 | Claude Opus 5.5 | `opus` | Large refactors, migrations, dense algorithms, performance/concurrency surgery, load-bearing review. **Authoring visual taste** when no `DESIGN.md` exists | `vzt-heavy-builder`, `vzt-reviewer`, `vzt-art-director` | `/vzt-ui` | 40× | 9 | 9 |
+| 2 | Claude Sonnet 5.5 | `sonnet` | Standard implementation: features, bug fixes, tests, endpoints, components, integration — **the default tier**. **Applying visual taste** from an existing `DESIGN.md` | `vzt-builder`, `vzt-stylist` | `/vzt-build` | 20× | 8 | 8 |
+| 1 | Claude Haiku 5.5 | `haiku` | Search/recon, summaries, renames, typo fixes, formatting, lint, version bumps, commit messages, file moves | `vzt-scout`, `vzt-mechanic` | `/vzt-quick` | 1× | 5 | 4 |
 
 ## Decision procedure
 
@@ -113,7 +113,7 @@ down a tier.
 - Max-plan weekly limits have **two buckets**: one for all models, one for
   **Sonnet only**. Work routed to `vzt-builder`/`/vzt-build` draws on the
   Sonnet bucket and preserves the all-models bucket that Fable and Opus burn.
-- Per-turn cost is tiered (Opus is several × Sonnet, Sonnet several × Haiku),
+- Per-turn cost is tiered (Opus 5.5 is 2× Sonnet 5.5, Sonnet 5.5 is 20× Haiku 5.5),
   so pushing recon and mechanical work to Haiku is nearly free.
 
 ## Effort routing
@@ -129,7 +129,7 @@ down a tier.
   **down**: Opus 5.5 is unusually strong at `low`/`medium`, so effort defaults
   carried over from earlier models over-spend. `xhigh` remains the right call
   for the heavy-builder's dense work.
-- The per-tier effort defaults above were set for Opus 5 / Sonnet 5 and should be re-swept for 5.5.
+- API effort defaults differ by tier: Opus 5.5 and Haiku 5.5 default to `medium`, Sonnet 5.5 and Fable 5.1 to `high` (Sonnet 5.5 recalibrated its levels, so re-sweep rather than carry old settings over). Set effort explicitly rather than relying on the default.
 
 **`/vzt-fable-mode` is a separate dial from tier/effort routing above**: it
 carries no `model:` pin and runs on whichever model the router already picked,

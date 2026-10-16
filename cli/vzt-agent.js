@@ -2,7 +2,7 @@
 /**
  * vzt-agent — installer/CLI for the VZT Agent Protocol.
  *
- * Installs automatic model routing (Fable 5 / Opus 5 / Sonnet 5 / Haiku 4.5)
+ * Installs automatic model routing (Fable 5.1 / Opus 5.5 / Sonnet 5.5 / Haiku 5.5)
  * into a Claude Code project (.claude/) or globally (~/.claude/).
  *
  * Commands:

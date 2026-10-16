@@ -289,7 +289,7 @@ test('docs mirror the TIERS model names (currency guard — fails on the next mo
     'docs/CHAIR-PROFILES.md': fs.readFileSync(path.join(REPO_ROOT, 'docs', 'CHAIR-PROFILES.md'), 'utf8'),
   };
   for (const tier of Object.keys(TIERS)) {
-    // 'Opus 5 (heavy implementation/review)' -> 'Opus 5'
+    // 'Opus 5.5 (heavy implementation/review)' -> 'Opus 5.5'
     const model = TIERS[tier].label.replace(/\s*\(.*$/, '').trim();
     for (const [file, text] of Object.entries(surfaces)) {
       assert.ok(text.includes(model), `${file} does not mention "${model}" — TIERS says that is the ${tier} tier`);
@@ -412,15 +412,21 @@ test('the chair follows a mid-session /model switch, in BOTH directions', () => 
   );
 
   // The payload, when the harness supplies it, IS authoritative and self-heals.
-  assert.equal(chairFor({}, { model: 'claude-haiku-4-5' }), 'haiku');
-  assert.equal(JSON.parse(fs.readFileSync(chairFile, 'utf8'))['sess-1'], 'claude-haiku-4-5');
+  assert.equal(chairFor({}, { model: 'claude-haiku-5-5' }), 'haiku');
+  assert.equal(JSON.parse(fs.readFileSync(chairFile, 'utf8'))['sess-1'], 'claude-haiku-5-5');
 });
 
 test('no retired model version survives anywhere in the shipped protocol', () => {
   // Add a row here whenever a model is superseded; the value is the replacement.
   const RETIRED = [
-    [/Opus 4\.8/g, 'Opus 5'],
-    [/opus-4-8/g, 'claude-opus-5 (or the `opus` alias)'],
+    [/Opus 4\.8/g, 'Opus 5.5'],
+    [/opus-4-8/g, 'claude-opus-5-5 (or the `opus` alias)'],
+    // 2026-10-16: the 5.5 / 5.1 lineup. The lookahead keeps "Opus 5.5" from matching "Opus 5".
+    [/Fable 5(?!\.\d|\d)/g, 'Fable 5.1'],
+    [/Opus 5(?!\.\d|\d)/g, 'Opus 5.5'],
+    [/Sonnet 5(?!\.\d|\d)/g, 'Sonnet 5.5'],
+    [/Haiku 4\.5/g, 'Haiku 5.5'],
+    [/haiku-4-5/g, 'claude-haiku-5-5 (or the `haiku` alias)'],
   ];
   // Enumerating files by hand is how the guard grows holes: the audit found it
   // was missing vzt-design and vzt-plan (the two NEWEST skills), CLAUDE-snippet,

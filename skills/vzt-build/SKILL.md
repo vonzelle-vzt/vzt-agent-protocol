@@ -1,13 +1,13 @@
 ---
 name: vzt-build
-description: "Execute implementation work on Sonnet 5 in-context (burns the Sonnet-only usage bucket, preserves Opus/Fable quota). Use to execute an approved plan or any routine implementation when the session chair is an expensive model. Usage: /vzt-build <step or task>."
+description: "Execute implementation work on Sonnet 5.5 in-context (burns the Sonnet-only usage bucket, preserves Opus/Fable quota). Use to execute an approved plan or any routine implementation when the session chair is an expensive model. Usage: /vzt-build <step or task>."
 model: sonnet
 effort: medium
 ---
 
-# VZT Build — execution turn (Sonnet 5)
+# VZT Build — execution turn (Sonnet 5.5)
 
-This turn runs on Sonnet 5 regardless of the session chair — routine
+This turn runs on Sonnet 5.5 regardless of the session chair — routine
 execution should never burn Fable/Opus quota.
 
 1. **Execute the brief.** If a plan with a step-routing table exists in this

@@ -1,13 +1,13 @@
 ---
 name: vzt-fix
-description: "Root-cause a hard bug on Fable 5 with full conversation context. Use for impossible bugs — race conditions, heisenbugs, corruption, intermittent failures — especially after cheaper attempts in this session have failed. Usage: /vzt-fix <symptom or bug description>."
+description: "Root-cause a hard bug on Fable 5.1 with full conversation context. Use for impossible bugs — race conditions, heisenbugs, corruption, intermittent failures — especially after cheaper attempts in this session have failed. Usage: /vzt-fix <symptom or bug description>."
 model: fable
 effort: max
 ---
 
-# VZT Fix — frontier debugging turn (Fable 5)
+# VZT Fix — frontier debugging turn (Fable 5.1)
 
-This turn runs on Fable 5. Everything already tried in this conversation is
+This turn runs on Fable 5.1. Everything already tried in this conversation is
 context — do not repeat failed attempts; reason about why they failed.
 
 1. **Trace before theorizing.** Reproduce the failure or instrument the real

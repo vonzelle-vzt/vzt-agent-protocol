@@ -1,17 +1,17 @@
 ---
 name: vzt-plan
-description: "Plan the given task on Fable 5 with full conversation context — the LAST rung. Use ONLY when the design has no prior art to reason from: novel or greenfield architecture, from-scratch system design, one-way-door sharding/replication/consensus/multi-tenancy calls. For routine architecture, specs, roadmaps and migration plans use /vzt-design (Opus 5 @ max) instead — half the cost. Usage: /vzt-plan <task>."
+description: "Plan the given task on Fable 5.1 with full conversation context — the LAST rung. Use ONLY when the design has no prior art to reason from: novel or greenfield architecture, from-scratch system design, one-way-door sharding/replication/consensus/multi-tenancy calls. For routine architecture, specs, roadmaps and migration plans use /vzt-design (Opus 5.5 @ max) instead — half the cost. Usage: /vzt-plan <task>."
 model: fable
 effort: max
 ---
 
-# VZT Plan — frontier planning turn (Fable 5)
+# VZT Plan — frontier planning turn (Fable 5.1)
 
-This turn runs on Fable 5 (the skill's model override). Use the elevated
+This turn runs on Fable 5.1 (the skill's model override). Use the elevated
 capability for reasoning, not execution.
 
-**Check you need this rung first.** `/vzt-design` runs Opus 5 at `max` effort
-for half the cost and owns routine planning — architecture, tech specs,
+**Check you need this rung first.** `/vzt-design` runs Opus 5.5 at `max` effort
+for 40% of the price and owns routine planning — architecture, tech specs,
 roadmaps, migration plans. This turn is for planning with *no prior art to
 pattern-match against*: novel or greenfield architecture, from-scratch system
 design, one-way-door calls on sharding, replication, consensus, or

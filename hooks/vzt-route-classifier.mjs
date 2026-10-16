@@ -4,8 +4,8 @@
  *
  * Runs on every prompt. Scores the prompt against the routing matrix and
  * injects an advisory routing directive as additional context, so the session
- * automatically uses the right model tier (Fable 5 / Opus 5.5 / Sonnet 5.5 /
- * Haiku 4.5) without the user ever touching /model.
+ * automatically uses the right model tier (Fable 5.1 / Opus 5.5 / Sonnet 5.5 /
+ * Haiku 5.5) without the user ever touching /model.
  *
  * Deterministic, zero-API-cost, <50ms. Chair-aware: reads the session model
  * captured by vzt-session-start.mjs and inverts the routing doctrine
@@ -28,15 +28,16 @@ import { fileURLToPath } from 'node:url';
 const STATE_DIR = process.env.VZT_ROUTER_STATE_DIR || path.join(os.homedir(), '.claude', 'vzt-router');
 
 // cost = relative price multiplier vs Haiku, anchored to current sticker pricing
-// (Fable $10/$50, Opus $5/$25, Sonnet $3/$15, Haiku $1/$5 per 1M in/out →
-// ratios 10/5/3/1); intelligence/taste on a 10-scale.
+// (Fable 5.1 $10/$50, Opus 5.5 $4/$20, Sonnet 5.5 $2/$10, Haiku 5.5 $0.10/$0.50
+// per 1M in/out → ratios 100/40/20/1; Haiku 5.5 is $0.50/$2.50 past 100K-token
+// prompts, where the ratios compress to 20/8/4/1); intelligence/taste on a 10-scale.
 // Mirrored in docs/ROUTING-MATRIX.md and skills/vzt-route/SKILL.md — a sync
 // test enforces the cost values match across all three.
 export const TIERS = {
-  fable: { label: 'Fable 5 (frontier reasoning)', agents: { plan: 'vzt-planner', debug: 'vzt-oracle' }, effort: 'high', cost: 10, intelligence: 10, taste: 10 },
-  opus: { label: 'Opus 5 (heavy implementation/review)', agents: { build: 'vzt-heavy-builder', review: 'vzt-reviewer', horizon: 'vzt-heavy-builder', plan: 'vzt-architect', ui: 'vzt-art-director' }, effort: 'high', cost: 5, intelligence: 9, taste: 9 },
-  sonnet: { label: 'Sonnet 5 (standard execution)', agents: { build: 'vzt-builder', ui: 'vzt-stylist' }, effort: 'medium', cost: 3, intelligence: 8, taste: 8 },
-  haiku: { label: 'Haiku 4.5 (mechanical/recon)', agents: { scout: 'vzt-scout', mech: 'vzt-mechanic' }, effort: 'low', cost: 1, intelligence: 5, taste: 4 },
+  fable: { label: 'Fable 5.1 (frontier reasoning)', agents: { plan: 'vzt-planner', debug: 'vzt-oracle' }, effort: 'high', cost: 100, intelligence: 10, taste: 10 },
+  opus: { label: 'Opus 5.5 (heavy implementation/review)', agents: { build: 'vzt-heavy-builder', review: 'vzt-reviewer', horizon: 'vzt-heavy-builder', plan: 'vzt-architect', ui: 'vzt-art-director' }, effort: 'high', cost: 40, intelligence: 9, taste: 9 },
+  sonnet: { label: 'Sonnet 5.5 (standard execution)', agents: { build: 'vzt-builder', ui: 'vzt-stylist' }, effort: 'medium', cost: 20, intelligence: 8, taste: 8 },
+  haiku: { label: 'Haiku 5.5 (mechanical/recon)', agents: { scout: 'vzt-scout', mech: 'vzt-mechanic' }, effort: 'low', cost: 1, intelligence: 5, taste: 4 },
 };
 
 // Suggested per-prompt effort: mirrors the tier default, with three adjustments on
@@ -47,8 +48,8 @@ export const TIERS = {
 // Opus review and horizon-supervision stay at high (not dense inline coding).
 //
 // Opus PLAN returns 'max' — this is the `opus@max` rung of the escalation ladder,
-// and it is the one place the classifier suggests max. Opus 5 is a step change on
-// deep reasoning at half Fable's cost, so routine architecture/planning that used
+// and it is the one place the classifier suggests max. Opus 5.5 is a step change on
+// deep reasoning at 40% of Fable's price, so routine architecture/planning that used
 // to earn Fable now runs here instead (see the demotion in classify()). The older
 // "never returns max by construction" invariant was retired with that rung: max is
 // no longer exclusive to pinned fable agents.
@@ -85,10 +86,10 @@ const HORIZON_BUILD = /\b(build|implement|ship|create|write|stand up|scaffold|po
 
 // ——— FRONTIER_NOVEL: what still earns Fable on a PLAN ————————————————————
 //
-// Opus 5 is a step change on deep reasoning and long-horizon work at HALF Fable's
+// Opus 5.5 is a step change on deep reasoning and long-horizon work at 40% of Fable's
 // cost, with the full low..max effort ladder. That collapsed most of the planning
 // band: "design the auth system", "plan the migration", "write the tech spec" are
-// all Opus-at-max work now. What Opus 5 does NOT subsume is planning with no prior
+// all Opus-at-max work now. What Opus 5.5 does NOT subsume is planning with no prior
 // art to pattern-match against — a novel system, a from-scratch architecture, a
 // distributed-systems or multi-tenancy decision whose blast radius is the whole
 // product. Those keep the frontier tier.
@@ -170,7 +171,7 @@ export const TASTE_TIER = 'opus';
 
 // Signal groups. Each hit adds its weight to that tier's score.
 const SIGNALS = [
-  // ——— Fable 5: planning, architecture, hard reasoning ———
+  // ——— Fable 5.1: planning, architecture, hard reasoning ———
   { tier: 'fable', kind: 'plan', w: 3, re: /\b(architect(ure)?|system design|design (the|a|an) (system|schema|api|architecture)|tech(nical)? (spec|strategy|roadmap)|migration (plan|strategy)|plan (out|the)|prd|break (this|it) down|approach for)\b/i },
   { tier: 'fable', kind: 'debug', w: 3, re: /\b(root cause|race condition|deadlock|heisenbug|intermittent(ly)?|flaky|can'?t (figure|reproduce)|no idea why|impossible bug|corrupt(ed|ion)|memory leak|why (is|does|would|did).{0,40}(fail|break|crash|hang|wrong)|still (broken|failing) after)\b/i },
   { tier: 'fable', kind: 'plan', w: 2, re: /\b(trade-?offs?|evaluate (options|approaches)|compare (approaches|architectures|designs)|which (approach|architecture|design)|pros and cons)\b/i },
@@ -187,7 +188,7 @@ const SIGNALS = [
   // hole is adversarial reasoning; it is never recon.
   { tier: 'fable', kind: 'debug', w: 3, re: /\b(security hole|vulnerab|exploit|threat model|pen(etration)? test)\b/i },
 
-  // ——— Opus 5: heavy implementation, deep review ———
+  // ——— Opus 5.5: heavy implementation, deep review ———
   { tier: 'opus', kind: 'build', w: 3, re: /\b(refactor (the|this|our|across|everything)|large refactor|rewrite (the|this|our)|migrate (the|this|our|all|from)|overhaul|re-?architect|port (the|this|it) (to|from))\b/i },
   { tier: 'opus', kind: 'build', w: 2, re: /\b(performance|optimi[sz]e|concurren(t|cy)|parallel(ize)?|distributed|caching layer|algorithm)\b/i },
   { tier: 'opus', kind: 'review', w: 2, re: /\b(deep (review|dive)|thorough(ly)? (review|audit)|code review|review (the|this|my) (pr|diff|branch|change))\b/i },
@@ -215,7 +216,7 @@ const SIGNALS = [
   // whole-app restyle lands here rather than in a ship ceremony.
   { tier: 'opus', kind: 'ui', w: 3, re: VISUAL_TASTE },
 
-  // ——— Sonnet 5: standard build/execute (also the fallback default) ———
+  // ——— Sonnet 5.5: standard build/execute (also the fallback default) ———
   { tier: 'sonnet', kind: 'build', w: 2, re: /\b(implement|build|add (a|an|the)|create (a|an|the)|wire (up|in)|hook up|integrate|write (a|an|the|some)? ?(test|spec)s?|fix (the|this|a) bug|endpoint|component|page|form|crud|api route)\b/i },
   { tier: 'sonnet', kind: 'build', w: 1, re: /\b(update|change|adjust|tweak|extend|modify|improve)\b/i },
   // Visual SURFACE work. w2 matches the sonnet:build row it usually co-fires
@@ -226,7 +227,7 @@ const SIGNALS = [
   // "optimize the layout algorithm in the pdf renderer" is Opus build work.
   { tier: 'sonnet', kind: 'ui', w: 2, re: VISUAL_SURFACE },
 
-  // ——— Haiku 4.5: mechanical, recon, glue ———
+  // ——— Haiku 5.5: mechanical, recon, glue ———
   { tier: 'haiku', kind: 'mech', w: 3, re: /\b(typo|rename|bump (the )?version|format(ting)?|lint|prettier|sort (the )?imports|remove (unused|dead)|delete (the )?(comment|console\.log|log)s?|commit message|changelog entry|copy (the|this) file|move (the|this) file)\b/i },
   { tier: 'haiku', kind: 'scout', w: 3, re: /\b(where (is|are|does)|find (all|the|every)|list (all|the|every)|search (for|the)|grep|how many|which files?|locate|look up|what('| i)s in)\b/i },
   { tier: 'haiku', kind: 'scout', w: 2, re: /\b(summari[sz]e|tl;?dr|give me an overview|recap|status of)\b/i },
@@ -302,7 +303,7 @@ export function classify(prompt, cwd) {
   const confidence = bestScore >= 4 && bestScore - runnerUp >= 2 ? 'high' : bestScore >= 2 ? 'medium' : 'low';
 
   // The `opus@max` rung. A PLAN that won Fable on generic planning language, with no
-  // FRONTIER_NOVEL marker, is Opus-at-max work — same reasoning depth, half the cost.
+  // FRONTIER_NOVEL marker, is Opus-at-max work — same reasoning depth, 40% of the price.
   // Debug keeps Fable unconditionally; an impossible bug is frontier work either way.
   if (best === 'fable' && kinds.fable === 'plan' && !FRONTIER_NOVEL.test(prompt)) {
     matched.push('opus:plan(demoted-from-fable)');
@@ -414,7 +415,7 @@ function resolveChair(sessionId, payloadModel) {
   //   settings.json `model` is global, not session-scoped. It tracks the last
   //     `/model` anywhere, and it does NOT reliably clear — observed live on
   //     2026-07-29: it still read `claude-fable-5[1m]` while the session was
-  //     demonstrably on Opus 5, so the router reported the wrong chair.
+  //     demonstrably on Opus, so the router reported the wrong chair.
   //
   // So session-scoped-but-possibly-stale beats global-and-provably-stale:
   // chair.json first. settings.json only when this session has no entry at all,
@@ -519,7 +520,7 @@ export function directive(result, chair, env = process.env) {
       '  action: PLAN task on the `opus@max` rung — design first, do NOT start implementing. Produce a plan with a step-routing table whose execution steps hand DOWN to "vzt-builder".',
       `  how: inline at effort max if this chair is Opus or Fable; otherwise delegate to the "${t.agents.plan}" subagent, or invoke /vzt-design when the plan needs full conversation context.`,
       result.demotedFrom === 'fable'
-        ? '  why NOT Fable: this is planning with prior art to pattern-match against. Opus 5.5 covers that band at max effort for half the cost. Fable is reserved for planning with no prior art — a novel/greenfield/from-scratch architecture, distributed-systems or multi-tenancy decisions — and for impossible bugs (/vzt-fix). If this task is genuinely novel and you can say why, escalate one rung and say so.'
+        ? '  why NOT Fable: this is planning with prior art to pattern-match against. Opus 5.5 covers that band at max effort for 40% of the price. Fable is reserved for planning with no prior art — a novel/greenfield/from-scratch architecture, distributed-systems or multi-tenancy decisions — and for impossible bugs (/vzt-fix). If this task is genuinely novel and you can say why, escalate one rung and say so.'
         : '  escalation: if the design turns out to have no prior art to reason from, escalate one rung to Fable ("vzt-planner" / /vzt-plan) and state the reason.'
     );
   } else if (chair !== 'unknown' && target === RANK[chair] && result.tier !== 'haiku') {

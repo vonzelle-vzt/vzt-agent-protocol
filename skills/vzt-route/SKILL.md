@@ -14,11 +14,11 @@ can do it well. This skill is the canonical decision procedure; the
 <!-- sync: TIERS in hooks/vzt-route-classifier.mjs — test/classifier.test.mjs asserts the Cost column matches -->
 | Tier | Model | Owns | Fleet agents | Cost | Intelligence | Taste |
 |------|-------|------|--------------|------|--------------|-------|
-| 4 | **Fable 5** | Planning with **no prior art**: novel/greenfield architecture, from-scratch design, one-way-door sharding/replication/consensus/multi-tenancy. Impossible bugs, root-cause, security analysis | `vzt-planner`, `vzt-oracle` | 10× | 10 | 10 |
-| 3+ | **Opus 5.5** @ `max` | **Routine planning** — architecture, tech specs, roadmaps, migration plans, PRD breakdown, approach selection (the `opus@max` rung) | `vzt-architect` | 5× | 9 | 9 |
-| 3 | **Opus 5.5** | Large refactors, migrations, dense algorithms, performance/concurrency surgery, load-bearing review, **authoring visual taste** | `vzt-heavy-builder`, `vzt-reviewer`, `vzt-art-director` | 5× | 9 | 9 |
-| 2 | **Sonnet 5.5** | Standard implementation, features, bug fixes, tests, endpoints, components — the default. **Applying visual taste** | `vzt-builder`, `vzt-stylist` | 3× | 8 | 8 |
-| 1 | **Haiku 4.5** | Search/recon, summaries, renames, typos, formatting, version bumps, commit messages, file moves | `vzt-scout`, `vzt-mechanic` | 1× | 5 | 4 |
+| 4 | **Fable 5.1** | Planning with **no prior art**: novel/greenfield architecture, from-scratch design, one-way-door sharding/replication/consensus/multi-tenancy. Impossible bugs, root-cause, security analysis | `vzt-planner`, `vzt-oracle` | 100× | 10 | 10 |
+| 3+ | **Opus 5.5** @ `max` | **Routine planning** — architecture, tech specs, roadmaps, migration plans, PRD breakdown, approach selection (the `opus@max` rung) | `vzt-architect` | 40× | 9 | 9 |
+| 3 | **Opus 5.5** | Large refactors, migrations, dense algorithms, performance/concurrency surgery, load-bearing review, **authoring visual taste** | `vzt-heavy-builder`, `vzt-reviewer`, `vzt-art-director` | 40× | 9 | 9 |
+| 2 | **Sonnet 5.5** | Standard implementation, features, bug fixes, tests, endpoints, components — the default. **Applying visual taste** | `vzt-builder`, `vzt-stylist` | 20× | 8 | 8 |
+| 1 | **Haiku 5.5** | Search/recon, summaries, renames, typos, formatting, version bumps, commit messages, file moves | `vzt-scout`, `vzt-mechanic` | 1× | 5 | 4 |
 
 ## Decision procedure
 
@@ -107,7 +107,7 @@ written down, applying it is execution rather than judgement — so it routes do
   **down** — Opus 5.5 is unusually strong at `low`/`medium`, so effort defaults
   carried over from earlier models over-spend. `xhigh` stays right for the
   heavy-builder's dense work.
-- The per-tier effort defaults above were set for Opus 5 / Sonnet 5 and should be re-swept for 5.5.
+- API effort defaults differ by tier: Opus 5.5 and Haiku 5.5 default to `medium`, Sonnet 5.5 and Fable 5.1 to `high` (Sonnet 5.5 recalibrated its levels, so re-sweep rather than carry old settings over). Set effort explicitly rather than relying on the default.
 
 ## Delegation vs. turn-switch
 
@@ -232,7 +232,7 @@ silently clobber each other and **neither reports a problem**.
 The frontier tier designs and verifies; cheap tiers execute. When Fable or
 Opus orchestrates a multi-step or dynamic workflow, worker steps default to
 Sonnet (Haiku if mechanical) — measured results on routine steps are equal at
-~2–10× lower cost (see the Cost column above). Workers report back after each
+~2–100× lower cost (see the Cost column above). Workers report back after each
 step; the orchestrator uses the reports to design the next step. Never promote
 a worker step to the orchestrator's own tier without a stated reason.
 

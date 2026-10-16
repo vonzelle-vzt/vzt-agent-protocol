@@ -1,15 +1,15 @@
 ---
 name: vzt-design
-description: "Plan the given task on Opus 5 at max effort — the `opus@max` rung. Use for architecture, technical specs, roadmaps, migration plans, and breaking down a feature when the planning needs full conversation context. This is the DEFAULT planning turn; use /vzt-plan (Fable) only when the design is genuinely novel. Usage: /vzt-design <task>."
+description: "Plan the given task on Opus 5.5 at max effort — the `opus@max` rung. Use for architecture, technical specs, roadmaps, migration plans, and breaking down a feature when the planning needs full conversation context. This is the DEFAULT planning turn; use /vzt-plan (Fable) only when the design is genuinely novel. Usage: /vzt-design <task>."
 model: opus
 effort: max
 ---
 
-# VZT Design — planning turn on the `opus@max` rung (Opus 5)
+# VZT Design — planning turn on the `opus@max` rung (Opus 5.5)
 
-This turn runs Opus 5 at `max` effort (the skill's model + effort override). It is
-the **default planning turn** of the protocol. Opus 5 is a step change on deep
-reasoning at half Fable's cost, so `/vzt-plan` (Fable) is reserved for planning
+This turn runs Opus 5.5 at `max` effort (the skill's model + effort override). It is
+the **default planning turn** of the protocol. Opus 5.5 is a step change on deep
+reasoning at 40% of Fable's price, so `/vzt-plan` (Fable) is reserved for planning
 with no prior art — a novel or greenfield architecture, or a one-way-door
 distributed-systems call. Everything else lands here.
 

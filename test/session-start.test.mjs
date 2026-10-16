@@ -32,7 +32,7 @@ function runSessionStart(extraEnv = {}) {
 
 test('session-start names the Orca handle when visible panes are available', () => {
   const context = runSessionStart({ ORCA_TERMINAL_HANDLE: 'term_smoke' });
-  assert.ok(context.includes('Chair = Opus 5'), 'per-profile marker should survive');
+  assert.ok(context.includes('Chair = Opus 5.5'), 'per-profile marker should survive');
   assert.ok(context.includes('you ARE inside an Orca terminal (handle term_smoke)'), 'missing factual Orca handle wording');
   assert.ok(context.includes('--detach'), 'visible pane doctrine should mention detach');
   assert.ok(!context.includes('VISIBLE PARALLELISM — not available'), 'Orca session should not emit unavailable fallback');
@@ -40,7 +40,7 @@ test('session-start names the Orca handle when visible panes are available', () 
 
 test('session-start emits one unavailable line when no Orca terminal is detected', () => {
   const context = runSessionStart();
-  assert.ok(context.includes('Chair = Opus 5'), 'per-profile marker should survive');
+  assert.ok(context.includes('Chair = Opus 5.5'), 'per-profile marker should survive');
   assert.ok(context.includes('VISIBLE PARALLELISM — not available: no Orca terminal detected (ORCA_TERMINAL_HANDLE unset). Use Agent-tool subagents and say so.'));
   assert.ok(!context.includes('you ARE inside an Orca terminal'), 'non-Orca session should not claim a handle');
   assert.ok(!context.includes('vzt-orca-flow pane run'), 'non-Orca fallback should be a single unavailable line');

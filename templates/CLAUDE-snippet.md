@@ -17,7 +17,7 @@ Route every piece of work to the cheapest tier that can do it well:
 - **Heavy implementation** (tight coupling, algorithms, migrations, perf) →
   `vzt-heavy-builder` (Opus). Load-bearing review → `vzt-reviewer` (Opus).
 - **Planning** (architecture, tech specs, roadmaps, migration plans, PRD
-  breakdown) → `vzt-architect` (Opus 5 @ `max` — the `opus@max` rung), or
+  breakdown) → `vzt-architect` (Opus 5.5 @ `max` — the `opus@max` rung), or
   `/vzt-design` when full conversation context matters. This is where planning
   goes by default.
 - **No-prior-art planning** (novel or greenfield architecture, from-scratch

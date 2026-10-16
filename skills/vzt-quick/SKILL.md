@@ -1,13 +1,13 @@
 ---
 name: vzt-quick
-description: "Run a quick mechanical or lookup task on Haiku 4.5 in-context — cheapest possible turn. Use for renames, typo fixes, formatting, version bumps, commit messages, quick searches and summaries. Usage: /vzt-quick <task>."
+description: "Run a quick mechanical or lookup task on Haiku 5.5 in-context — cheapest possible turn. Use for renames, typo fixes, formatting, version bumps, commit messages, quick searches and summaries. Usage: /vzt-quick <task>."
 model: haiku
 effort: low
 ---
 
-# VZT Quick — mechanical turn (Haiku 4.5)
+# VZT Quick — mechanical turn (Haiku 5.5)
 
-This turn runs on Haiku 4.5 — the cheapest tier. Stay strictly inside the
+This turn runs on Haiku 5.5 — the cheapest tier. Stay strictly inside the
 brief:
 
 1. Do exactly what was asked; touch nothing else.
