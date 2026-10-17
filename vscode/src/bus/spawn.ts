@@ -38,7 +38,15 @@ export interface SpawnDeps {
   tmux?: Tmux;
   /** The bus's project rule for a folder; used when the CLI's answer lacks it, and for shells. */
   projectOf?(cwd: string): Promise<string>;
+  /** CLAUDE_CODE_SSE_PORT for a tmux session in `cwd` (ide.ts); a VS Code terminal gets it from Claude's extension. */
+  idePort?(cwd: string): string | undefined;
   log?(line: string): void;
+}
+
+/** The env a tmux session needs so a claude started in it reaches this window's IDE server. */
+function ideEnv(deps: SpawnDeps, cwd: string): Record<string, string> {
+  const port = deps.idePort?.(cwd);
+  return port ? { CLAUDE_CODE_SSE_PORT: port } : {};
 }
 
 export interface SpawnRequest {
@@ -208,7 +216,7 @@ export async function startAgent(
   const label = `bus ${alias} (${agent_id})`;
 
   if (tmux && session) {
-    await tmux.newSession(session, cwd, env);
+    await tmux.newSession(session, cwd, { ...env, ...(kind === "claude" ? ideEnv(deps, cwd) : {}) });
     deps.registry.set(agent_id, { alias, kind, cwd, session, project });
     // Not awaited, like sendWhenReady: the window attaches the session while
     // its shell starts; the command is typed once the shell has drawn.
@@ -253,7 +261,7 @@ export async function startShell(deps: SpawnDeps, cwd: string): Promise<string> 
   let alias = "shell";
   for (let n = 2; taken.has(alias); n++) alias = `shell-${n}`;
   const session = shellSession();
-  await tmux.newSession(session, cwd, {});
+  await tmux.newSession(session, cwd, ideEnv(deps, cwd)); // a claude typed here reaches the IDE too
   deps.registry.set(session, { alias, kind: "shell", cwd, session, project });
   return session;
 }

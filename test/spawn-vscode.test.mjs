@@ -414,3 +414,19 @@ test("projectOf: the bus's rule — the git common dir's main checkout, realpath
   assert.equal(await projectOf(exec(null), path.join(root, 'app')), path.join(root, 'app'), 'not git: the folder');
   fs.rmSync(root, { recursive: true, force: true });
 });
+
+test("tmux: claude's session carries this window's CLAUDE_CODE_SSE_PORT (IDE auto-connect); codex's does not", async () => {
+  const { spawnAgent, startShell } = await load('spawn');
+  const h = await tmuxHarness();
+  const asked = [];
+  h.deps.idePort = (cwd) => { asked.push(cwd); return '4242'; };
+  await spawnAgent(h.deps, { kind: 'claude', alias: 'app-claude', cwd: '/p/app' });
+  await spawnAgent(h.deps, { kind: 'codex', alias: 'app-codex', cwd: '/p/app' });
+  await startShell(h.deps, '/p/app');
+  const created = h.tmuxCalls.filter((a) => a.includes('new-session'));
+  assert.equal(created.length, 3);
+  assert.ok(created[0].includes('CLAUDE_CODE_SSE_PORT=4242'), 'claude agent');
+  assert.ok(!created[1].includes('CLAUDE_CODE_SSE_PORT=4242'), 'codex agent');
+  assert.ok(created[2].includes('CLAUDE_CODE_SSE_PORT=4242'), 'a claude typed into a plain terminal connects too');
+  assert.deepEqual(asked, ['/p/app', '/p/app']);
+});

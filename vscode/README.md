@@ -208,6 +208,12 @@ project → git worktree → the bus agents running in it.
   yourself ends its session, like closing a tab in Orca. Without tmux
   installed (or with `vztMux.agents.tmux` off) agents run in plain terminals
   as before, which close with the window.
+- **Claude still connects to VS Code inside tmux.** A tmux session does not
+  inherit the `CLAUDE_CODE_SSE_PORT` that Claude's VS Code extension puts in
+  integrated terminals, so the session gets it from this window's
+  `~/.claude/ide/<port>.lock` (matched by its workspace folders). As in any
+  VS Code terminal, only one Claude per window holds the IDE connection; a
+  session started before VS Code restarted keeps the old port until resumed.
 - **VZT: Import Projects from Orca** (`vzt-mux.projects.importOrca`) registers
   every git repo `orca repo list` knows, once; the Projects view shows them as
   a flat, collapsed list like Orca's sidebar. Same as

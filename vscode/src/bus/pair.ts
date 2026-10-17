@@ -18,10 +18,12 @@
 
 import { execFile } from "child_process";
 import * as fs from "fs";
+import * as os from "os";
 import * as path from "path";
 import * as vscode from "vscode";
 import { BusCli, BusCliError } from "./busCli";
 import { BusTreeProvider } from "./busTree";
+import { claudeIdePort } from "./ide";
 import { AgentRegistry, CloseReason, leasePlan, SavedAgent, SavedShell } from "./registry";
 import { Adopted, adoptSaved, parsePs, PidTerminal, PsRow, restoreAgent, restoreSession, restoreShell, shellAlive } from "./restore";
 import {
@@ -232,6 +234,12 @@ export function registerAgentBus(
       return spawnTmux();
     },
     projectOf: (cwd) => projectOf(execTool, cwd),
+    idePort: (cwd) =>
+      claudeIdePort(
+        path.join(os.homedir(), ".claude", "ide"),
+        (vscode.workspace.workspaceFolders || []).map((f) => f.uri.fsPath),
+        cwd
+      ),
     log,
   };
 
