@@ -2,7 +2,7 @@
   "name": "vzt-mux",
   "displayName": "VZT Ship Mux",
   "description": "Runs VZT Agent Protocol ship units as native VS Code integrated terminals, with a live Ship Run tree — per-unit status, worktree diffs mid-run, and one-click oracle re-runs.",
-  "version": "0.7.0",
+  "version": "0.8.0",
   "publisher": "vzt",
   "icon": "media/ship-icon.png",
   "engines": {
@@ -32,6 +32,11 @@
     },
     "views": {
       "vztShip": [
+        {
+          "id": "vztProjects",
+          "name": "Projects",
+          "contextualTitle": "VZT Projects"
+        },
         {
           "id": "vztShipRun",
           "name": "Ship Run",
@@ -63,6 +68,10 @@
       {
         "view": "vztBus",
         "contents": "No paired agents.\n\n[Pair Claude + Codex](command:vzt-mux.bus.pair)\n\nOpens Claude and Codex in split terminals, talking over the local VZT bus. Messages survive window reloads."
+      },
+      {
+        "view": "vztProjects",
+        "contents": "No projects registered.\n\n[Add Project](command:vzt-mux.projects.add)\n\nEach project opens in its own window; its worktrees and the agents running in them appear here with live status."
       }
     ],
     "commands": [
@@ -160,6 +169,46 @@
         "command": "vzt-mux.bus.refresh",
         "title": "VZT: Refresh Agent Bus",
         "icon": "$(refresh)"
+      },
+      {
+        "command": "vzt-mux.projects.refresh",
+        "title": "VZT: Refresh Projects",
+        "icon": "$(refresh)"
+      },
+      {
+        "command": "vzt-mux.projects.add",
+        "title": "VZT: Add Project",
+        "icon": "$(add)"
+      },
+      {
+        "command": "vzt-mux.projects.remove",
+        "title": "VZT: Remove Project",
+        "icon": "$(trash)"
+      },
+      {
+        "command": "vzt-mux.projects.openWindow",
+        "title": "VZT: Open Project Window",
+        "icon": "$(empty-window)"
+      },
+      {
+        "command": "vzt-mux.projects.focusAgent",
+        "title": "VZT: Focus Agent",
+        "icon": "$(terminal)"
+      },
+      {
+        "command": "vzt-mux.agents.newWorkspace",
+        "title": "VZT: New Agent Workspace",
+        "icon": "$(git-branch)"
+      },
+      {
+        "command": "vzt-mux.agents.addHere",
+        "title": "VZT: Add Agent Here",
+        "icon": "$(person-add)"
+      },
+      {
+        "command": "vzt-mux.dashboard.open",
+        "title": "VZT: Open Agent Dashboard",
+        "icon": "$(dashboard)"
       }
     ],
     "configuration": {
@@ -194,6 +243,11 @@
           "type": "string",
           "default": "",
           "description": "Command prefix that runs vzt-agent for the agent bus, e.g. `vzt-agent` or `node /path/to/cli/vzt-agent.js`. Empty means auto: `command -v vzt-agent` in your login shell, else the CLI of the repo checkout this extension was built from."
+        },
+        "vztMux.attention.notify": {
+          "type": "boolean",
+          "default": true,
+          "description": "Show a notification when an agent in this window turns needs-you or done. The status-bar count shows either way."
         }
       }
     },
@@ -228,6 +282,26 @@
           "command": "vzt-mux.bus.refresh",
           "when": "view == vztBus",
           "group": "navigation@2"
+        },
+        {
+          "command": "vzt-mux.projects.refresh",
+          "when": "view == vztProjects",
+          "group": "navigation@4"
+        },
+        {
+          "command": "vzt-mux.projects.add",
+          "when": "view == vztProjects",
+          "group": "navigation@1"
+        },
+        {
+          "command": "vzt-mux.agents.newWorkspace",
+          "when": "view == vztProjects",
+          "group": "navigation@2"
+        },
+        {
+          "command": "vzt-mux.dashboard.open",
+          "when": "view == vztProjects",
+          "group": "navigation@3"
         }
       ],
       "view/item/context": [
@@ -260,6 +334,16 @@
           "command": "vzt-mux.herdr.sendReview",
           "when": "view == herdrFleet.agents && viewItem == herdrAgent",
           "group": "1_herdr@2"
+        },
+        {
+          "command": "vzt-mux.projects.openWindow",
+          "when": "view == vztProjects && viewItem == vztProject",
+          "group": "inline@1"
+        },
+        {
+          "command": "vzt-mux.projects.remove",
+          "when": "view == vztProjects && viewItem == vztProject",
+          "group": "1_project@1"
         }
       ],
       "comments/commentThread/context": [

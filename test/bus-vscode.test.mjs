@@ -146,7 +146,6 @@ test('retry-enter sends only enter', async () => {
 
 test('contributes pair command', () => {
   const m = JSON.parse(fs.readFileSync(path.join(VSCODE, 'package.json'), 'utf8'));
-  assert.equal(m.version, '0.7.0');
   const commands = new Map((m.contributes.commands || []).map((c) => [c.command, c.title]));
   assert.equal(commands.get('vzt-mux.bus.pair'), 'VZT: Pair Claude + Codex');
   assert.ok(commands.has('vzt-mux.bus.refresh'), 'vzt-mux.bus.refresh must be contributed');
@@ -162,9 +161,12 @@ test('contributes pair command', () => {
   const pair = fs.readFileSync(path.join(VSCODE, 'src', 'bus', 'pair.ts'), 'utf8');
   assert.match(pair, /registerCommand\("vzt-mux\.bus\.pair"/);
   assert.match(pair, /parentTerminal: claude/, 'codex must open split beside claude');
-  assert.match(pair, /CLAUDE_CODE_DISABLE_FEEDBACK_SURVEY/);
-  assert.match(pair, /"argv", "--kind"/, 'the agent argv must come from `bus argv`, never be hard-coded');
-  assert.match(pair, /"bootstrap-prompt"/);
+  // Every agent (pair included) starts through spawnAgent in spawn.ts.
+  assert.match(pair, /spawnAgent\(/);
+  const spawn = fs.readFileSync(path.join(VSCODE, 'src', 'bus', 'spawn.ts'), 'utf8');
+  assert.match(spawn, /CLAUDE_CODE_DISABLE_FEEDBACK_SURVEY/);
+  assert.match(spawn, /"argv", "--kind"/, 'the agent argv must come from `bus argv`, never be hard-coded');
+  assert.match(spawn, /"bootstrap-prompt"/);
 });
 
 test('extension never opens the db', () => {

@@ -1,40 +1,48 @@
 /**
  * "VZT: Pair Claude + Codex" — two agents in split integrated terminals, talking
- * over the durable local bus — plus the poller that keeps their leases alive and
- * types wake-ups into them.
+ * over the durable local bus — plus "New Agent Workspace" / "Add Agent Here",
+ * and the poller that keeps every launched agent's lease alive and types
+ * wake-ups into it.
  *
- * Nothing here decides WHAT to launch or WHAT to type. The agent argv comes from
- * `bus argv`, the first prompt from `bus bootstrap-prompt`, and every wake (line
- * included) from `bus wake-plan`. This file only creates terminals, launches the
- * command the CLI returned, and executes the plan.
+ * Nothing here decides WHAT to launch or WHAT to type. Every agent starts
+ * through spawnAgent (argv from `bus argv`, prompt from `bus bootstrap-prompt`),
+ * and every wake (line included) comes from `bus wake-plan`. This file only
+ * collects the user's choices, opens worktrees through the CLI, and executes
+ * the plan.
  */
 
+import * as path from "path";
 import * as vscode from "vscode";
 import { BusCli, BusCliError } from "./busCli";
 import { BusTreeProvider } from "./busTree";
+import { AgentRegistry } from "./registry";
+import { Kind, Launch, pairAliases, preflightReport, spawnAgent, SpawnDeps } from "./spawn";
 import { executeWakeAction, WakeAction } from "./wake";
+
+export type { Launch } from "./spawn";
 
 const POLL_MS = 1500;
 
-/** The doctor field that says the CLI's Node can load its storage engine. */
-const ENGINE_OK_FIELD = ["node", "sq" + "lite"].join("_");
+/** The CLI's `worktree create` slug rule, capped at 57 so the alias `<slug>-claude` fits the bus's 64. */
+const SLUG_RE = /^[a-z0-9][a-z0-9._-]{0,56}$/;
 
-type Kind = "claude" | "codex";
+/** Args WITHOUT the leading "vzt-agent". */
+export type Run = <T>(args: string[], cwd?: string) => Promise<T>;
 
-interface Doctor {
-  codex_hooks?: { untrusted?: string[]; missing?: string[] };
-  claude_hooks?: { missing?: string[] };
-  [key: string]: unknown;
-}
-
-export type Launch = (terminal: vscode.Terminal, cmd: string, label: string) => void;
-
-function shellQuote(s: string): string {
-  return `'${s.replace(/'/g, "'\\''")}'`;
+interface ProjectEntry {
+  name: string;
+  root: string;
+  baseRef: string;
+  exists: boolean;
+  worktrees: { path: string; branch: string | null; head: string; main: boolean }[];
 }
 
 function workspaceCwd(): string | undefined {
   return vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
+}
+
+function errorText(err: unknown): string {
+  return err instanceof BusCliError || err instanceof Error ? err.message : String(err);
 }
 
 const sleep = (ms: number) => new Promise<void>((r) => setTimeout(r, ms));
@@ -44,16 +52,26 @@ export function registerAgentBus(
   outputChannel: vscode.OutputChannel,
   launch: Launch,
   cliPath: () => string | null
-): void {
+): { registry: AgentRegistry; runTop: Run; refreshBus(): Promise<void> } {
   const bus = new BusCli(cliPath);
   const tree = new BusTreeProvider(bus, workspaceCwd);
   const view = vscode.window.createTreeView("vztBus", { treeDataProvider: tree });
   const window = vscode.env.sessionId;
+  const runTop: Run = (args, cwd) => bus.runTop(args, cwd);
 
-  // agent_id → the terminal this window launched it in. Terminals die with the
-  // window, so this never needs persisting: a reload re-pairs and the bus hands
-  // back the same agent_ids with their queues intact.
-  const agents = new Map<string, { alias: string; terminal: vscode.Terminal }>();
+  const registry = new AgentRegistry();
+  // The agent_ids of the last pair, so a second pair focuses it instead of
+  // registering duplicates.
+  let paired: { claude: string; codex: string } | undefined;
+
+  const spawnDeps: SpawnDeps = {
+    run: (args, cwd) => bus.run(args, cwd),
+    createTerminal: (opts) => vscode.window.createTerminal(opts),
+    launch,
+    windowId: window,
+    registry,
+    isTrusted: () => vscode.workspace.isTrusted,
+  };
 
   const log = (line: string) => outputChannel.appendLine(`[bus] ${line}`);
   let lastPollError = "";
@@ -63,11 +81,13 @@ export function registerAgentBus(
   let timer: ReturnType<typeof setTimeout> | undefined;
 
   const tick = async () => {
-    const cwd = workspaceCwd();
+    // lease and wake-plan are keyed by window, not workspace: any folder works
+    // as the CLI's cwd, including a worktree the window opened after start.
+    const cwd = workspaceCwd() ?? registry.entries().next().value?.[1].cwd;
     try {
-      if (cwd && agents.size) {
+      if (cwd && registry.size) {
         const pairs: string[] = [];
-        for (const [id, { terminal }] of agents) {
+        for (const [id, { terminal }] of registry.entries()) {
           const pid = await terminal.processId;
           if (pid) pairs.push(`${id}:${pid}`);
         }
@@ -75,7 +95,7 @@ export function registerAgentBus(
 
         const plan = await bus.run<WakeAction[]>(["wake-plan", "--window", window], cwd);
         for (const action of plan) {
-          const owned = agents.get(action.agent_id);
+          const owned = registry.get(action.agent_id);
           if (!owned) continue; // not launched by this extension host — never type blind
           const typed = await executeWakeAction(action, owned.terminal, sleep);
           if (!typed) {
@@ -89,7 +109,7 @@ export function registerAgentBus(
       if (view.visible) await tree.reload();
       lastPollError = "";
     } catch (err) {
-      const msg = err instanceof Error ? err.message : String(err);
+      const msg = errorText(err);
       if (msg !== lastPollError) log(`poll failed: ${msg}`); // once per distinct failure, not every 1.5 s
       lastPollError = msg;
     }
@@ -101,6 +121,21 @@ export function registerAgentBus(
   };
   timer = setTimeout(loop, POLL_MS);
 
+  /** Doctor gate shared by pair and spawn. True = go; false = refused and shown. */
+  const preflightOk = async (cwd: string, what: string): Promise<boolean> => {
+    const { problems, doctor } = await preflightReport(spawnDeps.run, cwd);
+    if (!problems.length) return true;
+    const text = JSON.stringify(doctor, null, 2);
+    log(`${what} refused by doctor:\n${text}`);
+    vscode.window.showErrorMessage(`VZT: cannot ${what} — ${problems.join(" ")}`, { modal: true, detail: text });
+    return false;
+  };
+
+  const isLive = (id: string | undefined) => {
+    const entry = id ? registry.get(id) : undefined;
+    return !!entry && entry.terminal.exitStatus === undefined;
+  };
+
   // --- pair
   const pair = async () => {
     const cwd = workspaceCwd();
@@ -108,79 +143,145 @@ export function registerAgentBus(
       vscode.window.showErrorMessage("VZT: open the project folder first — the bus is scoped to its git workspace.");
       return;
     }
-    const live = [...agents.values()].filter(({ terminal }) => terminal.exitStatus === undefined);
-    if (live.length) {
-      live.forEach(({ terminal }) => terminal.show(true));
+    if (paired && isLive(paired.claude) && isLive(paired.codex)) {
+      registry.focus(paired.claude);
+      registry.focus(paired.codex);
       vscode.window.showInformationMessage("VZT: this window already has a paired Claude + Codex.");
       return;
     }
 
     try {
-      const doctor = await bus.run<Doctor>(["doctor"], cwd);
-      const untrusted = doctor.codex_hooks?.untrusted || [];
-      const problems: string[] = [];
-      if (doctor[ENGINE_OK_FIELD] !== true) problems.push("the Node that runs vzt-agent cannot load the bus store (needs Node 22.5+).");
-      if (untrusted.length) problems.push(`${untrusted.length} Codex bus hook(s) are not trusted yet — open codex once and approve them.`);
-      if (problems.length) {
-        const text = JSON.stringify(doctor, null, 2);
-        log(`pair refused by doctor:\n${text}`);
-        vscode.window.showErrorMessage(`VZT: cannot pair — ${problems.join(" ")}`, { modal: true, detail: text });
-        return;
-      }
-
-      // Claude Code 2.1.299 stops on its folder-trust dialog even under
-      // the house permission-bypass flag (cursor on "No, exit"), so a paired
-      // claude would never start. Pre-accept it — but ONLY for a folder VS Code
-      // itself already trusts: the trust decision stays the user's.
-      if (!vscode.workspace.isTrusted) {
-        vscode.window.showErrorMessage("VZT: cannot pair — trust this workspace in VS Code first (Workspaces: Manage Workspace Trust). Claude runs here with permissions bypassed.");
-        return;
-      }
-      await bus.run(["trust-claude", "--workspace", cwd], cwd);
-
-      const ids = {} as Record<Kind, string>;
-      for (const kind of ["claude", "codex"] as Kind[]) {
-        const r = await bus.run<{ agent_id: string }>(
-          ["register", "--alias", kind, "--kind", kind, "--window", window],
-          cwd
-        );
-        ids[kind] = r.agent_id;
-      }
-
-      const commandFor = async (kind: Kind, peer: Kind) => {
-        const argv = await bus.run<string[]>(["argv", "--kind", kind], cwd);
-        const { prompt } = await bus.run<{ prompt: string }>(["bootstrap-prompt", "--alias", kind, "--peer", peer], cwd);
-        return [...argv, prompt].map(shellQuote).join(" ");
-      };
-      const claudeCmd = await commandFor("claude", "codex");
-      const codexCmd = await commandFor("codex", "claude");
-
-      const envFor = (kind: Kind): Record<string, string> => ({
-        VZT_BUS_AGENT: ids[kind],
-        VZT_BUS_KIND: kind,
-        VZT_BUS_WINDOW: window,
-        ...(kind === "claude" ? { CLAUDE_CODE_DISABLE_FEEDBACK_SURVEY: "1" } : {}),
-      });
-
-      const claude = vscode.window.createTerminal({ name: "claude", cwd, env: envFor("claude") });
-      agents.set(ids.claude, { alias: "claude", terminal: claude });
-      claude.show(false);
-      const codex = vscode.window.createTerminal({
-        name: "codex",
+      if (!(await preflightOk(cwd, "pair"))) return;
+      const alias = pairAliases(cwd);
+      const claude = await spawnAgent(spawnDeps, { kind: "claude", alias: alias.claude, cwd, peer: alias.codex });
+      claude.terminal.show(false);
+      const codex = await spawnAgent(spawnDeps, {
+        kind: "codex",
+        alias: alias.codex,
         cwd,
-        env: envFor("codex"),
-        location: { parentTerminal: claude },
+        peer: alias.claude,
+        parentTerminal: claude.terminal,
       });
-      agents.set(ids.codex, { alias: "codex", terminal: codex });
-
-      launch(claude, claudeCmd, `bus claude (${ids.claude})`);
-      launch(codex, codexCmd, `bus codex (${ids.codex})`);
-      log(`paired claude=${ids.claude} codex=${ids.codex} window=${window}`);
+      paired = { claude: claude.agent_id, codex: codex.agent_id };
+      log(`paired claude=${claude.agent_id} codex=${codex.agent_id} window=${window}`);
       await tree.reload();
     } catch (err) {
-      const msg = err instanceof BusCliError || err instanceof Error ? err.message : String(err);
+      const msg = errorText(err);
       log(`pair failed: ${msg}`);
       vscode.window.showErrorMessage(`VZT: pair failed — ${msg}`);
+    }
+  };
+
+  // --- spawn one agent (callers run the doctor gate first)
+  const spawnOne = async (req: { kind: Kind; alias: string; cwd: string; task?: string }) => {
+    const { agent_id, terminal } = await spawnAgent(spawnDeps, req);
+    terminal.show(false);
+    log(`spawned ${req.alias}=${agent_id} in ${req.cwd} window=${window}`);
+    await tree.reload();
+  };
+
+  const pickKind = async (): Promise<Kind | undefined> => {
+    const pick = await vscode.window.showQuickPick(
+      [
+        { label: "claude", description: "Claude Code" },
+        { label: "codex", description: "Codex" },
+      ],
+      { placeHolder: "Which agent?" }
+    );
+    return pick?.label as Kind | undefined;
+  };
+
+  // --- New Agent Workspace: worktree for a task + an agent in it
+  const newWorkspace = async () => {
+    try {
+      const projects = await runTop<ProjectEntry[]>(["projects", "list", "--json"], workspaceCwd());
+      const usable = projects.filter((p) => p.exists);
+      if (!usable.length) {
+        const add = "Add Project";
+        const choice = await vscode.window.showInformationMessage("VZT: no projects registered yet.", add);
+        if (choice === add) await vscode.commands.executeCommand("vzt-mux.projects.add");
+        return;
+      }
+      const project = await vscode.window.showQuickPick(
+        usable.map((p) => ({ label: p.name, description: p.root, project: p })),
+        { placeHolder: "Project for the new agent workspace" }
+      );
+      if (!project) return;
+
+      const slug = await vscode.window.showInputBox({
+        prompt: "Worktree / branch name",
+        placeHolder: "fix-login",
+        validateInput: (v) => (SLUG_RE.test(v) ? undefined : "lowercase letters, digits, . _ - (start with a letter or digit, max 57)"),
+      });
+      if (!slug) return;
+      const kind = await pickKind();
+      if (!kind) return;
+      const task = await vscode.window.showInputBox({ prompt: "First task for the agent (optional)" });
+      if (task === undefined) return;
+
+      // Gate BEFORE creating anything, so a refusal leaves no orphan worktree.
+      if (!(await preflightOk(project.project.root, "start an agent"))) return;
+      const wt = await runTop<{ path: string; branch: string; base: string; head: string }>(
+        ["worktree", "create", "--project", project.project.name, "--name", slug, "--json"],
+        project.project.root
+      );
+      try {
+        await spawnOne({ kind, alias: `${slug}-${kind}`, cwd: wt.path, task: task.trim() || undefined });
+      } catch (err) {
+        const remove = "Remove Worktree";
+        const choice = await vscode.window.showErrorMessage(
+          `VZT: the worktree ${slug} was created but its agent did not start — ${errorText(err)}`,
+          remove
+        );
+        if (choice === remove) {
+          await runTop(["worktree", "remove", "--project", project.project.name, "--name", slug, "--json"], project.project.root);
+        }
+        return;
+      }
+      // Adding a folder to a single-folder window turns it into an untitled
+      // multi-root workspace and RESTARTS the extension host, dropping this
+      // window's agent registry (no more leases or wakes). Only add it when the
+      // window is already a saved workspace; otherwise the Projects view lists it.
+      const folders = vscode.workspace.workspaceFolders || [];
+      if (vscode.workspace.workspaceFile && !folders.some((f) => f.uri.fsPath === wt.path)) {
+        vscode.workspace.updateWorkspaceFolders(folders.length, 0, { uri: vscode.Uri.file(wt.path) });
+      }
+    } catch (err) {
+      const msg = errorText(err);
+      log(`new agent workspace failed: ${msg}`);
+      vscode.window.showErrorMessage(`VZT: new agent workspace failed — ${msg}`);
+    }
+  };
+
+  // --- Add Agent Here: another agent in a folder this window already has open
+  const addHere = async () => {
+    try {
+      const folders = vscode.workspace.workspaceFolders || [];
+      if (!folders.length) {
+        vscode.window.showErrorMessage("VZT: open the project folder first — the bus is scoped to its git workspace.");
+        return;
+      }
+      const folder = (
+        await vscode.window.showQuickPick(
+          folders.map((f) => ({ label: f.name, description: f.uri.fsPath, folder: f })),
+          { placeHolder: "Folder for the new agent" }
+        )
+      )?.folder;
+      if (!folder) return;
+      const kind = await pickKind();
+      if (!kind) return;
+      const alias = await vscode.window.showInputBox({
+        prompt: "Agent alias (unique within the project)",
+        value: `${path.basename(folder.uri.fsPath)}-${kind}`,
+        validateInput: (v) => (v.trim() ? undefined : "an alias is required"),
+      });
+      if (!alias) return;
+      if (!(await preflightOk(folder.uri.fsPath, "start an agent"))) return;
+      await spawnOne({ kind, alias: alias.trim(), cwd: folder.uri.fsPath });
+    } catch (err) {
+      const msg = errorText(err);
+      log(`add agent failed: ${msg}`);
+      vscode.window.showErrorMessage(`VZT: add agent failed — ${msg}`);
     }
   };
 
@@ -188,14 +289,12 @@ export function registerAgentBus(
     view,
     vscode.commands.registerCommand("vzt-mux.bus.pair", pair),
     vscode.commands.registerCommand("vzt-mux.bus.refresh", () => tree.reload()),
+    vscode.commands.registerCommand("vzt-mux.agents.newWorkspace", newWorkspace),
+    vscode.commands.registerCommand("vzt-mux.agents.addHere", addHere),
     view.onDidChangeVisibility((e) => {
       if (e.visible) void tree.reload();
     }),
-    vscode.window.onDidCloseTerminal((closed) => {
-      for (const [id, { terminal }] of agents) {
-        if (terminal === closed) agents.delete(id); // its lease lapses in 30 s → stale
-      }
-    }),
+    vscode.window.onDidCloseTerminal((closed) => registry.removeTerminal(closed)), // its lease lapses in 30 s → stale
     vscode.workspace.onDidChangeConfiguration((e) => {
       if (e.affectsConfiguration("vztMux.busCommand")) bus.reset();
     }),
@@ -204,4 +303,6 @@ export function registerAgentBus(
       if (timer) clearTimeout(timer);
     })
   );
+
+  return { registry, runTop, refreshBus: () => tree.reload() };
 }

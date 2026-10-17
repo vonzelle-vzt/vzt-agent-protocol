@@ -92,9 +92,12 @@ test('trust: `bus trust-claude` trusts the start folder and its git workspace', 
 });
 
 test('trust: VS Code pair gates on workspace trust, then pre-trusts, before registering agents', () => {
+  // Pair and every other launch go through spawnAgent, which owns the order.
   const pair = fs.readFileSync(path.join(__dirname, '..', 'vscode', 'src', 'bus', 'pair.ts'), 'utf8');
-  const gate = pair.indexOf('vscode.workspace.isTrusted');
-  const trust = pair.indexOf('"trust-claude"');
-  const register = pair.indexOf('"register"');
+  assert.match(pair, /isTrusted: \(\) => vscode\.workspace\.isTrusted/);
+  const spawn = fs.readFileSync(path.join(__dirname, '..', 'vscode', 'src', 'bus', 'spawn.ts'), 'utf8');
+  const gate = spawn.indexOf('deps.isTrusted()');
+  const trust = spawn.indexOf('"trust-claude"');
+  const register = spawn.indexOf('"register"');
   assert.ok(gate > 0 && trust > gate && register > trust, 'order must be: isTrusted gate → trust-claude → register');
 });

@@ -10,7 +10,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { WAKE_LINE } from '../agent-argv.mjs';
 
-export const SCHEMA_VERSION = 1;
+export const SCHEMA_VERSION = 2;
 export const LEASE_TTL_MS = 30_000;
 export const NEVER_STARTED_MS = 90_000;
 export const VISIBILITY_TIMEOUT_MS = 300_000;
@@ -54,6 +54,7 @@ const SCHEMA = `
 CREATE TABLE agents (
   agent_id TEXT PRIMARY KEY,
   workspace TEXT NOT NULL,
+  project TEXT NOT NULL DEFAULT '',
   alias TEXT NOT NULL,
   kind TEXT NOT NULL CHECK (kind IN ('claude','codex')),
   session_id TEXT,
@@ -90,6 +91,7 @@ CREATE TABLE messages (
   updated_ms INTEGER NOT NULL,
   UNIQUE (workspace, from_agent, idem_key)
 );
+CREATE INDEX agents_project ON agents (project, alias);
 CREATE INDEX messages_inbox ON messages (to_agent, state, seq);
 CREATE INDEX messages_thread ON messages (workspace, thread_id, seq);
 CREATE TABLE events (
@@ -115,6 +117,15 @@ CREATE TABLE wakes (
   resolved_ms INTEGER
 );
 CREATE INDEX wakes_agent ON wakes (agent_id, status);
+`;
+
+// v1 -> v2: agents gain a project (the main checkout shared by a repo's
+// worktrees). Existing rows keep project = workspace, so they stay isolated
+// per worktree until they re-register.
+const MIGRATE_V1_V2 = `
+ALTER TABLE agents ADD COLUMN project TEXT NOT NULL DEFAULT '';
+UPDATE agents SET project = workspace WHERE project = '';
+CREATE INDEX agents_project ON agents (project, alias);
 `;
 
 function sleepMs(ms) {
@@ -173,8 +184,9 @@ export class Store {
     this.tx(() => {
       const v = this.get('PRAGMA user_version').user_version;
       if (v === SCHEMA_VERSION) return;
-      if (v !== 0) throw new BusError(2, `bus.db schema version ${v} is newer than this vzt-agent (${SCHEMA_VERSION})`);
-      this.db.exec(SCHEMA);
+      if (v === 0) this.db.exec(SCHEMA);
+      else if (v === 1) this.db.exec(MIGRATE_V1_V2);
+      else throw new BusError(2, `bus.db schema version ${v} is newer than this vzt-agent (${SCHEMA_VERSION})`);
       this.db.exec(`PRAGMA user_version = ${SCHEMA_VERSION}`);
     });
   }
@@ -235,13 +247,28 @@ export class Store {
     return this.get('SELECT * FROM agents WHERE workspace = ? AND alias = ?', workspace, alias);
   }
 
-  register({ workspace, alias, kind, window, sessionId, terminalPid }) {
+  agentByProjectAlias(project, alias) {
+    // A stale holder may share the alias with a live one in another worktree
+    // (register lets a live agent take over a dead one's alias): prefer the live one.
+    return this.get(
+      'SELECT * FROM agents WHERE project = ? AND alias = ? ORDER BY (lease_expires_ms > ?) DESC, registered_ms DESC LIMIT 1',
+      project, alias, this.nowMs(),
+    );
+  }
+
+  register({ workspace, project = workspace, alias, kind, window, sessionId, terminalPid }) {
     if (!/^[A-Za-z0-9._-]{1,64}$/.test(alias || '')) throw usage('--alias must be 1-64 chars of [A-Za-z0-9._-]');
     if (!KINDS.includes(kind)) throw usage(`--kind must be one of ${KINDS.join('|')}`);
     if (!window) throw usage('--window is required');
     return this.tx(() => {
       const now = this.nowMs();
       const lease = now + LEASE_TTL_MS;
+      // Only a live holder reserves the alias; a crashed or removed worktree's agent must not hold it forever.
+      const held = this.get(
+        'SELECT workspace FROM agents WHERE project = ? AND alias = ? AND workspace != ? AND lease_expires_ms > ? LIMIT 1',
+        project, alias, workspace, now,
+      );
+      if (held) throw new BusError(4, `alias "${alias}" is already used in this project by ${held.workspace}`);
       const existing = this.agentByAlias(workspace, alias);
       if (existing) {
         if (existing.window_id !== window && existing.lease_expires_ms > now) {
@@ -249,21 +276,21 @@ export class Store {
         }
         if (existing.kind !== kind) throw new BusError(4, `alias "${alias}" is registered as kind ${existing.kind}`);
         this.run(
-          `UPDATE agents SET window_id = ?, terminal_pid = ?, session_id = ?, lease_expires_ms = ?, state = 'launching',
+          `UPDATE agents SET project = ?, window_id = ?, terminal_pid = ?, session_id = ?, lease_expires_ms = ?, state = 'launching',
              state_ts_ms = ?, registered_ms = ?, session_started_ms = NULL, wake_unconfirmed = 0 WHERE agent_id = ?`,
-          window, opt(terminalPid), opt(sessionId), lease, now, now, existing.agent_id,
+          project, window, opt(terminalPid), opt(sessionId), lease, now, now, existing.agent_id,
         );
         this.event('agent_registered', { agent_id: existing.agent_id, from: existing.state, to: 'launching', detail: { window, reused: true } });
-        return { agent_id: existing.agent_id, alias, workspace, reused: true };
+        return { agent_id: existing.agent_id, alias, workspace, project, reused: true };
       }
       const id = randomUUID();
       this.run(
-        `INSERT INTO agents (agent_id, workspace, alias, kind, session_id, window_id, terminal_pid, lease_expires_ms,
-           state, state_ts_ms, created_ms, registered_ms) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'launching', ?, ?, ?)`,
-        id, workspace, alias, kind, opt(sessionId), window, opt(terminalPid), lease, now, now, now,
+        `INSERT INTO agents (agent_id, workspace, project, alias, kind, session_id, window_id, terminal_pid, lease_expires_ms,
+           state, state_ts_ms, created_ms, registered_ms) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'launching', ?, ?, ?)`,
+        id, workspace, project, alias, kind, opt(sessionId), window, opt(terminalPid), lease, now, now, now,
       );
       this.event('agent_registered', { agent_id: id, to: 'launching', detail: { window, reused: false } });
-      return { agent_id: id, alias, workspace, reused: false };
+      return { agent_id: id, alias, workspace, project, reused: false };
     });
   }
 
@@ -272,11 +299,13 @@ export class Store {
     return a.lease_expires_ms > now ? 'live' : 'stale';
   }
 
-  agents({ workspace } = {}) {
+  agents({ workspace, project } = {}) {
     const now = this.nowMs();
-    const rows = workspace
-      ? this.all('SELECT * FROM agents WHERE workspace = ? ORDER BY alias', workspace)
-      : this.all('SELECT * FROM agents ORDER BY workspace, alias');
+    const rows = project
+      ? this.all('SELECT * FROM agents WHERE project = ? ORDER BY workspace, alias', project)
+      : workspace
+        ? this.all('SELECT * FROM agents WHERE workspace = ? ORDER BY alias', workspace)
+        : this.all('SELECT * FROM agents ORDER BY workspace, alias');
     return rows.map((a) => ({
       ...a,
       wake_unconfirmed: !!a.wake_unconfirmed,
@@ -330,11 +359,12 @@ export class Store {
     return this.tx(() => {
       const from = this.requireAgent(fromId);
       const targetWs = workspace || from.workspace;
-      const to = this.agentByAlias(targetWs, toAlias);
+      // Without --cross-workspace: the sender's workspace first, then its project.
+      const to = this.agentByAlias(targetWs, toAlias) || (workspace ? null : this.agentByProjectAlias(from.project, toAlias));
       if (!to) {
         throw usage(workspace
           ? `no agent "${toAlias}" in workspace ${targetWs}`
-          : `no agent "${toAlias}" in workspace ${from.workspace} (use --cross-workspace <dir> to address another workspace)`);
+          : `no agent "${toAlias}" in workspace ${from.workspace} or project ${from.project} (use --cross-workspace <dir> to address another workspace)`);
       }
       if (key) {
         const dup = this.get('SELECT id, seq FROM messages WHERE workspace = ? AND from_agent = ? AND idem_key = ?', from.workspace, from.agent_id, key);
@@ -476,13 +506,22 @@ export class Store {
     return r ? publicMessage(r) : null;
   }
 
-  inbox(workspace) {
-    const rows = this.all(
-      `SELECT m.*, fa.alias AS from_alias, ta.alias AS to_alias FROM messages m
-         JOIN agents fa ON fa.agent_id = m.from_agent JOIN agents ta ON ta.agent_id = m.to_agent
-       WHERE m.workspace = ? OR ta.workspace = ? ORDER BY m.seq`,
-      workspace, workspace,
-    );
+  // inbox(workspace) or inbox({ project }): threads in a workspace, or threads
+  // whose sender or recipient belongs to the project.
+  inbox(scope) {
+    const rows = typeof scope === 'object' && scope && scope.project
+      ? this.all(
+        `SELECT m.*, fa.alias AS from_alias, ta.alias AS to_alias FROM messages m
+           JOIN agents fa ON fa.agent_id = m.from_agent JOIN agents ta ON ta.agent_id = m.to_agent
+         WHERE fa.project = ? OR ta.project = ? ORDER BY m.seq`,
+        scope.project, scope.project,
+      )
+      : this.all(
+        `SELECT m.*, fa.alias AS from_alias, ta.alias AS to_alias FROM messages m
+           JOIN agents fa ON fa.agent_id = m.from_agent JOIN agents ta ON ta.agent_id = m.to_agent
+         WHERE m.workspace = ? OR ta.workspace = ? ORDER BY m.seq`,
+        scope, scope,
+      );
     const threads = new Map();
     for (const m of rows) {
       let t = threads.get(m.thread_id);

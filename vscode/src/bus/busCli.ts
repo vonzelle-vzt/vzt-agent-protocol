@@ -94,17 +94,29 @@ export class BusCli {
    * Non-zero exit → BusCliError carrying the CLI's stderr.
    */
   async run<T = unknown>(args: string[], cwd?: string): Promise<T> {
+    return this.exec<T>(["bus", ...args, "--json"], cwd);
+  }
+
+  /**
+   * Run `<busCommand> <args...>` — a top-level verb such as `projects list` or
+   * `worktree create`. No `bus` prefix and no forced `--json`: callers pass it.
+   */
+  async runTop<T = unknown>(args: string[], cwd?: string): Promise<T> {
+    return this.exec<T>(args, cwd);
+  }
+
+  private async exec<T>(args: string[], cwd?: string): Promise<T> {
     const { prefix, path } = await this.resolve();
     const env = { ...process.env, PATH: path };
     const { stdout, stderr, code } = await execFileText(
       "/bin/sh",
-      ["-c", `${prefix} "$@"`, "vzt-agent", "bus", ...args, "--json"],
+      ["-c", `${prefix} "$@"`, "vzt-agent", ...args],
       { cwd, env, timeout: 30_000 }
     );
-    const verb = args[0] || "";
+    const verb = (args[0] === "bus" ? args.slice(0, 2) : args.slice(0, 1)).join(" ");
     if (code !== 0) {
       throw new BusCliError(
-        `vzt-agent bus ${verb} failed (exit ${code ?? "?"}): ${stderr.trim() || "no output"}`,
+        `vzt-agent ${verb} failed (exit ${code ?? "?"}): ${stderr.trim() || "no output"}`,
         code,
         stderr
       );
@@ -112,7 +124,7 @@ export class BusCli {
     try {
       return JSON.parse(stdout) as T;
     } catch {
-      throw new BusCliError(`vzt-agent bus ${verb} printed non-JSON output: ${stdout.slice(0, 200)}`, code, stderr);
+      throw new BusCliError(`vzt-agent ${verb} printed non-JSON output: ${stdout.slice(0, 200)}`, code, stderr);
     }
   }
 }

@@ -2824,6 +2824,13 @@ switch (cmd) {
     process.exitCode = await main(process.argv.slice(3));
     break;
   }
+  case 'projects':
+  case 'worktree': {
+    // Raw argv: the workspace CLI parses its own group + verb.
+    const { main } = await import('./workspace/cli.mjs');
+    process.exitCode = main(process.argv.slice(2));
+    break;
+  }
   default:
     console.log(`vzt-agent — VZT Agent Protocol CLI
 
@@ -2836,6 +2843,10 @@ Usage:
   vzt-agent stats
   vzt-agent matrix
   vzt-agent bus <verb> [--json]            Claude + Codex agent bus (vzt-agent bus help)
+  vzt-agent projects add|remove|list [--json]
+                                          project registry for the VS Code Projects view
+  vzt-agent worktree create|remove --project N --name SLUG [--json]
+                                          git worktree for a new agent workspace
 
 Long-horizon runs (/vzt-ship):
   vzt-agent ship-check <SPEC.md>          gate the spec — disjoint scopes, an oracle per unit,

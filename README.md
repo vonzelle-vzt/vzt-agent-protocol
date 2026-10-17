@@ -338,6 +338,42 @@ wake within 10 minutes; a failure prints the reason and both screen tails.
 It uses the `vzt-agent` on your PATH (the same one the hooks call), so update
 the global install first.
 
+## Orca-style workspaces
+
+The vzt-mux extension (0.8.0) brings Orca's project → worktree → agent model
+into VS Code, on top of the agent bus above. Contract:
+`.vzt/ship/vscode-orca-workspaces/SPEC.md`.
+
+| Orca | vzt-mux |
+|---|---|
+| project | Projects view |
+| worktree | New Agent Workspace |
+| orchestration send/ask | `vzt-agent bus send/ask` |
+| status glyphs | Projects view glyphs |
+| bell | attention |
+| Agent Dashboard | Agent Dashboard |
+
+- **Projects** come from an explicit registry, `~/.vzt/projects.json`
+  (`VZT_PROJECTS_FILE` overrides it); nothing scans the disk. Each project
+  opens in its own VS Code window.
+- **Worktrees** go to `<parent of root>/<project>-worktrees/<slug>` on branch
+  `<slug>`. Removing one keeps the branch.
+- **The bus is project-scoped:** every worktree of a project shares one scope,
+  so agents address each other by alias across worktrees. An alias is unique
+  per project. Other projects stay unreachable unless `--cross-workspace` is
+  given.
+
+```bash
+vzt-agent projects add <dir> [--name N] [--base REF] [--json]
+vzt-agent projects remove <name> [--json]       # registry only; disk untouched
+vzt-agent projects list [--json]                # projects with their git worktrees
+vzt-agent worktree create --project N --name SLUG [--base REF] [--json]
+vzt-agent worktree remove --project N --name SLUG [--force] [--json]
+```
+
+Exit codes: 0 ok, 2 usage/not found, 4 conflict (the name, path or branch
+already exists).
+
 ## Visual work — `DESIGN.md` is a taste cache
 
 Visual work was the one kind this protocol was blind to. *"Restyle the dashboard"*,

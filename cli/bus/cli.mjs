@@ -52,6 +52,7 @@ const OPTIONS = {
   agents: { type: 'string' },
   attempt: { type: 'string' },
   all: { type: 'boolean' },
+  project: { type: 'boolean' },
 };
 
 class CliError extends Error {
@@ -85,6 +86,21 @@ export function resolveWorkspace(dir) {
     if (!fs.existsSync(start)) throw new CliError(2, `workspace ${start} does not exist`);
     return fs.realpathSync(start);
   }
+}
+
+// The project is the main checkout every worktree of a repo shares: the parent
+// of `git rev-parse --git-common-dir` (or the common dir itself for a bare repo).
+export function resolveProject(dir) {
+  const start = path.resolve(dir || process.cwd());
+  let common;
+  try {
+    common = execFileSync('git', ['rev-parse', '--path-format=absolute', '--git-common-dir'], {
+      cwd: start, encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'],
+    }).trim();
+  } catch {
+    return resolveWorkspace(dir);
+  }
+  return fs.realpathSync(path.basename(common) === '.git' ? path.dirname(common) : common);
 }
 
 function req(values, name) {
@@ -298,7 +314,7 @@ export async function main(argv, io = { out: process.stdout, err: process.stderr
       return ok ? 0 : 1;
     }
     if (verb === 'bootstrap-prompt') {
-      const prompt = BOOTSTRAP_PROMPT(req(values, 'alias'), req(values, 'peer'));
+      const prompt = BOOTSTRAP_PROMPT(req(values, 'alias'), values.peer || undefined);
       emit(io.out, json ? { prompt } : prompt, json);
       return 0;
     }
@@ -336,11 +352,12 @@ async function runVerb(verb, values, store, me, sleepMs) {
     case 'register': {
       const r = store.register({
         workspace: resolveWorkspace(values.workspace),
+        project: resolveProject(values.workspace),
         alias: req(values, 'alias'),
         kind: req(values, 'kind'),
         window: req(values, 'window'),
       });
-      return { agent_id: r.agent_id, alias: r.alias, workspace: r.workspace, reused: r.reused };
+      return { agent_id: r.agent_id, alias: r.alias, workspace: r.workspace, project: r.project, reused: r.reused };
     }
     case 'send': {
       if (values.body !== undefined && values['body-file'] !== undefined) throw new CliError(2, 'use --body or --body-file, not both');
@@ -391,9 +408,10 @@ async function runVerb(verb, values, store, me, sleepMs) {
     case 'gate-resolve':
       return store.gateResolve(me, req(values, 'id'), req(values, 'decision'));
     case 'agents':
-      return { agents: store.agents(values.all ? {} : { workspace: resolveWorkspace(values.workspace) }) };
+      if (values.all) return { agents: store.agents({}) };
+      return { agents: store.agents(values.project ? { project: resolveProject(values.workspace) } : { workspace: resolveWorkspace(values.workspace) }) };
     case 'inbox':
-      return { threads: store.inbox(resolveWorkspace(values.workspace)) };
+      return { threads: store.inbox(values.project ? { project: resolveProject(values.workspace) } : resolveWorkspace(values.workspace)) };
     case 'lease': {
       const pairs = req(values, 'agents').split(',').filter(Boolean).map((p) => {
         const [agent_id, pid] = p.split(':');

@@ -166,6 +166,43 @@ Leases expire within 30 s; run Pair again and the bus hands back the same agent
 identities with their queues intact. A second window cannot pair an alias whose
 lease is still live elsewhere.
 
+## Orca-style workspaces
+
+The **Projects** view (first in the VZT Ship sidebar) mirrors Orca's model:
+project → git worktree → the bus agents running in it.
+
+| Orca | vzt-mux |
+|---|---|
+| project | Projects view |
+| worktree | New Agent Workspace |
+| orchestration send/ask | `vzt-agent bus send/ask` |
+| status glyphs | Projects view glyphs |
+| bell | attention |
+| Agent Dashboard | Agent Dashboard |
+
+- **Projects view.** Lists every project in `~/.vzt/projects.json` (add one
+  with **VZT: Add Project**). Each worktree and agent shows a status glyph:
+  working (spinning), needs-you (yellow ?), done (green; idle for less than
+  30 min), idle, stale (red; lease lapsed). Clicking a project opens it in its
+  own window, or focuses that window if it is already open. Clicking an agent
+  focuses its terminal, even when another window owns it: that window claims a
+  focus request under `<vztMux.baseDir>/focus/` within a second.
+- **VZT: New Agent Workspace** (`vzt-mux.agents.newWorkspace`). Pick a project
+  and a slug; it runs `vzt-agent worktree create`, then starts Claude or Codex
+  there in a terminal named `<worktree>·<alias>`, on the bus. **VZT: Add Agent
+  Here** (`vzt-mux.agents.addHere`) adds an agent to the current folder.
+- **Attention.** When an agent this window owns turns needs-you or done, a
+  notification appears (its **Show** focuses the terminal), and a status-bar
+  bell counts the agents that need you. Turn off the notifications with
+  `vztMux.attention.notify`; the count stays.
+- **VZT: Open Agent Dashboard** (`vzt-mux.dashboard.open`). A kanban of agents
+  across all projects: Needs You / Working / Done / Idle. Clicking a card
+  focuses that agent.
+
+Commands: `vzt-mux.projects.refresh`, `.add`, `.remove`, `.openWindow`,
+`.focusAgent`. Refresh, add, New Agent Workspace and the dashboard are buttons
+on the Projects view title.
+
 ## Settings
 
 - `vztMux.baseDir` — overrides the mux filesystem directory. Empty means
@@ -177,3 +214,5 @@ lease is still live elsewhere.
 - `vztMux.busCommand` — command prefix for the agent bus, e.g. `vzt-agent` or
   `node /path/to/cli/vzt-agent.js`. Empty means auto: `command -v vzt-agent` in
   your login shell, else this extension's repo CLI.
+- `vztMux.attention.notify` — defaults on; shows a notification when an agent
+  this window owns turns needs-you or done.

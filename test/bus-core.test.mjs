@@ -493,7 +493,7 @@ test('store files are private and schema is versioned', () => {
   const fresh = path.join(tmp('vzt-bus-parent-'), 'nested', 'bus');
   const s = openStore({ dir: fresh });
   assert.equal(st(fresh), 0o700);
-  assert.equal(s.get('PRAGMA user_version').user_version, 1);
+  assert.equal(s.get('PRAGMA user_version').user_version, 2);
   assert.equal(s.get('PRAGMA journal_mode').journal_mode, 'wal');
   s.close();
 });

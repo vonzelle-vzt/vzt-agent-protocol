@@ -20,6 +20,9 @@ import * as path from "path";
 import { ShipTreeProvider, UnitItem } from "./shipTree";
 import { registerHerdrFleet } from "./herdr/fleet";
 import { registerAgentBus } from "./bus/pair";
+import { registerProjects } from "./projects/projectsTree";
+import { registerAttention } from "./attention/statusBar";
+import { openDashboard } from "./dashboard/panel";
 
 // Shape of a queue file written by the CLI.
 interface QueueRecord {
@@ -669,7 +672,30 @@ export function activate(context: vscode.ExtensionContext): void {
   // Claude + Codex paired in split terminals over the local bus. Everything it
   // launches or types comes from the `vzt-agent bus` CLI; launches go through
   // the same delayed sendWhenReady as ship units.
-  registerAgentBus(context, outputChannel, (t, cmd, label) => sendWhenReady(t, cmd, label), () => cliPath(context));
+  const bus = registerAgentBus(context, outputChannel, (t, cmd, label) => sendWhenReady(t, cmd, label), () => cliPath(context));
+
+  // --- Orca-style workspaces -----------------------------------------------
+  // Order matters: projects needs the bus's runner and registry; attention
+  // needs projects' badge setter; the dashboard needs projects' focusAgent.
+  const focusLocal = (id: string) => bus.registry.focus(id);
+  const projects = registerProjects(context, {
+    run: bus.runTop,
+    windowId: vscode.env.sessionId,
+    baseDir: baseDir(),
+    focusLocal,
+  });
+  registerAttention(context, {
+    run: bus.runTop,
+    windowId: vscode.env.sessionId,
+    focusLocal,
+    openDashboard: () => vscode.commands.executeCommand("vzt-mux.dashboard.open"),
+    setBadge: (n) => projects.setBadge(n),
+  });
+  context.subscriptions.push(
+    vscode.commands.registerCommand("vzt-mux.dashboard.open", () =>
+      openDashboard(context, { run: bus.runTop, focusAgent: (agent) => projects.focusAgent(agent) })
+    )
+  );
 
   context.subscriptions.push(
     vscode.commands.registerCommand("vzt-mux.watchShipRun", () => {

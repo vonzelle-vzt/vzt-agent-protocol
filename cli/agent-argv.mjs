@@ -16,7 +16,19 @@ export const AGENT_ARGV = Object.freeze({
 // ASCII, fixed, never carries message data.
 export const WAKE_LINE = 'vzt: new bus message - run: vzt-agent bus check --json';
 
+// With a peer: the paired prompt (byte-stable). Without one: the multi-agent
+// prompt for an agent that addresses any agent of its project by alias.
 export function BOOTSTRAP_PROMPT(alias, peer) {
+  if (peer === undefined) {
+    return (
+      `You are "${alias}", one of the agents working on this project over the VZT bus. ` +
+      'See who is up with: vzt-agent bus agents --project --json . ' +
+      'Talk to another agent ONLY via: vzt-agent bus send --to <alias> --type message|task|question --subject ... --body ... ; ' +
+      'read your inbox with: vzt-agent bus check --json ; ' +
+      'answer questions with: vzt-agent bus reply --id <id> --body ... . ' +
+      'A line starting "vzt: new bus message" means run that check.'
+    );
+  }
   return (
     `You are "${alias}", paired with "${peer}" over the VZT bus in this workspace. ` +
     `Talk to ${peer} ONLY via: vzt-agent bus send --to ${peer} --type message|task|question --subject ... --body ... ; ` +
