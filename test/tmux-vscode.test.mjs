@@ -299,7 +299,7 @@ function fakeTerminal(opts = {}) {
   };
 }
 
-async function swapHarness({ live = () => true, tmuxPresent = true } = {}) {
+async function swapHarness({ live = () => true, tmuxPresent = true, editorColumn } = {}) {
   const { AgentRegistry } = await load('registry');
   const { tmux, calls } = await makeTmux((verb, rest) => {
     if (verb === 'has-session' && !live(rest[2].slice(1))) throw new Error("can't find session");
@@ -312,6 +312,7 @@ async function swapHarness({ live = () => true, tmuxPresent = true } = {}) {
     tmux: () => (tmuxPresent ? tmux : undefined),
     reveal: (root) => events.push(`reveal:${root}`),
     onActive: (root) => events.push(`active:${root}`),
+    editorColumn,
     log: (l) => events.push(`log:${l}`),
   });
   return { registry, created, events, saves, calls };
@@ -393,6 +394,35 @@ test('showProject: other projects detach WITHOUT killing; this one attaches, one
   h.registry.set('w2', { alias: 'feat-codex', kind: 'codex', cwd: WT, session: 'vzt-w2', project: P });
   h.registry.showProject(P, { show: false });
   assert.deepEqual(h.created.at(-1).opts.location, { parentTerminal: w1 });
+});
+
+test('a terminal moved into an editor column comes back there after a swap; panel ones stay in the panel', async () => {
+  const columns = new Map();
+  const h = await swapHarness({ editorColumn: (t) => columns.get(t) });
+  seed(h.registry, [
+    ['m1', { alias: 'app-claude', kind: 'claude', cwd: P, session: 'vzt-m1', project: P }],
+    ['m2', { alias: 'app-codex', kind: 'codex', cwd: P, session: 'vzt-m2', project: P }],
+    ['m3', { alias: 'shell', kind: 'shell', cwd: P, session: 'vzt-m3', project: P }],
+    ['q1', { alias: 'other-claude', kind: 'claude', cwd: Q, session: 'vzt-q1', project: Q }],
+  ]);
+  h.registry.showProject(P);
+  const [m1] = h.created;
+  columns.set(m1, 2); // the user dragged app-claude into the editor area, column 2
+
+  h.registry.showProject(Q);
+  assert.equal(m1.disposed, true);
+  h.registry.showProject(P);
+
+  const [n1, n2, n3] = h.created.slice(-3);
+  assert.deepEqual(n1.opts.location, { viewColumn: 2, preserveFocus: true }, 'back in the column the user put it in');
+  assert.ok(!('location' in n2.opts), 'an editor terminal is no split parent: the next panel one leads the group');
+  assert.deepEqual(n3.opts.location, { parentTerminal: n2 });
+  assert.equal(h.registry.get('m1').column, undefined, 'consumed once re-attached');
+
+  // Moved back to the panel: the next swap returns it to the panel.
+  h.registry.showProject(Q);
+  h.registry.showProject(P);
+  assert.ok(!('location' in h.created.at(-3).opts), 'leads its panel group again');
 });
 
 test("a swap's own disposal closes nothing; a user close kills the session and forgets it", async () => {

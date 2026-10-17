@@ -39,6 +39,8 @@ export interface RegistryEntry {
   session?: string;
   /** The main checkout of `cwd` (the bus's project rule), cached when it started. */
   project?: string;
+  /** The editor column its terminal sat in when a swap detached it; undefined = the panel. */
+  column?: number;
 }
 
 export interface SavedAgent {
@@ -75,6 +77,8 @@ export interface TerminalView {
   /** Reveal `root` in the Explorer — only called when it is a workspace folder. */
   reveal?(root: string): void;
   onActive?(root: string): void;
+  /** The editor column holding `terminal`, undefined when it is in the panel. */
+  editorColumn?(terminal: vscode.Terminal): number | undefined;
   log?(line: string): void;
 }
 
@@ -168,6 +172,7 @@ export class AgentRegistry {
    * Make `root` the active project: detach the terminals of every other
    * project's tmux entries (their sessions run on), attach every entry of `root`
    * without a terminal — one split group per worktree — and show the lead one.
+   * A terminal the user moved into an editor column comes back in that column.
    * Never touches a legacy terminal or one this registry does not own.
    */
   showProject(root: string, opts: ShowOptions = {}): vscode.Terminal | undefined {
@@ -177,6 +182,7 @@ export class AgentRegistry {
     for (const entry of this.agents.values()) {
       if (!entry.session || !entry.terminal || entry.project === root) continue;
       const t = entry.terminal;
+      entry.column = this.view?.editorColumn?.(t);
       entry.terminal = undefined;
       this.swapClosed.add(t);
       t.dispose();
@@ -193,19 +199,28 @@ export class AgentRegistry {
     let lead: vscode.Terminal | undefined;
     for (const entries of groups.values()) {
       let parent = entries.map((e) => e.terminal).find(isLive);
+      let first: vscode.Terminal | undefined;
       for (const e of entries) {
         if (e.terminal || !e.session || !tmux || !this.view) continue;
+        const column = e.column;
+        e.column = undefined;
         e.terminal = this.view.createTerminal({
           name: terminalName(e.cwd, e.alias),
           cwd: e.cwd,
           ...tmux.attachOptions(e.session),
           // The session is the persistence: VS Code must not revive a stale client after a reload.
           isTransient: true,
-          ...(parent ? { location: { parentTerminal: parent } } : {}),
+          ...(column !== undefined
+            ? { location: { viewColumn: column, preserveFocus: true } }
+            : parent
+              ? { location: { parentTerminal: parent } }
+              : {}),
         });
-        parent ??= e.terminal;
+        // An editor terminal is no split-group parent: panel siblings would follow it into the editor.
+        if (column === undefined) parent ??= e.terminal;
+        first ??= e.terminal;
       }
-      lead ??= parent;
+      lead ??= parent ?? first;
     }
 
     this.active = root;

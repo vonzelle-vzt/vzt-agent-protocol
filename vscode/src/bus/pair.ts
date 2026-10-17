@@ -215,6 +215,15 @@ export function registerAgentBus(
         void context.workspaceState.update(ACTIVE_KEY, root);
         for (const l of activeListeners) l();
       },
+      editorColumn: (terminal) => {
+        // A terminal editor tab names no terminal; its label is the terminal's name.
+        for (const group of vscode.window.tabGroups.all) {
+          for (const tab of group.tabs) {
+            if (tab.input instanceof vscode.TabInputTerminal && tab.label === terminal.name) return group.viewColumn;
+          }
+        }
+        return undefined;
+      },
       log,
     }
   );

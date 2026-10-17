@@ -72,7 +72,7 @@ test('package contributes workspace commands', () => {
 });
 
 test('package version', () => {
-  assert.equal(PKG.version, '0.10.1'); // 0.10.1: claude in tmux reaches the IDE (CLAUDE_CODE_SSE_PORT)
+  assert.equal(PKG.version, '0.10.2'); // 0.10.2: a terminal moved into the editor area stays there across project swaps
 });
 
 test('project and worktree rows carry their own + buttons; a worktree row is clickable', () => {
