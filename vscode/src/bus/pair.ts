@@ -201,6 +201,15 @@ export function registerAgentBus(
   const save = (agents: SavedState["agents"], shells: SavedShell[]) =>
     void context.workspaceState.update(SAVED_KEY, { window: window, agents, shells } satisfies SavedState);
   const activeListeners: (() => void)[] = [];
+  // A terminal editor tab names no terminal; its label is the terminal's name.
+  const editorColumn = (terminal: vscode.Terminal): number | undefined => {
+    for (const group of vscode.window.tabGroups.all) {
+      for (const tab of group.tabs) {
+        if (tab.input instanceof vscode.TabInputTerminal && tab.label === terminal.name) return group.viewColumn;
+      }
+    }
+    return undefined;
+  };
   const registry = new AgentRegistry(
     (agents, shells) => {
       if (!restoring) save(agents, shells);
@@ -215,15 +224,7 @@ export function registerAgentBus(
         void context.workspaceState.update(ACTIVE_KEY, root);
         for (const l of activeListeners) l();
       },
-      editorColumn: (terminal) => {
-        // A terminal editor tab names no terminal; its label is the terminal's name.
-        for (const group of vscode.window.tabGroups.all) {
-          for (const tab of group.tabs) {
-            if (tab.input instanceof vscode.TabInputTerminal && tab.label === terminal.name) return group.viewColumn;
-          }
-        }
-        return undefined;
-      },
+      editorColumn,
       log,
     }
   );
@@ -675,6 +676,23 @@ export function registerAgentBus(
       const reason: CloseReason =
         r === vscode.TerminalExitReason.Shutdown ? "shutdown" : r === vscode.TerminalExitReason.User ? "user" : "other";
       registry.closed(closed, reason).catch((err) => log(`terminal close: ${errorText(err)}`));
+    }),
+    // Where the user moved each attached terminal, saved so a swap or a reload
+    // brings it back there. A closed terminal tab is checked a beat later: a
+    // terminal moved back to the panel is still live then, one closed by
+    // shutdown, a swap or the user is not — and must not overwrite its column.
+    vscode.window.tabGroups.onDidChangeTabs((e) => {
+      const terminals = () => [...registry.entries()].map(([, en]) => en.terminal).filter((t): t is vscode.Terminal => !!t && t.exitStatus === undefined);
+      for (const t of terminals()) {
+        const column = editorColumn(t);
+        if (column !== undefined) registry.placed(t, column);
+      }
+      if (e.closed.some((tab) => tab.input instanceof vscode.TabInputTerminal)) {
+        setTimeout(() => {
+          if (stopped) return;
+          for (const t of terminals()) if (editorColumn(t) === undefined) registry.placed(t, undefined);
+        }, 500);
+      }
     }),
     vscode.workspace.onDidChangeConfiguration((e) => {
       if (e.affectsConfiguration("vztMux.busCommand")) bus.reset();

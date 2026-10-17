@@ -2,7 +2,7 @@
   "name": "vzt-mux",
   "displayName": "VZT Ship Mux",
   "description": "Runs VZT Agent Protocol ship units as native VS Code integrated terminals, with a live Ship Run tree — per-unit status, worktree diffs mid-run, and one-click oracle re-runs.",
-  "version": "0.10.2",
+  "version": "0.10.3",
   "publisher": "vzt",
   "icon": "media/ship-icon.png",
   "engines": {
@@ -22,6 +22,10 @@
   ],
   "main": "./out/extension.js",
   "contributes": {
+    "configurationDefaults": {
+      "terminal.integrated.rightClickBehavior": "paste",
+      "terminal.integrated.copyOnSelection": true
+    },
     "viewsContainers": {
       "activitybar": [
         {

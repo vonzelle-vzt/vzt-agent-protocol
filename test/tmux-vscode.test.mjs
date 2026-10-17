@@ -239,7 +239,7 @@ test('the config: listed options, pbcopy copy on macOS only, written atomically'
     'set -g mouse on', 'set -g status off', 'set -g history-limit 50000', 'set -s escape-time 0',
     'set -g default-terminal "tmux-256color"', 'set -g window-size latest', 'set -s set-clipboard on',
     'set -as terminal-features ",xterm-256color:RGB"', 'set-environment -g COLORTERM truecolor',
-    'set -g prefix None', 'unbind-key C-b',
+    'set -g prefix None', 'unbind-key C-b', 'unbind-key -n MouseDown3Pane',
     'bind-key -T copy-mode MouseDragEnd1Pane send-keys -X copy-pipe-and-cancel "pbcopy"',
     'bind-key -T copy-mode-vi MouseDragEnd1Pane send-keys -X copy-pipe-and-cancel "pbcopy"',
   ]) assert.ok(mac.split('\n').includes(line), `missing: ${line}`);
@@ -417,12 +417,35 @@ test('a terminal moved into an editor column comes back there after a swap; pane
   assert.deepEqual(n1.opts.location, { viewColumn: 2, preserveFocus: true }, 'back in the column the user put it in');
   assert.ok(!('location' in n2.opts), 'an editor terminal is no split parent: the next panel one leads the group');
   assert.deepEqual(n3.opts.location, { parentTerminal: n2 });
-  assert.equal(h.registry.get('m1').column, undefined, 'consumed once re-attached');
+  assert.equal(h.registry.get('m1').column, 2, 'kept while attached');
+  assert.equal(h.saves.at(-1).agents.find((a) => a.agent_id === 'm1').column, 2, 'saved, so a reload keeps it');
 
   // Moved back to the panel: the next swap returns it to the panel.
   h.registry.showProject(Q);
   h.registry.showProject(P);
   assert.ok(!('location' in h.created.at(-3).opts), 'leads its panel group again');
+  assert.equal(h.saves.at(-1).agents.find((a) => a.agent_id === 'm1').column, undefined);
+});
+
+test('placed: a move while attached is saved at once; a move to the same place saves nothing', async () => {
+  const h = await swapHarness();
+  seed(h.registry, [
+    ['m1', { alias: 'app-claude', kind: 'claude', cwd: P, session: 'vzt-m1', project: P }],
+    ['vzt-sh-01', { alias: 'shell', kind: 'shell', cwd: P, session: 'vzt-sh-01', project: P }],
+  ]);
+  const [m1, sh] = [h.registry.showProject(P), h.created[1]];
+  const before = h.saves.length;
+  h.registry.placed(m1, 2);
+  h.registry.placed(sh, 3);
+  assert.equal(h.saves.length, before + 2);
+  assert.equal(h.saves.at(-1).agents[0].column, 2);
+  assert.equal(h.saves.at(-1).shells[0].column, 3, 'shells keep their place too');
+  h.registry.placed(m1, 2);
+  assert.equal(h.saves.length, before + 2, 'unchanged: no save');
+  h.registry.placed(fakeTerminal(), 4);
+  assert.equal(h.saves.length, before + 2, 'a terminal the registry does not own changes nothing');
+  h.registry.placed(m1, undefined);
+  assert.equal(h.registry.get('m1').column, undefined, 'back in the panel');
 });
 
 test("a swap's own disposal closes nothing; a user close kills the session and forgets it", async () => {

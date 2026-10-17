@@ -221,6 +221,14 @@ test('restore with a live session: adopted and kept detached — nothing launche
   assert.deepEqual(h.launches, []);
 });
 
+test('a live session restores into the editor column the user had put it in', async () => {
+  const h = await tmuxRestore({ live: new Set(['vzt-ag-1', 'vzt-sh-01']) });
+  assert.equal(await h.restore({ ...SAVED_TMUX, column: 2 }), 'adopted');
+  assert.equal(h.registry.get('ag-1').column, 2);
+  assert.equal(await h.restoreShell({ session: 'vzt-sh-01', alias: 'shell', cwd: '/p/app', project: '/p/app', column: 3 }), true);
+  assert.equal(h.registry.get('vzt-sh-01').column, 3);
+});
+
 test('restore with the session gone (a reboot): resumed into a NEW tmux session', async () => {
   const h = await tmuxRestore();
   assert.equal(await h.restore(SAVED_TMUX), 'resumed');

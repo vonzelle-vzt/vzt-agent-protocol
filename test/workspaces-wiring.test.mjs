@@ -72,7 +72,21 @@ test('package contributes workspace commands', () => {
 });
 
 test('package version', () => {
-  assert.equal(PKG.version, '0.10.2'); // 0.10.2: a terminal moved into the editor area stays there across project swaps
+  assert.equal(PKG.version, '0.10.3'); // 0.10.3: terminal placement survives a reload; right-click pastes, selecting copies
+});
+
+test('terminals: right-click pastes and selecting copies, as in Orca (defaults the user can override)', () => {
+  assert.deepEqual(PKG.contributes.configurationDefaults, {
+    'terminal.integrated.rightClickBehavior': 'paste',
+    'terminal.integrated.copyOnSelection': true,
+  });
+});
+
+test('terminal moves are tracked from tab events, and a closed tab only clears a still-live one, later', () => {
+  const pair = fs.readFileSync(path.join(ROOT, 'vscode', 'src', 'bus', 'pair.ts'), 'utf8');
+  assert.match(pair, /tabGroups\.onDidChangeTabs\(/);
+  assert.match(pair, /TabInputTerminal/);
+  assert.match(pair, /setTimeout\(\(\) => \{\s*if \(stopped\) return;/, 'shutdown must not overwrite a saved column');
 });
 
 test('project and worktree rows carry their own + buttons; a worktree row is clickable', () => {

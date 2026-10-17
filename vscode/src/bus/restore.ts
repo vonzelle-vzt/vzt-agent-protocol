@@ -141,7 +141,7 @@ export async function restoreSession(
   if (typeof adopted === "string") return adopted;
   const project = adopted.project ?? saved.project ?? saved.cwd;
   if (live) {
-    deps.registry.set(saved.agent_id, { alias: saved.alias, kind: saved.kind, cwd: saved.cwd, session: saved.session, project });
+    deps.registry.set(saved.agent_id, { alias: saved.alias, kind: saved.kind, cwd: saved.cwd, session: saved.session, project, ...(saved.column !== undefined ? { column: saved.column } : {}) });
     return "adopted";
   }
   await gateTrust(deps, saved.kind, saved.cwd);
@@ -152,6 +152,6 @@ export async function restoreSession(
 /** A saved plain shell comes back only while its session runs; there is nothing to resume. */
 export async function restoreShell(registry: AgentRegistry, tmux: Tmux | undefined, saved: SavedShell): Promise<boolean> {
   if (!tmux || !(await tmux.hasSession(saved.session))) return false;
-  registry.set(saved.session, { alias: saved.alias, kind: "shell", cwd: saved.cwd, session: saved.session, project: saved.project ?? saved.cwd });
+  registry.set(saved.session, { alias: saved.alias, kind: "shell", cwd: saved.cwd, session: saved.session, project: saved.project ?? saved.cwd, ...(saved.column !== undefined ? { column: saved.column } : {}) });
   return true;
 }

@@ -74,6 +74,10 @@ export function confText(platform: NodeJS.Platform = process.platform): string {
     // background-a-command key — a prefix would eat the first press.
     "set -g prefix None",
     "unbind-key C-b",
+    // Right-click pastes (VS Code's terminal.integrated.rightClickBehavior,
+    // defaulted to "paste" by package.json); tmux's own right-click menu would
+    // pop up over it.
+    "unbind-key -n MouseDown3Pane",
   ];
   if (platform === "darwin") {
     // Both tables: tmux picks vi copy-mode keys on its own when $EDITOR or

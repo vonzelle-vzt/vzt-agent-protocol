@@ -39,7 +39,7 @@ export interface RegistryEntry {
   session?: string;
   /** The main checkout of `cwd` (the bus's project rule), cached when it started. */
   project?: string;
-  /** The editor column its terminal sat in when a swap detached it; undefined = the panel. */
+  /** The editor column the user put its terminal in; undefined = the panel. Saved, so a reload keeps it. */
   column?: number;
 }
 
@@ -50,6 +50,7 @@ export interface SavedAgent {
   cwd: string;
   session?: string;
   project?: string;
+  column?: number;
 }
 
 export interface SavedShell {
@@ -57,6 +58,7 @@ export interface SavedShell {
   alias: string;
   cwd: string;
   project?: string;
+  column?: number;
 }
 
 /** Why a terminal closed, from vscode.TerminalExitReason: Shutdown, User, or anything else. */
@@ -107,9 +109,9 @@ export class AgentRegistry {
     const shells: SavedShell[] = [];
     for (const [id, e] of this.agents) {
       if (e.kind === "shell") {
-        if (e.session) shells.push(compact({ session: e.session, alias: e.alias, cwd: e.cwd, project: e.project }));
+        if (e.session) shells.push(compact({ session: e.session, alias: e.alias, cwd: e.cwd, project: e.project, column: e.column }));
       } else {
-        agents.push(compact({ agent_id: id, alias: e.alias, kind: e.kind, cwd: e.cwd, session: e.session, project: e.project }));
+        agents.push(compact({ agent_id: id, alias: e.alias, kind: e.kind, cwd: e.cwd, session: e.session, project: e.project, column: e.column }));
       }
     }
     return { agents, shells };
@@ -141,6 +143,15 @@ export class AgentRegistry {
 
   get size(): number {
     return this.agents.size;
+  }
+
+  /** The user moved `terminal` to editor `column` (undefined = the panel): remember it for the next attach. */
+  placed(terminal: vscode.Terminal, column: number | undefined): void {
+    for (const entry of this.agents.values()) {
+      if (entry.terminal !== terminal || !entry.session || entry.column === column) continue;
+      entry.column = column;
+      this.changed();
+    }
   }
 
   /** Forget every agent that ran in `terminal` (it closed; its lease lapses → stale). */
@@ -179,14 +190,20 @@ export class AgentRegistry {
     const changed = root !== this.active;
     const { reveal = changed, show = true } = opts;
 
+    let moved = false;
     for (const entry of this.agents.values()) {
       if (!entry.session || !entry.terminal || entry.project === root) continue;
       const t = entry.terminal;
-      entry.column = this.view?.editorColumn?.(t);
+      if (this.view?.editorColumn) {
+        const column = this.view.editorColumn(t);
+        moved ||= column !== entry.column;
+        entry.column = column;
+      }
       entry.terminal = undefined;
       this.swapClosed.add(t);
       t.dispose();
     }
+    if (moved) this.changed();
 
     // Main checkout first, then worktrees by path; within one, start order.
     const mine = [...this.agents.values()].filter((e) => e.project === root);
@@ -203,7 +220,6 @@ export class AgentRegistry {
       for (const e of entries) {
         if (e.terminal || !e.session || !tmux || !this.view) continue;
         const column = e.column;
-        e.column = undefined;
         e.terminal = this.view.createTerminal({
           name: terminalName(e.cwd, e.alias),
           cwd: e.cwd,
