@@ -72,7 +72,7 @@ test('package contributes workspace commands', () => {
 });
 
 test('package version', () => {
-  assert.equal(PKG.version, '0.9.1'); // 0.9.1: New Agent Workspace on Explorer root folders
+  assert.equal(PKG.version, '0.9.2'); // 0.9.2: sidebar shows in Restricted Mode with Trust Workspace
 });
 
 test('project and worktree rows carry their own + buttons; a worktree row is clickable', () => {
@@ -100,6 +100,22 @@ test('workspace picker: create anywhere, choose projects only in a saved workspa
 test('Explorer root folders offer New Agent Workspace on right-click', () => {
   const item = (PKG.contributes.menus['explorer/context'] || []).find((m) => m.command === 'vzt-mux.agents.newWorkspace');
   assert.equal(item?.when, 'explorerResourceIsRoot');
+});
+
+test('Restricted Mode: the sidebar stays, nothing starts until trust is granted', () => {
+  assert.equal(PKG.capabilities?.untrustedWorkspaces?.supported, 'limited');
+  const welcome = PKG.contributes.viewsWelcome;
+  for (const view of ['vztProjects', 'vztShipRun', 'vztBus', 'herdrFleet.agents']) {
+    const restricted = welcome.find((w) => w.view === view && w.when === '!isWorkspaceTrusted');
+    assert.match(restricted?.contents || '', /\(command:workbench\.trust\.manage\)/, `${view} offers trust`);
+    assert.ok(welcome.filter((w) => w.view === view && w.when !== '!isWorkspaceTrusted').every((w) => w.when === 'isWorkspaceTrusted'),
+      `${view}: the trusted welcome never shows in Restricted Mode`);
+  }
+  const ext = fs.readFileSync(path.join(ROOT, 'vscode', 'src', 'extension.ts'), 'utf8');
+  const activate = ext.slice(ext.indexOf('export function activate('), ext.indexOf('function activateTrusted('));
+  assert.match(activate, /if \(vscode\.workspace\.isTrusted\) \{\n\s+activateTrusted\(context\);\n\s+return;/);
+  assert.match(activate, /onDidGrantWorkspaceTrust\(\(\) => activateTrusted\(context\)\)/);
+  assert.doesNotMatch(activate, /createTerminal|ensureDirs|registerAgentBus/, 'nothing else runs before trust');
 });
 
 test('agent restore setting defaults true', () => {

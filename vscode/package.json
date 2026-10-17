@@ -2,11 +2,17 @@
   "name": "vzt-mux",
   "displayName": "VZT Ship Mux",
   "description": "Runs VZT Agent Protocol ship units as native VS Code integrated terminals, with a live Ship Run tree — per-unit status, worktree diffs mid-run, and one-click oracle re-runs.",
-  "version": "0.9.1",
+  "version": "0.9.2",
   "publisher": "vzt",
   "icon": "media/ship-icon.png",
   "engines": {
     "vscode": "^1.85.0"
+  },
+  "capabilities": {
+    "untrustedWorkspaces": {
+      "supported": "limited",
+      "description": "In Restricted Mode VZT starts no agents, terminals or ship runs; its sidebar only offers to trust the workspace."
+    }
   },
   "categories": [
     "Other"
@@ -59,19 +65,43 @@
     "viewsWelcome": [
       {
         "view": "vztShipRun",
-        "contents": "No ship run yet.\n\nStart one with:\n[vzt-agent ship-watch <SPEC.md> --mux vscode]()\n\nEach unit opens as its own integrated terminal, and appears here with live status."
+        "contents": "No ship run yet.\n\nStart one with:\n[vzt-agent ship-watch <SPEC.md> --mux vscode]()\n\nEach unit opens as its own integrated terminal, and appears here with live status.",
+        "when": "isWorkspaceTrusted"
       },
       {
         "view": "herdrFleet.agents",
-        "contents": "No herdr server running.\n\nStart one with:\n[herdr]()\n\nThe agents it runs will appear here, badged working / blocked / idle. herdr keeps owning them — closing this window does not stop them."
+        "contents": "No herdr server running.\n\nStart one with:\n[herdr]()\n\nThe agents it runs will appear here, badged working / blocked / idle. herdr keeps owning them — closing this window does not stop them.",
+        "when": "isWorkspaceTrusted"
       },
       {
         "view": "vztBus",
-        "contents": "No paired agents.\n\n[Pair Claude + Codex](command:vzt-mux.bus.pair)\n\nOpens Claude and Codex in split terminals, talking over the local VZT bus. Messages survive window reloads."
+        "contents": "No paired agents.\n\n[Pair Claude + Codex](command:vzt-mux.bus.pair)\n\nOpens Claude and Codex in split terminals, talking over the local VZT bus. Messages survive window reloads.",
+        "when": "isWorkspaceTrusted"
       },
       {
         "view": "vztProjects",
-        "contents": "No projects registered.\n\n[Add Project](command:vzt-mux.projects.add)\n\nEach project opens in its own window; its worktrees and the agents running in them appear here with live status."
+        "contents": "No projects registered.\n\n[Add Project](command:vzt-mux.projects.add)\n\nEach project opens in its own window; its worktrees and the agents running in them appear here with live status.",
+        "when": "isWorkspaceTrusted"
+      },
+      {
+        "view": "vztProjects",
+        "when": "!isWorkspaceTrusted",
+        "contents": "This workspace is in Restricted Mode, so VZT starts no agents here.\n\n[Trust Workspace](command:workbench.trust.manage)\n\nOnce it is trusted, your projects, their worktrees and agents appear here, with + to start an agent."
+      },
+      {
+        "view": "vztShipRun",
+        "when": "!isWorkspaceTrusted",
+        "contents": "Ship runs start only in a trusted workspace.\n\n[Trust Workspace](command:workbench.trust.manage)"
+      },
+      {
+        "view": "vztBus",
+        "when": "!isWorkspaceTrusted",
+        "contents": "Agents start only in a trusted workspace.\n\n[Trust Workspace](command:workbench.trust.manage)"
+      },
+      {
+        "view": "herdrFleet.agents",
+        "when": "!isWorkspaceTrusted",
+        "contents": "Herdr agents show only in a trusted workspace.\n\n[Trust Workspace](command:workbench.trust.manage)"
       }
     ],
     "commands": [

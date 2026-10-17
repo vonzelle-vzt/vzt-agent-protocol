@@ -519,7 +519,21 @@ function writeHostHeartbeat(context: vscode.ExtensionContext): void {
   }
 }
 
+/**
+ * In Restricted Mode nothing starts: no ship queue claims, no agent restore, no
+ * heartbeat that would route ship units here. The views show a Trust Workspace
+ * button instead (viewsWelcome, `!isWorkspaceTrusted`), and granting trust
+ * starts everything in place, with no reload.
+ */
 export function activate(context: vscode.ExtensionContext): void {
+  if (vscode.workspace.isTrusted) {
+    activateTrusted(context);
+    return;
+  }
+  context.subscriptions.push(vscode.workspace.onDidGrantWorkspaceTrust(() => activateTrusted(context)));
+}
+
+function activateTrusted(context: vscode.ExtensionContext): void {
   ensureDirs();
   writeHostHeartbeat(context);
 
