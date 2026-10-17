@@ -1,0 +1,12 @@
+{"ts":"2026-10-17T14:23:39.186Z","kind":"run_started","runId":"ship_20261017T142339_vscode-orca-workspaces","slug":"vscode-orca-workspaces","specPath":"/Users/vonzellebrown/github-projects/vzt-agent-protocol/.vzt/ship/vscode-orca-workspaces/SPEC.md"}
+{"ts":"2026-10-17T14:23:39.186Z","kind":"gate_passed","runId":"ship_20261017T142339_vscode-orca-workspaces","gate":"ship-check","detail":"7 units, disjoint, oracles present"}
+{"ts":"2026-10-17T14:26:14.205Z","kind":"unit_result","unit":"u2-workspace-cli","status":"PASS","via":"ship-watch","mux":"orca","code":0}
+{"ts":"2026-10-17T14:27:45.396Z","kind":"unit_result","unit":"u3-projects-view","status":"PASS","via":"ship-watch","mux":"orca","code":0}
+{"ts":"2026-10-17T14:28:09.790Z","kind":"unit_result","unit":"u4-spawn","status":"PASS","via":"ship-watch","mux":"orca","code":0}
+{"ts":"2026-10-17T14:29:10.603Z","kind":"unit_result","unit":"u1-bus-project","status":"PASS","via":"ship-watch","mux":"orca","code":0}
+{"ts":"2026-10-17T14:30:23.015Z","kind":"unit_result","unit":"u5-attention","status":"PASS","via":"ship-watch","mux":"orca","code":0}
+{"ts":"2026-10-17T14:30:53.157Z","kind":"unit_result","unit":"u6-dashboard","status":"PASS","via":"ship-watch","mux":"orca","code":0}
+{"ts":"2026-10-17T14:36:18.426Z","kind":"unit_result","unit":"u7-wiring","status":"FAIL","via":"ship-watch","mux":"orca","code":1}
+{"ts":"2026-10-17T14:36:18.675Z","kind":"integration","status":"SKIPPED","output":null}
+{"ts":"2026-10-17T14:36:18.733Z","kind":"ship","units":7,"passed":6,"blocked":1,"corrections":0}
+{"ts":"2026-10-17T14:36:18.790Z","kind":"run_complete","integration":"SKIPPED"}
