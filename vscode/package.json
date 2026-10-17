@@ -2,7 +2,7 @@
   "name": "vzt-mux",
   "displayName": "VZT Ship Mux",
   "description": "Runs VZT Agent Protocol ship units as native VS Code integrated terminals, with a live Ship Run tree — per-unit status, worktree diffs mid-run, and one-click oracle re-runs.",
-  "version": "0.9.2",
+  "version": "0.10.0",
   "publisher": "vzt",
   "icon": "media/ship-icon.png",
   "engines": {
@@ -80,7 +80,7 @@
       },
       {
         "view": "vztProjects",
-        "contents": "No projects registered.\n\n[Add Project](command:vzt-mux.projects.add)\n\nEach project opens in its own window; its worktrees and the agents running in them appear here with live status.",
+        "contents": "No projects registered.\n\n[Add Project](command:vzt-mux.projects.add)\n\nClick a project to switch the terminal panel to its agents; its worktrees and the agents running in them appear here with live status, and + starts Claude, Codex or a terminal there.",
         "when": "isWorkspaceTrusted"
       },
       {
@@ -246,6 +246,11 @@
         "icon": "$(person-add)"
       },
       {
+        "command": "vzt-mux.agents.startInProject",
+        "title": "VZT: Start Agent or Terminal in Project",
+        "icon": "$(add)"
+      },
+      {
         "command": "vzt-mux.workspace.create",
         "title": "VZT: Create Workspace from Projects",
         "icon": "$(new-folder)"
@@ -302,7 +307,12 @@
         "vztMux.agents.restore": {
           "type": "boolean",
           "default": true,
-          "description": "After a reload or restart, bring back the agents this window started: reattach a terminal that still runs its agent, else resume the agent's last session in a new terminal."
+          "description": "After a reload or restart, bring back the agents this window started: take back the tmux session that still runs an agent (or the terminal, for agents started without tmux), else resume the agent's last session."
+        },
+        "vztMux.agents.tmux": {
+          "type": "boolean",
+          "default": true,
+          "description": "Run new agents and project terminals in tmux sessions on a private server (tmux -L vzt-mux, ~/.vzt/mux/tmux.conf; your own tmux is never touched). VS Code terminals are then only attach clients: switching projects swaps them without stopping anything, and agents outlive the window. Off, or with no tmux installed, agents run in plain terminals that close with the window."
         }
       }
     },
@@ -406,7 +416,7 @@
           "group": "1_herdr@2"
         },
         {
-          "command": "vzt-mux.agents.newWorkspace",
+          "command": "vzt-mux.agents.startInProject",
           "when": "view == vztProjects && viewItem == vztProject",
           "group": "inline@0"
         },
@@ -418,7 +428,7 @@
         {
           "command": "vzt-mux.projects.openWindow",
           "when": "view == vztProjects && viewItem == vztProject",
-          "group": "inline@1"
+          "group": "1_project@0"
         },
         {
           "command": "vzt-mux.projects.remove",

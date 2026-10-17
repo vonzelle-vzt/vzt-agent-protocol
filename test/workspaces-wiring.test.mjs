@@ -72,13 +72,13 @@ test('package contributes workspace commands', () => {
 });
 
 test('package version', () => {
-  assert.equal(PKG.version, '0.9.2'); // 0.9.2: sidebar shows in Restricted Mode with Trust Workspace
+  assert.equal(PKG.version, '0.10.0'); // 0.10.0: tmux-backed project swap, project + picker
 });
 
 test('project and worktree rows carry their own + buttons; a worktree row is clickable', () => {
   const inline = PKG.contributes.menus['view/item/context'].filter((m) => m.group?.startsWith('inline') && /view == vztProjects/.test(m.when));
   const on = (item) => inline.filter((m) => m.when.includes(`viewItem == ${item}`)).map((m) => m.command).sort();
-  assert.deepEqual(on('vztProject'), ['vzt-mux.agents.newWorkspace', 'vzt-mux.projects.openWindow']);
+  assert.deepEqual(on('vztProject'), ['vzt-mux.agents.startInProject']); // Open Project Window moved to the context menu
   assert.deepEqual(on('vztWorktree'), ['vzt-mux.agents.addHere']);
   const tree = fs.readFileSync(path.join(ROOT, 'vscode', 'src', 'projects', 'projectsTree.ts'), 'utf8');
   assert.match(tree, /command: "vzt-mux\.projects\.openWorktree", title: "Open Worktree", arguments: \[node\]/);

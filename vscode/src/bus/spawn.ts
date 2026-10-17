@@ -1,19 +1,24 @@
 /**
- * Start one bus agent (Claude or Codex) in an integrated terminal.
+ * Start one bus agent (Claude or Codex), or a plain shell, for this window.
  *
  * Kept free of the `vscode` module at runtime (`import type` only) so
- * test/spawn-vscode.test.mjs can drive it with a fake run/createTerminal/launch.
+ * test/spawn-vscode.test.mjs can drive it with a fake run/createTerminal/launch
+ * and a Tmux over a fake exec.
  *
  * Nothing here decides WHAT to launch: the agent argv comes from `bus argv`, the
- * first prompt from `bus bootstrap-prompt`. This file only registers the agent,
- * opens its terminal, and hands the CLI's command to `launch` (the delayed
- * sendWhenReady in extension.ts).
+ * first prompt from `bus bootstrap-prompt`. This file only registers the agent
+ * and starts it — in a detached tmux session when `deps.tmux` is set (the
+ * window attaches it when its project is shown: registry.ts showProject), else
+ * in its own integrated terminal through `launch` (the delayed sendWhenReady in
+ * extension.ts). Either way the command is typed into a login shell, so an
+ * agent that exits leaves a shell prompt behind.
  */
 
 import * as fs from "fs";
 import * as path from "path";
 import type * as vscode from "vscode";
 import type { AgentRegistry } from "./registry";
+import { agentSession, Exec, shellSession, Tmux } from "./tmux";
 
 export type Kind = "claude" | "codex";
 
@@ -29,6 +34,11 @@ export interface SpawnDeps {
   windowId: string;
   registry: AgentRegistry;
   isTrusted(): boolean;
+  /** Set = start in tmux sessions; unset = direct terminals (no tmux, or vztMux.agents.tmux off). */
+  tmux?: Tmux;
+  /** The bus's project rule for a folder; used when the CLI's answer lacks it, and for shells. */
+  projectOf?(cwd: string): Promise<string>;
+  log?(line: string): void;
 }
 
 export interface SpawnRequest {
@@ -38,6 +48,8 @@ export interface SpawnRequest {
   peer?: string;
   task?: string;
   parentTerminal?: vscode.Terminal;
+  /** Try `alias`, then `alias-2` … `alias-9` while the bus refuses the alias as taken. */
+  autoSuffix?: boolean;
 }
 
 /** The doctor field that says the CLI's Node can load its storage engine. */
@@ -85,20 +97,65 @@ export async function gateTrust(deps: SpawnDeps, kind: Kind, cwd: string): Promi
   if (kind === "claude") await deps.run(["trust-claude", "--workspace", cwd], cwd);
 }
 
+/**
+ * How `bus register` says an alias is taken: exit 4 with one of these messages
+ * (cli/bus/store.mjs register). Exit 4 alone is not enough — only these mean
+ * "pick another alias"; anything else is a real failure and is never retried.
+ */
+const ALIAS_TAKEN_RE = /alias "[^"]*" is (already used in this project|live in another window|registered as kind)/;
+
+export function aliasTaken(err: unknown): boolean {
+  const e = err as { exitCode?: unknown; stderr?: unknown; message?: unknown } | undefined;
+  return e?.exitCode === 4 && ALIAS_TAKEN_RE.test(`${e.stderr ?? ""} ${e.message ?? ""}`);
+}
+
+/** `alias`, `alias-2` … `alias-9`. */
+export function aliasCandidates(alias: string): string[] {
+  return [alias, ...[2, 3, 4, 5, 6, 7, 8, 9].map((n) => `${alias}-${n}`)];
+}
+
+/**
+ * `<folder>-<kind>` as a bus alias (1-64 of [A-Za-z0-9._-]): other characters
+ * become "-", and the folder part leaves room for a `-9` suffix.
+ */
+export function defaultAlias(folder: string, kind: Kind): string {
+  const max = 64 - kind.length - 1 - 2;
+  const base = folder.replace(/[^A-Za-z0-9._-]+/g, "-").replace(/^[-.]+|-+$/g, "").slice(0, max).replace(/-+$/, "");
+  return `${base || "agent"}-${kind}`;
+}
+
 export async function spawnAgent(
   deps: SpawnDeps,
   req: SpawnRequest
-): Promise<{ agent_id: string; terminal: vscode.Terminal }> {
+): Promise<{ agent_id: string; alias: string; terminal?: vscode.Terminal; project?: string }> {
   const { run, windowId } = deps;
-  const { kind, alias, cwd } = req;
+  const { kind, cwd } = req;
 
   await gateTrust(deps, kind, cwd);
-  const { agent_id } = await run<{ agent_id: string }>(
-    ["register", "--alias", alias, "--kind", kind, "--window", windowId, "--workspace", cwd],
-    cwd
-  );
-  const terminal = await startAgent(deps, { ...req, agent_id });
-  return { agent_id, terminal };
+  // An alias one of THIS window's agents holds would not be refused: the bus
+  // hands the same workspace + window its agent back (register "reused"),
+  // resetting a running agent. Skip those before asking.
+  const held = new Set([...deps.registry.entries()].filter(([, e]) => e.kind !== "shell").map(([, e]) => e.alias));
+  const candidates = req.autoSuffix ? aliasCandidates(req.alias).filter((a) => !held.has(a)) : [req.alias];
+  let refused: unknown;
+  for (const alias of candidates) {
+    let reg: { agent_id: string; project?: string };
+    try {
+      reg = await run<{ agent_id: string; project?: string }>(
+        ["register", "--alias", alias, "--kind", kind, "--window", windowId, "--workspace", cwd],
+        cwd
+      );
+    } catch (err) {
+      if (!req.autoSuffix || !aliasTaken(err)) throw err;
+      refused = err;
+      continue;
+    }
+    const { agent_id, project } = reg;
+    const terminal = await startAgent(deps, { ...req, alias, agent_id, project });
+    return { agent_id, alias, terminal, project };
+  }
+  const why = refused instanceof Error ? ` (last: ${refused.message})` : "";
+  throw new Error(`every alias from ${req.alias} to ${req.alias}-9 is taken in this project${why}`);
 }
 
 /** The terminal name of an agent; restore finds a revived terminal by it. */
@@ -107,16 +164,29 @@ export function terminalName(cwd: string, alias: string): string {
 }
 
 /**
- * Open a terminal for an already-registered (or adopted) agent and launch it:
- * resumed from `resume` (the session id its SessionStart hook recorded), else
- * fresh with the bootstrap prompt. The caller has run gateTrust.
+ * Start an already-registered (or adopted) agent: resumed from `resume` (the
+ * session id its SessionStart hook recorded), else fresh with the bootstrap
+ * prompt. The caller has run gateTrust.
+ *
+ * With tmux the agent gets the detached session `vzt-<agent_id>` and no
+ * terminal yet (returns undefined). A session of that name that already runs
+ * is this very agent (the bus handed its id back), so it is registered as is
+ * and nothing is typed into it. Without tmux it gets its own terminal.
  */
 export async function startAgent(
   deps: SpawnDeps,
-  req: SpawnRequest & { agent_id: string; resume?: string | null }
-): Promise<vscode.Terminal> {
-  const { run, windowId } = deps;
+  req: SpawnRequest & { agent_id: string; resume?: string | null; project?: string }
+): Promise<vscode.Terminal | undefined> {
+  const { run, windowId, tmux } = deps;
   const { kind, alias, cwd, agent_id } = req;
+  const session = tmux ? agentSession(agent_id) : undefined;
+  const project = tmux ? req.project ?? (await projectFor(deps, cwd)) : req.project;
+
+  if (tmux && session && (await tmux.hasSession(session))) {
+    deps.registry.set(agent_id, { alias, kind, cwd, session, project });
+    deps.log?.(`${alias}: tmux session ${session} already runs it — kept, nothing typed`);
+    return undefined;
+  }
 
   let words: string[];
   if (req.resume) {
@@ -134,16 +204,82 @@ export async function startAgent(
     VZT_BUS_WINDOW: windowId,
     ...(kind === "claude" ? { CLAUDE_CODE_DISABLE_FEEDBACK_SURVEY: "1" } : {}),
   };
+  const cmd = words.map(shellQuote).join(" ");
+  const label = `bus ${alias} (${agent_id})`;
+
+  if (tmux && session) {
+    await tmux.newSession(session, cwd, env);
+    deps.registry.set(agent_id, { alias, kind, cwd, session, project });
+    // Not awaited, like sendWhenReady: the window attaches the session while
+    // its shell starts; the command is typed once the shell has drawn.
+    tmux.launch(session, cmd).then(
+      () => deps.log?.(`launched ${label} in tmux session ${session}`),
+      (err) => deps.log?.(`launch of ${label} failed — ${err instanceof Error ? err.message : String(err)}`)
+    );
+    return undefined;
+  }
+
   const terminal = deps.createTerminal({
     name: terminalName(cwd, alias),
     cwd,
     env,
     ...(req.parentTerminal ? { location: { parentTerminal: req.parentTerminal } } : {}),
   });
-  deps.registry.set(agent_id, { alias, kind, cwd, terminal });
+  deps.registry.set(agent_id, { alias, kind, cwd, terminal, ...(project ? { project } : {}) });
 
-  deps.launch(terminal, words.map(shellQuote).join(" "), `bus ${alias} (${agent_id})`);
+  deps.launch(terminal, cmd, label);
   return terminal;
+}
+
+async function projectFor(deps: SpawnDeps, cwd: string): Promise<string> {
+  try {
+    return deps.projectOf ? await deps.projectOf(cwd) : cwd;
+  } catch {
+    return cwd;
+  }
+}
+
+/**
+ * A plain login shell in `cwd`, in its own tmux session (the caller checked
+ * deps.tmux). Not a bus agent: no registration, no lease, never woken. Keyed
+ * in the registry by its session name. Returns that key.
+ */
+export async function startShell(deps: SpawnDeps, cwd: string): Promise<string> {
+  if (!deps.isTrusted()) throw new Error(UNTRUSTED_MESSAGE);
+  const tmux = deps.tmux;
+  if (!tmux) throw new Error("plain terminals in a project need tmux");
+  const project = await projectFor(deps, cwd);
+  const taken = new Set([...deps.registry.entries()].filter(([, e]) => e.kind === "shell" && e.cwd === cwd).map(([, e]) => e.alias));
+  let alias = "shell";
+  for (let n = 2; taken.has(alias); n++) alias = `shell-${n}`;
+  const session = shellSession();
+  await tmux.newSession(session, cwd, {});
+  deps.registry.set(session, { alias, kind: "shell", cwd, session, project });
+  return session;
+}
+
+/**
+ * The bus's project rule (cli/bus/cli.mjs resolveProject): the main checkout
+ * every worktree of a repo shares — the parent of `git rev-parse
+ * --git-common-dir`, or that dir itself for a bare repo — realpath'd. Not a
+ * git checkout: the folder itself.
+ */
+export async function projectOf(exec: Exec, cwd: string): Promise<string> {
+  const real = (p: string) => {
+    try {
+      return fs.realpathSync(p);
+    } catch {
+      return path.resolve(p);
+    }
+  };
+  let common = "";
+  try {
+    common = (await exec("git", ["-C", cwd, "rev-parse", "--path-format=absolute", "--git-common-dir"])).stdout.trim();
+  } catch {
+    // not a git checkout
+  }
+  if (!common) return real(cwd);
+  return real(path.basename(common) === ".git" ? path.dirname(common) : common);
 }
 
 /**

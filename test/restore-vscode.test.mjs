@@ -164,3 +164,117 @@ test('the registry reports its saved form on every change, terminals left out', 
   reg.removeTerminal(t);
   assert.deepEqual(saves.at(-1), []);
 });
+
+// --- 0.10.0: agents saved with a tmux session ---------------------------------
+
+const BIN = '/opt/fake/bin/tmux';
+
+async function tmuxRestore({ live = new Set(), adopt = () => ({ ...ADOPTED, project: '/p/app' }), spawnInTmux = true } = {}) {
+  const { restoreSession, restoreShell } = await load('restore');
+  const { Tmux } = await load('tmux');
+  const h = await harness();
+  const tmuxCalls = [];
+  const exec = async (_file, args) => {
+    tmuxCalls.push(args);
+    const verb = args[2] === '-f' ? args[4] : args[2];
+    if (verb === 'has-session' && !live.has(args[4].slice(1))) throw new Error("can't find session");
+    if (verb === 'capture-pane') return { stdout: '% ' };
+    return { stdout: '' };
+  };
+  const tmux = new Tmux({ bin: BIN, exec, conf: '/c/tmux.conf', sleep: async () => {} });
+  const calls = [];
+  const deps = {
+    run: async (args) => {
+      calls.push(args);
+      if (args[0] === 'adopt') return adopt(args);
+      if (args[0] === 'trust-claude') return { trusted: true };
+      if (args[0] === 'argv') return [...ARGV[args[args.indexOf('--kind') + 1]], ...(args.includes('--resume') ? ['RESUME', args[args.indexOf('--resume') + 1]] : [])];
+      if (args[0] === 'bootstrap-prompt') return { prompt: 'PROMPT' };
+      throw new Error(`unexpected bus verb ${args[0]}`);
+    },
+    createTerminal: (opts) => { const t = { ...fakeTerminal(opts.name), opts }; h.created.push(t); return t; },
+    launch: (terminal, cmd) => h.launches.push({ terminal, cmd }),
+    windowId: 'win-new',
+    registry: h.registry,
+    isTrusted: () => true,
+    ...(spawnInTmux ? { tmux } : {}),
+  };
+  return {
+    ...h,
+    calls,
+    tmuxCalls,
+    // An explicit `undefined` second argument = no tmux binary at all.
+    restore: (...a) => restoreSession(deps, a.length > 1 ? a[1] : tmux, a[0], 'win-old'),
+    restoreShell: (...a) => restoreShell(h.registry, a.length > 1 ? a[1] : tmux, a[0]),
+  };
+}
+
+const SAVED_TMUX = { ...SAVED, session: 'vzt-ag-1', project: '/p/app' };
+
+test('restore with a live session: adopted and kept detached — nothing launched, nothing typed', async () => {
+  const h = await tmuxRestore({ live: new Set(['vzt-ag-1']) });
+  assert.equal(await h.restore(SAVED_TMUX), 'adopted');
+  assert.deepEqual(h.calls, [['adopt', '--agent', 'ag-1', '--window', 'win-new', '--from-window', 'win-old']]);
+  assert.deepEqual(h.tmuxCalls, [['-L', 'vzt-mux', 'has-session', '-t', '=vzt-ag-1']], 'no new-session, no send-keys');
+  assert.deepEqual({ ...h.registry.get('ag-1') }, { alias: 'feat-claude', kind: 'claude', cwd: '/p/app-worktrees/feat', session: 'vzt-ag-1', project: '/p/app' });
+  assert.deepEqual(h.created, []);
+  assert.deepEqual(h.launches, []);
+});
+
+test('restore with the session gone (a reboot): resumed into a NEW tmux session', async () => {
+  const h = await tmuxRestore();
+  assert.equal(await h.restore(SAVED_TMUX), 'resumed');
+  assert.deepEqual(h.calls.map((c) => c[0]), ['adopt', 'trust-claude', 'argv']);
+  const created = h.tmuxCalls.find((a) => a.includes('new-session'));
+  assert.equal(created[created.indexOf('-s') + 1], 'vzt-ag-1');
+  for (let i = 0; i < 200 && !h.tmuxCalls.some((a) => a.includes('Enter')); i++) await new Promise((r) => setImmediate(r));
+  const typed = h.tmuxCalls.find((a) => a.includes('-l'));
+  assert.equal(typed.at(-1), [...ARGV.claude, 'RESUME', 'sess-1'].map(shq).join(' '), 'no bootstrap prompt on resume');
+  assert.equal(h.registry.get('ag-1').session, 'vzt-ag-1');
+  assert.deepEqual(h.created, [], 'still no terminal: attached when its project is shown');
+
+  const fresh = await tmuxRestore({ adopt: () => ({ ...ADOPTED, session_id: null }) });
+  assert.equal(await fresh.restore(SAVED_TMUX), 'relaunched');
+  assert.deepEqual(fresh.calls.map((c) => c[0]), ['adopt', 'trust-claude', 'argv', 'bootstrap-prompt']);
+});
+
+test('restore without tmux any more: the gone session resumes in a direct terminal', async () => {
+  const h = await tmuxRestore({ spawnInTmux: false });
+  assert.equal(await h.restore(SAVED_TMUX, undefined), 'resumed');
+  assert.equal(h.created.length, 1);
+  assert.equal(h.launches[0].cmd, [...ARGV.claude, 'RESUME', 'sess-1'].map(shq).join(' '));
+  assert.equal(h.registry.get('ag-1').session, undefined);
+  assert.deepEqual(h.tmuxCalls, []);
+});
+
+test('restore with a live session: gone/elsewhere pass through; a failed adopt throws and launches nothing', async () => {
+  const fail = (exitCode) => () => { throw Object.assign(new Error('x'), { exitCode }); };
+  for (const [code, outcome] of [[2, 'gone'], [4, 'elsewhere']]) {
+    const h = await tmuxRestore({ live: new Set(['vzt-ag-1']), adopt: fail(code) });
+    assert.equal(await h.restore(SAVED_TMUX), outcome);
+    assert.equal(h.registry.size, 0);
+    assert.ok(!h.tmuxCalls.some((a) => a.includes('kill-session')), 'a session another window drives is never touched');
+  }
+  const t = await tmuxRestore({ adopt: fail(1) });
+  await assert.rejects(t.restore(SAVED_TMUX));
+  assert.ok(!t.tmuxCalls.some((a) => a.includes('new-session')));
+  assert.equal(t.registry.size, 0);
+});
+
+test('a saved shell comes back only while its session runs', async () => {
+  const h = await tmuxRestore({ live: new Set(['vzt-sh-01']) });
+  assert.equal(await h.restoreShell({ session: 'vzt-sh-01', alias: 'shell', cwd: '/p/app', project: '/p/app' }), true);
+  assert.equal(h.registry.get('vzt-sh-01').kind, 'shell');
+  assert.equal(await h.restoreShell({ session: 'vzt-sh-02', alias: 'shell-2', cwd: '/p/app' }), false);
+  assert.equal(h.registry.get('vzt-sh-02'), undefined);
+  assert.equal(await h.restoreShell({ session: 'vzt-sh-01', alias: 'shell', cwd: '/p/app' }, undefined), false, 'no tmux: nothing to attach');
+  assert.ok(!h.tmuxCalls.some((a) => a.includes('new-session')), 'a shell is never restarted');
+});
+
+test('a pre-0.10 entry still adopts its terminal by pid, and now caches its project', async () => {
+  const h = await harness();
+  const mine = fakeTerminal(NAME);
+  assert.equal(await h.restore(SAVED, { ...ADOPTED, project: '/p/app' }, [{ terminal: mine, pid: 100 }], SHELL_WITH_AGENT), 'adopted');
+  assert.equal(h.registry.get('ag-1').project, '/p/app');
+  assert.equal(h.registry.get('ag-1').session, undefined);
+});

@@ -272,3 +272,122 @@ test('worktree row whose agents are all stale has no lead to focus', async () =>
   assert.equal(row.glyph, 'stale');
   assert.equal(row.lead, null);
 });
+
+// --- 0.10.0: one window, one terminal set per project -------------------------
+// projectsTree.js needs the `vscode` module, so it is loaded with a minimal fake
+// one: the test drives the real tree items and commands.
+
+async function loadProjectsTree() {
+  const { createRequire } = await import('node:module');
+  const Module = (await import('node:module')).default;
+  const require = createRequire(import.meta.url);
+  const file = path.join(VSCODE, 'out', 'projects', 'projectsTree.js');
+  if (!fs.existsSync(file)) assert.fail('vscode/out/projects/projectsTree.js missing — run `npm --prefix vscode run compile` before testing');
+
+  const commands = new Map();
+  const executed = [];
+  const views = [];
+  class EventEmitter { constructor() { this.listeners = []; this.event = (l) => { this.listeners.push(l); return { dispose() {} }; }; } fire(e) { for (const l of this.listeners) l(e); } }
+  class TreeItem { constructor(label, collapsibleState) { this.label = label; this.collapsibleState = collapsibleState; } }
+  const fake = {
+    EventEmitter,
+    TreeItem,
+    TreeItemCollapsibleState: { None: 0, Collapsed: 1, Expanded: 2 },
+    ThemeIcon: class { constructor(id, color) { this.id = id; this.color = color; } },
+    ThemeColor: class { constructor(id) { this.id = id; } },
+    MarkdownString: class { constructor(v) { this.value = v; } },
+    Uri: { file: (p) => ({ fsPath: p }) },
+    window: {
+      createTreeView: (id, opts) => { const v = { id, provider: opts.treeDataProvider, visible: false, onDidChangeVisibility: () => ({ dispose() {} }), dispose() {} }; views.push(v); return v; },
+      showErrorMessage: () => {},
+      showInformationMessage: () => {},
+      showQuickPick: async () => undefined,
+    },
+    commands: {
+      registerCommand: (id, fn) => { commands.set(id, fn); return { dispose() {} }; },
+      executeCommand: async (...args) => { executed.push(args); },
+    },
+    workspace: { workspaceFolders: [] },
+  };
+  const real = Module._resolveFilename;
+  const FAKE = path.join(VSCODE, 'out', '__fake_vscode__.js');
+  Module._resolveFilename = function (request, ...rest) { return request === 'vscode' ? FAKE : real.call(this, request, ...rest); };
+  require.cache[FAKE] = { id: FAKE, filename: FAKE, loaded: true, exports: fake };
+  try {
+    delete require.cache[file];
+    return { mod: require(file), commands, executed, views };
+  } finally {
+    Module._resolveFilename = real;
+  }
+}
+
+async function projectsHarness({ active = '/r/app', agents = [], focusLocal = () => false } = {}) {
+  const t = await loadProjectsTree();
+  const shown = [];
+  const focused = [];
+  const context = { subscriptions: [] };
+  const base = tmpBase();
+  const api = t.mod.registerProjects(context, {
+    run: async (args) => {
+      if (args[0] === 'projects') {
+        return [
+          { name: 'app', root: '/r/app', baseRef: 'origin/main', exists: true, worktrees: [
+            { path: '/r/app', branch: 'main', head: 'm', main: true },
+            { path: '/r/app-wt/feat', branch: 'feat', head: 'f', main: false },
+          ] },
+          { name: 'zeta', root: '/r/zeta', baseRef: 'origin/main', exists: true, worktrees: [{ path: '/r/zeta', branch: 'main', head: 'z', main: true }] },
+        ];
+      }
+      return agents;
+    },
+    windowId: 'w1',
+    baseDir: base,
+    focusLocal: (id) => { focused.push(id); return focusLocal(id); },
+    showProject: (root) => shown.push(root),
+    activeProject: () => active,
+  });
+  const provider = t.views[0].provider;
+  await provider.reload();
+  const dispose = () => { for (const s of context.subscriptions) s.dispose(); fs.rmSync(base, { recursive: true, force: true }); };
+  return { ...t, api, provider, shown, focused, base, dispose };
+}
+
+test('a project row click shows that project; the active one says so', async () => {
+  const h = await projectsHarness({ agents: [agent({ agent_id: 'a1', workspace: '/r/app', project: '/r/app' })] });
+  try {
+    const [app, zeta] = h.provider.getChildren();
+    const appItem = h.provider.getTreeItem(app);
+    assert.equal(appItem.description, 'active · 1 agents');
+    assert.deepEqual(appItem.command, { command: 'vzt-mux.projects.show', title: 'Show Project', arguments: [app] });
+    assert.equal(h.provider.getTreeItem(zeta).description, undefined, 'only the active project is tagged');
+
+    await h.commands.get('vzt-mux.projects.show')(zeta);
+    assert.deepEqual(h.shown, ['/r/zeta']);
+    assert.deepEqual(h.executed, [], 'no window is opened and no folder changed');
+    assert.ok(h.commands.has('vzt-mux.projects.openWindow'), 'Open Project Window stays (context menu)');
+  } finally {
+    h.dispose();
+  }
+});
+
+test("a worktree row click focuses its agent, else shows its project; this window's lost agent never opens a window", async () => {
+  const lead = agent({ agent_id: 'a1', workspace: '/r/app-wt/feat', project: '/r/app', state: 'working' });
+  const h = await projectsHarness({ active: '/r/zeta', agents: [lead] });
+  try {
+    const [app] = h.provider.getChildren();
+    const [main, feat] = h.provider.getChildren(app);
+    assert.equal(h.provider.getTreeItem(main).command.command, 'vzt-mux.projects.openWorktree', 'a row without agents is clickable too');
+
+    await h.commands.get('vzt-mux.projects.openWorktree')(main);
+    assert.deepEqual(h.shown, ['/r/app'], 'no agent: its project is shown');
+
+    await h.commands.get('vzt-mux.projects.openWorktree')(feat);
+    assert.deepEqual(h.focused, ['a1'], 'the lead agent is focused (the registry swaps projects first)');
+    // focusLocal said no (stale / forgotten): show its project, never request a window.
+    assert.deepEqual(h.shown, ['/r/app', '/r/app']);
+    assert.deepEqual(h.executed, []);
+    assert.ok(!fs.existsSync(path.join(h.base, 'focus')), 'no cross-window focus request for our own agent');
+  } finally {
+    h.dispose();
+  }
+});

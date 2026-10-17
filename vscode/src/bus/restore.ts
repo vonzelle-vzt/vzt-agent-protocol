@@ -12,12 +12,19 @@
  * Otherwise the agent starts again in a new terminal, resumed from the session
  * id its SessionStart hook recorded, or fresh when it never started. While the
  * old shell is alive but its terminal has not shown up yet, nothing launches.
+ *
+ * A 0.10+ agent saved with a tmux `session` needs none of that: tmux outlives
+ * the window, so a session that still exists IS the agent — adopted, left
+ * detached (the window attaches it when its project is shown), nothing typed.
+ * A session that is gone (a reboot) resumes like above, into a new session.
+ * Pre-0.10 entries keep the terminal-pid path (restoreAgent) unchanged.
  */
 
 import * as path from "path";
 import type * as vscode from "vscode";
-import type { SavedAgent } from "./registry";
+import type { AgentRegistry, SavedAgent, SavedShell } from "./registry";
 import { gateTrust, SpawnDeps, startAgent, terminalName } from "./spawn";
+import type { Tmux } from "./tmux";
 
 export interface PsRow {
   pid: number;
@@ -35,6 +42,8 @@ export interface Adopted {
   agent_id: string;
   session_id: string | null;
   terminal_pid: number | null;
+  /** The agent's project root (`bus adopt` prints it; absent from an older CLI). */
+  project?: string;
 }
 
 export type RestoreOutcome = "adopted" | "resumed" | "relaunched" | "waiting";
@@ -97,13 +106,14 @@ export async function restoreAgent(
     ? terminals.find((t) => t.pid === adopted.terminal_pid && t.terminal.exitStatus === undefined)
     : undefined;
   if (own && hasChildren(own.pid!, ps)) {
-    deps.registry.set(saved.agent_id, { alias: saved.alias, kind: saved.kind, cwd: saved.cwd, terminal: own.terminal });
+    const project = adopted.project ?? saved.project;
+    deps.registry.set(saved.agent_id, { alias: saved.alias, kind: saved.kind, cwd: saved.cwd, terminal: own.terminal, ...(project ? { project } : {}) });
     return "adopted";
   }
   if (!own && shellAlive(adopted.terminal_pid, ps)) return "waiting";
 
   await gateTrust(deps, saved.kind, saved.cwd);
-  await startAgent(deps, { ...saved, resume: adopted.session_id });
+  await startAgent(deps, { ...saved, project: adopted.project ?? saved.project, resume: adopted.session_id });
 
   // Only now that the new terminal runs, close the old one: the agent's own
   // terminal at a bare prompt, or a same-named shell VS Code revived after a
@@ -112,4 +122,36 @@ export async function restoreAgent(
   const stale = own ? [own] : terminals.filter((t) => t.terminal.name === name && t.pid && !hasChildren(t.pid, ps));
   for (const t of stale) t.terminal.dispose();
   return adopted.session_id ? "resumed" : "relaunched";
+}
+
+/**
+ * Restore one agent saved with a tmux session. `tmux` is the binary's Tmux
+ * whenever it exists — even with spawning in tmux switched off, a running
+ * session is still the agent. The session check comes first and adopt second,
+ * so a failed adopt (thrown: kept for next start) never launches anything.
+ */
+export async function restoreSession(
+  deps: SpawnDeps,
+  tmux: Tmux | undefined,
+  saved: SavedAgent,
+  fromWindow: string
+): Promise<RestoreOutcome | "gone" | "elsewhere"> {
+  const live = !!saved.session && !!tmux && (await tmux.hasSession(saved.session));
+  const adopted = await adoptSaved(deps, saved, fromWindow);
+  if (typeof adopted === "string") return adopted;
+  const project = adopted.project ?? saved.project ?? saved.cwd;
+  if (live) {
+    deps.registry.set(saved.agent_id, { alias: saved.alias, kind: saved.kind, cwd: saved.cwd, session: saved.session, project });
+    return "adopted";
+  }
+  await gateTrust(deps, saved.kind, saved.cwd);
+  await startAgent(deps, { ...saved, project, resume: adopted.session_id });
+  return adopted.session_id ? "resumed" : "relaunched";
+}
+
+/** A saved plain shell comes back only while its session runs; there is nothing to resume. */
+export async function restoreShell(registry: AgentRegistry, tmux: Tmux | undefined, saved: SavedShell): Promise<boolean> {
+  if (!tmux || !(await tmux.hasSession(saved.session))) return false;
+  registry.set(saved.session, { alias: saved.alias, kind: "shell", cwd: saved.cwd, session: saved.session, project: saved.project ?? saved.cwd });
+  return true;
 }

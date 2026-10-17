@@ -3,11 +3,17 @@
  * each with Orca's status glyphs.
  *
  * A pure reader of `projects list --json` and `bus agents --all --json`; the
- * join and the glyph rules live in the vscode-free model/status modules. One
- * VS Code window per project: openWindow reveals this window when it already
- * holds the project, else asks VS Code to open (or focus) the project's own.
- * Terminals belong to one window, so focusing another window's agent goes
- * through a focus request file that the owning window claims (focus.ts).
+ * join and the glyph rules live in the vscode-free model/status modules.
+ *
+ * One window, one terminal set per project (Orca): a project row click makes it
+ * the active project — the terminal panel swaps to its agents and shells
+ * (bus/registry.ts showProject) — and its description starts with `active`.
+ * The row's + starts Claude, Codex or a shell there at once
+ * (vzt-mux.agents.startInProject). "Open Project Window" stays on the row's
+ * context menu: it reveals this window when it already holds the project, else
+ * asks VS Code to open (or focus) the project's own. Terminals belong to one
+ * window, so focusing another window's agent goes through a focus request file
+ * that the owning window claims (focus.ts).
  */
 
 import * as vscode from "vscode";
@@ -22,6 +28,10 @@ export interface ProjectsDeps {
   windowId: string;
   baseDir: string;
   focusLocal(agentId: string): boolean;
+  /** Swap this window's terminal panel to the project's agents and shells. */
+  showProject(root: string): void;
+  /** The project whose terminals the panel holds, if any. */
+  activeProject(): string | undefined;
 }
 
 export interface ProjectsApi {
@@ -57,7 +67,17 @@ class ProjectsTreeProvider implements vscode.TreeDataProvider<Node> {
   private roots: Node[] = [];
   private loaded = false;
 
-  constructor(private readonly run: Run) {}
+  constructor(private readonly run: Run, private readonly active: () => string | undefined) {}
+
+  /** The project node a worktree row belongs to (registered or not). */
+  projectOf(wt: WorktreeNode): ProjectNode | undefined {
+    for (const root of this.roots) {
+      const projects = root.kind === "project" ? [root] : root.kind === "unregistered" ? root.projects : [];
+      const hit = projects.find((p) => p.worktrees.includes(wt));
+      if (hit) return hit;
+    }
+    return undefined;
+  }
 
   private inFlight = false;
 
@@ -124,12 +144,13 @@ class ProjectsTreeProvider implements vscode.TreeDataProvider<Node> {
       case "project": {
         const item = new vscode.TreeItem(node.name, node.worktrees.length ? Collapsed : vscode.TreeItemCollapsibleState.None);
         const count = node.worktrees.reduce((n, w) => n + w.agents.length, 0);
-        item.description = count > 0 ? `${count} agents` : undefined;
+        const parts = [this.active() === node.root ? "active" : "", count > 0 ? `${count} agents` : ""].filter(Boolean);
+        item.description = parts.length ? parts.join(" · ") : undefined;
         item.iconPath = new vscode.ThemeIcon(node.exists ? "repo" : "warning");
         item.tooltip = node.root;
         item.contextValue = node.registered ? "vztProject" : "vztProjectUnregistered";
         if (node.registered) {
-          item.command = { command: "vzt-mux.projects.openWindow", title: "Open Project Window", arguments: [node] };
+          item.command = { command: "vzt-mux.projects.show", title: "Show Project", arguments: [node] };
         }
         return item;
       }
@@ -140,9 +161,10 @@ class ProjectsTreeProvider implements vscode.TreeDataProvider<Node> {
         item.iconPath = glyphIcon(row.glyph) ?? new vscode.ThemeIcon("git-branch");
         item.tooltip = node.path;
         item.contextValue = "vztWorktree";
-        // A click jumps to the row's agent; without one it only selects (no
-        // surprise windows) — the + button starts an agent there.
-        if (row.lead) item.command = { command: "vzt-mux.projects.openWorktree", title: "Open Worktree", arguments: [node] };
+        // A click jumps to the row's agent — showing its project first — and
+        // without one shows the row's project; never a window. The + button
+        // starts an agent or a shell there.
+        item.command = { command: "vzt-mux.projects.openWorktree", title: "Open Worktree", arguments: [node] };
         return item;
       }
       case "agent":
@@ -179,7 +201,7 @@ function thisWindowHolds(root: string): boolean {
 }
 
 export function registerProjects(context: vscode.ExtensionContext, deps: ProjectsDeps): ProjectsApi {
-  const provider = new ProjectsTreeProvider(deps.run);
+  const provider = new ProjectsTreeProvider(deps.run, deps.activeProject);
   const view = vscode.window.createTreeView("vztProjects", { treeDataProvider: provider, showCollapseAll: true });
   context.subscriptions.push(view);
 
@@ -204,8 +226,20 @@ export function registerProjects(context: vscode.ExtensionContext, deps: Project
     await vscode.commands.executeCommand("vscode.openFolder", vscode.Uri.file(project.root), { forceNewWindow: true });
   }
 
+  /** Swap the panel to `root` and redraw, so the `active` tag moves at once. */
+  function showProject(root: string): void {
+    deps.showProject(root);
+    refresh();
+  }
+
   async function focusAgent(agent: BusAgentRow): Promise<void> {
-    if (agent.window_id === deps.windowId && deps.focusLocal(agent.agent_id)) return;
+    if (agent.window_id === deps.windowId) {
+      if (deps.focusLocal(agent.agent_id)) return;
+      // This window's agent, but no terminal here to show (stale, or already
+      // forgotten): its project is the closest thing — never a new window.
+      if (agent.project) showProject(agent.project);
+      return;
+    }
     try {
       requestFocus(deps.baseDir, agent.agent_id, agent.window_id ?? "", Date.now());
     } catch (err) {
@@ -258,11 +292,21 @@ export function registerProjects(context: vscode.ExtensionContext, deps: Project
     vscode.commands.registerCommand("vzt-mux.projects.openWindow", async (arg?: unknown) =>
       openWindow(await pickProject(arg))
     ),
-    // A worktree row click: its busiest agent's terminal, else the folder itself.
+    // A project row click: the panel swaps to that project's terminals.
+    vscode.commands.registerCommand("vzt-mux.projects.show", async (arg?: unknown) => {
+      const project = await pickProject(arg);
+      if (project) showProject(project.root);
+    }),
+    // A worktree row click: its busiest agent's terminal, else its project.
     vscode.commands.registerCommand("vzt-mux.projects.openWorktree", async (arg?: unknown) => {
       const wt = arg as Partial<WorktreeNode> | undefined;
       if (wt?.kind !== "worktree" || typeof wt.path !== "string") return;
-      if (wt.row?.lead) await focusAgent(wt.row.lead);
+      if (wt.row?.lead) {
+        await focusAgent(wt.row.lead);
+        return;
+      }
+      const project = provider.projectOf(wt as WorktreeNode);
+      if (project) showProject(project.root);
     }),
     vscode.commands.registerCommand("vzt-mux.projects.focusAgent", async (arg?: unknown) => {
       const agent = asAgent(arg);

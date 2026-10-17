@@ -686,19 +686,24 @@ function activateTrusted(context: vscode.ExtensionContext): void {
   // --- Agent Bus -----------------------------------------------------------
   // Claude + Codex paired in split terminals over the local bus. Everything it
   // launches or types comes from the `vzt-agent bus` CLI; launches go through
-  // the same delayed sendWhenReady as ship units.
+  // the same delayed sendWhenReady as ship units (or, with tmux, are typed into
+  // the agent's session).
   const bus = registerAgentBus(context, outputChannel, (t, cmd, label) => sendWhenReady(t, cmd, label), () => cliPath(context));
 
   // --- Orca-style workspaces -----------------------------------------------
   // Order matters: projects needs the bus's runner and registry; attention
   // needs projects' badge setter; the dashboard needs projects' focusAgent.
+  // The registry owns the one-window project swap; projects only asks for it.
   const focusLocal = (id: string) => bus.registry.focus(id);
   const projects = registerProjects(context, {
     run: bus.runTop,
     windowId: vscode.env.sessionId,
     baseDir: baseDir(),
     focusLocal,
+    showProject: (root) => void bus.registry.showProject(root, { reveal: true }),
+    activeProject: () => bus.registry.active,
   });
+  bus.onActiveProject(() => projects.refresh());
   // ~/.vzt/workspaces/<name>.code-workspace: next to the projects registry, easy to find.
   registerWorkspaceCommands(context, { run: bus.runTop, baseDir: path.join(os.homedir(), ".vzt") });
   registerAttention(context, {

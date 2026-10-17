@@ -183,10 +183,31 @@ project → git worktree → the bus agents running in it.
 - **Projects view.** Lists every project in `~/.vzt/projects.json` (add one
   with **VZT: Add Project**). Each worktree and agent shows a status glyph:
   working (spinning), needs-you (yellow ?), done (green; idle for less than
-  30 min), idle, stale (red; lease lapsed). Clicking a project opens it in its
-  own window, or focuses that window if it is already open. Clicking an agent
-  focuses its terminal, even when another window owns it: that window claims a
-  focus request under `<vztMux.baseDir>/focus/` within a second.
+  30 min), idle, stale (red; lease lapsed). Clicking an agent focuses its
+  terminal, even when another window owns it: that window claims a focus
+  request under `<vztMux.baseDir>/focus/` within a second.
+- **One window, one terminal set per project** (0.10). Clicking a project
+  makes it the *active* project (its row says `active`): the terminal panel
+  swaps to that project's agents and terminals — one split group per worktree
+  — and the Explorer reveals its folder when it is a workspace folder. The
+  other projects' agents keep running; clicking their project brings their
+  terminals back. **Open Project Window** is still on the row's right-click
+  menu.
+- **The + on a project row** (`vzt-mux.agents.startInProject`) asks one
+  question — Claude, Codex, Terminal or New worktree… — and starts it at once
+  in the project's main checkout, alias `<folder>-<kind>` (`-2` … `-9` when the
+  bus says that alias is taken). The + on a worktree row offers the same,
+  minus New worktree…, in that worktree.
+- **Agents live in tmux.** Each agent (and each Terminal) runs in a session on
+  a private tmux server, `tmux -L vzt-mux` with `~/.vzt/mux/tmux.conf`
+  (rewritten on activation: mouse scrolling, no status bar, 50k lines of
+  history, drag-to-copy into the macOS clipboard). Your own tmux server and
+  `~/.tmux.conf` are never touched. A VS Code terminal is only an attach
+  client: switching projects detaches it, and so does closing or reloading
+  the window — the agent runs on and comes back attached. Closing a terminal
+  yourself ends its session, like closing a tab in Orca. Without tmux
+  installed (or with `vztMux.agents.tmux` off) agents run in plain terminals
+  as before, which close with the window.
 - **VZT: Import Projects from Orca** (`vzt-mux.projects.importOrca`) registers
   every git repo `orca repo list` knows, once; the Projects view shows them as
   a flat, collapsed list like Orca's sidebar. Same as
@@ -220,3 +241,10 @@ on the Projects view title.
   your login shell, else this extension's repo CLI.
 - `vztMux.attention.notify` — defaults on; shows a notification when an agent
   this window owns turns needs-you or done.
+- `vztMux.agents.restore` — defaults on; after a reload or restart, takes back
+  the tmux sessions (or, for agents started without tmux, the terminals) this
+  window's agents still run in, else resumes each agent's last session.
+- `vztMux.agents.tmux` — defaults on; starts new agents and project terminals
+  in tmux sessions on the private `vzt-mux` server. Off, or with no tmux found
+  on PATH, `/opt/homebrew/bin` or `/usr/local/bin`, they run in plain
+  terminals.

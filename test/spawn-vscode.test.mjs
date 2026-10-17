@@ -68,7 +68,7 @@ async function harness({ trusted = true } = {}) {
     registry,
     isTrusted: () => trusted,
   };
-  return { spawn: (req) => spawnAgent(deps, req), events, calls, terminals, launches, registry };
+  return { spawn: (req) => spawnAgent(deps, req), rawRun: run, events, calls, terminals, launches, registry };
 }
 
 const shq = (s) => `'${s.replace(/'/g, "'\\''")}'`;
@@ -225,4 +225,192 @@ test('spawn never hand-writes argv', () => {
     const src = fs.readFileSync(path.join(VSCODE, 'src', 'bus', name), 'utf8');
     assert.ok(!/^import (?!type\b).*from "vscode"/m.test(src), `${name} must import vscode as a type only`);
   }
+});
+
+// --- 0.10.0: agents in tmux sessions, alias auto-suffix, plain shells --------
+
+const BIN = '/opt/fake/bin/tmux';
+const CONF = '/home/u/.vzt/mux/tmux.conf';
+
+/** spawn deps with a Tmux over a fake exec; `sessions` = names that already exist. */
+async function tmuxHarness({ sessions = new Set(), trusted = true, register } = {}) {
+  const { Tmux } = await load('tmux');
+  const h = await harness({ trusted });
+  const tmuxCalls = [];
+  const exec = async (file, args) => {
+    assert.equal(file, BIN);
+    tmuxCalls.push(args);
+    h.events.push(`tmux:${args[2] === '-f' ? args[4] : args[2]}`);
+    const verb = args[2] === '-f' ? args[4] : args[2];
+    if (verb === 'has-session' && !sessions.has(args[4].slice(1))) throw new Error("can't find session");
+    if (verb === 'new-session') sessions.add(args[args.indexOf('-s') + 1]);
+    if (verb === 'capture-pane') return { stdout: 'user@host app % ' };
+    return { stdout: '' };
+  };
+  const tmux = new Tmux({ bin: BIN, exec, conf: CONF, sleep: async () => {} });
+  const logs = [];
+  const deps = {
+    run: async (args, cwd) => {
+      if (args[0] === 'register' && register) return register(args, cwd);
+      const r = await h.rawRun(args, cwd);
+      return args[0] === 'register' ? { ...r, project: '/p/app' } : r;
+    },
+    createTerminal: (opts) => { h.events.push('createTerminal'); const t = fakeTerminal(opts); h.terminals.push(t); return t; },
+    launch: () => { h.events.push('launch'); },
+    windowId: 'win-1',
+    registry: h.registry,
+    isTrusted: () => trusted,
+    tmux,
+    projectOf: async (cwd) => `PROJECT(${cwd})`,
+    log: (l) => logs.push(l),
+  };
+  return { ...h, deps, tmux, tmuxCalls, sessions, logs };
+}
+
+const settle = async (pred) => {
+  for (let i = 0; i < 200 && !pred(); i++) await new Promise((r) => setImmediate(r));
+};
+
+test('tmux: an agent starts in a detached session vzt-<agent_id>; no terminal until its project is shown', async () => {
+  const { spawnAgent } = await load('spawn');
+  const h = await tmuxHarness();
+  const r = await spawnAgent(h.deps, { kind: 'claude', alias: 'app-claude', cwd: '/p/app' });
+  assert.equal(r.terminal, undefined);
+  assert.equal(r.project, '/p/app', "the bus's own project answer is cached");
+  assert.deepEqual(h.terminals, [], 'no VS Code terminal yet: showProject attaches it');
+  assert.ok(!h.events.includes('launch'), 'sendWhenReady is for direct terminals only');
+
+  const entry = h.registry.get(r.agent_id);
+  assert.deepEqual({ ...entry }, { alias: 'app-claude', kind: 'claude', cwd: '/p/app', session: `vzt-${r.agent_id}`, project: '/p/app' });
+
+  const created = h.tmuxCalls.find((a) => a.includes('new-session'));
+  assert.deepEqual(created, ['-L', 'vzt-mux', '-f', CONF, 'new-session', '-d', '-s', `vzt-${r.agent_id}`, '-c', '/p/app',
+    '-e', `VZT_BUS_AGENT=${r.agent_id}`, '-e', 'VZT_BUS_KIND=claude', '-e', 'VZT_BUS_WINDOW=win-1', '-e', 'CLAUDE_CODE_DISABLE_FEEDBACK_SURVEY=1'],
+  'the same env a direct terminal gets');
+
+  // The command — the same quoted words as a direct terminal — is typed into the shell, then Enter.
+  await settle(() => h.tmuxCalls.filter((a) => a.includes('send-keys')).length >= 2);
+  const keys = h.tmuxCalls.filter((a) => a.includes('send-keys'));
+  assert.deepEqual(keys, [
+    ['-L', 'vzt-mux', 'send-keys', '-t', `=vzt-${r.agent_id}:`, '-l', '--', [...ARGV.claude, promptFor('app-claude')].map(shq).join(' ')],
+    ['-L', 'vzt-mux', 'send-keys', '-t', `=vzt-${r.agent_id}:`, 'Enter'],
+  ]);
+  const order = h.events.filter((e) => !/^tmux:(capture|send|copy)/.test(e));
+  assert.deepEqual(order, ['run:trust-claude', 'run:register', 'tmux:has-session', 'run:argv', 'run:bootstrap-prompt', 'tmux:new-session']);
+  await settle(() => h.logs.length > 0);
+  assert.match(h.logs[0], /launched bus app-claude/);
+});
+
+test('tmux: a session of that name already running IS the agent — kept, nothing typed', async () => {
+  const { startAgent } = await load('spawn');
+  const h = await tmuxHarness({ sessions: new Set(['vzt-ag-7']) });
+  const t = await startAgent(h.deps, { kind: 'codex', alias: 'app-codex', cwd: '/p/app', agent_id: 'ag-7', project: '/p/app' });
+  assert.equal(t, undefined);
+  assert.equal(h.registry.get('ag-7').session, 'vzt-ag-7');
+  assert.ok(!h.tmuxCalls.some((a) => a.includes('new-session') || a.includes('send-keys')));
+  assert.deepEqual(h.calls, [], 'no argv asked for either');
+});
+
+test('tmux: a project unknown to the CLI answer comes from projectOf', async () => {
+  const { startAgent } = await load('spawn');
+  const h = await tmuxHarness();
+  await startAgent(h.deps, { kind: 'codex', alias: 'x', cwd: '/p/app-wt/feat', agent_id: 'ag-9' });
+  assert.equal(h.registry.get('ag-9').project, 'PROJECT(/p/app-wt/feat)');
+});
+
+test('alias auto-suffix: retried ONLY on the bus refusing a taken alias', async () => {
+  const { spawnAgent, aliasTaken } = await load('spawn');
+  const taken = (alias) => Object.assign(new Error(`vzt-agent bus register failed (exit 4): vzt-agent bus register: alias "${alias}" is already used in this project by /p/app-wt/x`), {
+    exitCode: 4, stderr: `vzt-agent bus register: alias "${alias}" is already used in this project by /p/app-wt/x\n`,
+  });
+  const tried = [];
+  let n = 0;
+  const h = await tmuxHarness({
+    register: (args) => {
+      const alias = args[args.indexOf('--alias') + 1];
+      tried.push(alias);
+      if (alias === 'app-claude' || alias === 'app-claude-2') throw taken(alias);
+      return { agent_id: `ag-${++n}`, project: '/p/app' };
+    },
+  });
+  const r = await spawnAgent(h.deps, { kind: 'claude', alias: 'app-claude', cwd: '/p/app', autoSuffix: true });
+  assert.deepEqual(tried, ['app-claude', 'app-claude-2', 'app-claude-3']);
+  assert.equal(r.alias, 'app-claude-3');
+  assert.equal(h.registry.get(r.agent_id).alias, 'app-claude-3');
+
+  // An alias this window's own agent holds is skipped without asking: the bus
+  // would hand that live agent back ("reused") instead of refusing.
+  tried.length = 0;
+  const r2 = await spawnAgent(h.deps, { kind: 'claude', alias: 'app-claude', cwd: '/p/app', autoSuffix: true });
+  assert.deepEqual(tried, ['app-claude', 'app-claude-2', 'app-claude-4']);
+  assert.equal(r2.alias, 'app-claude-4');
+
+  // Any other failure — even exit 4 for something else — is not retried.
+  for (const err of [
+    Object.assign(new Error('x'), { exitCode: 2, stderr: '--alias must be 1-64 chars' }),
+    Object.assign(new Error('x'), { exitCode: 4, stderr: 'agent ag-1 is live in another window (w2)' }),
+    Object.assign(new Error('x'), { exitCode: 1, stderr: 'database is locked' }),
+  ]) {
+    const calls = [];
+    const g = await tmuxHarness({ register: (args) => { calls.push(args); throw err; } });
+    await assert.rejects(spawnAgent(g.deps, { kind: 'codex', alias: 'app-codex', cwd: '/p/app', autoSuffix: true }), (e) => e === err);
+    assert.equal(calls.length, 1, `not retried: ${err.stderr}`);
+  }
+  assert.equal(aliasTaken(Object.assign(new Error(''), { exitCode: 4, stderr: 'alias "a" is live in another window (w); lease expires in 9s' })), true);
+  assert.equal(aliasTaken(Object.assign(new Error(''), { exitCode: 4, stderr: 'alias "a" is registered as kind codex' })), true);
+
+  // Without autoSuffix a taken alias is an error, as before.
+  const s = await tmuxHarness({ register: (args) => { throw taken(args[args.indexOf('--alias') + 1]); } });
+  await assert.rejects(spawnAgent(s.deps, { kind: 'claude', alias: 'app-claude', cwd: '/p/app' }), /already used/);
+
+  // All nine taken.
+  const all = await tmuxHarness({ register: (args) => { throw taken(args[args.indexOf('--alias') + 1]); } });
+  await assert.rejects(spawnAgent(all.deps, { kind: 'claude', alias: 'app-claude', cwd: '/p/app', autoSuffix: true }), /app-claude to app-claude-9 is taken/);
+});
+
+test('defaultAlias: <folder>-<kind>, made bus-safe, room left for -9', async () => {
+  const { defaultAlias, aliasCandidates } = await load('spawn');
+  assert.equal(defaultAlias('vzt-orca-flow', 'claude'), 'vzt-orca-flow-claude');
+  assert.equal(defaultAlias('My App (v2)', 'codex'), 'My-App-v2-codex');
+  assert.equal(defaultAlias('-.hidden', 'codex'), 'hidden-codex');
+  assert.equal(defaultAlias('日本', 'claude'), 'agent-claude');
+  const long = defaultAlias('x'.repeat(100), 'claude');
+  assert.ok(`${long}-9`.length <= 64 && /^[A-Za-z0-9._-]+$/.test(long), long);
+  assert.deepEqual(aliasCandidates('a'), ['a', 'a-2', 'a-3', 'a-4', 'a-5', 'a-6', 'a-7', 'a-8', 'a-9']);
+});
+
+test('startShell: a plain login shell in its own session; no bus, numbered per folder', async () => {
+  const { startShell } = await load('spawn');
+  const h = await tmuxHarness();
+  const a = await startShell(h.deps, '/p/app');
+  const b = await startShell(h.deps, '/p/app');
+  assert.match(a, /^vzt-sh-[0-9a-f]{8}$/);
+  assert.deepEqual({ ...h.registry.get(a) }, { alias: 'shell', kind: 'shell', cwd: '/p/app', session: a, project: 'PROJECT(/p/app)' });
+  assert.equal(h.registry.get(b).alias, 'shell-2');
+  assert.deepEqual(h.calls, [], 'a shell never touches the bus');
+  assert.deepEqual(h.tmuxCalls.filter((x) => x.includes('new-session'))[0], ['-L', 'vzt-mux', '-f', CONF, 'new-session', '-d', '-s', a, '-c', '/p/app']);
+  assert.ok(!h.tmuxCalls.some((x) => x.includes('send-keys')), 'nothing is typed into a shell');
+  assert.deepEqual(h.registry.saved().agents, [], 'not a bus agent');
+
+  const u = await tmuxHarness({ trusted: false });
+  await assert.rejects(startShell(u.deps, '/p/app'), /trust this workspace/);
+  assert.deepEqual(u.tmuxCalls, []);
+});
+
+test("projectOf: the bus's rule — the git common dir's main checkout, realpath'd", async () => {
+  const { projectOf } = await load('spawn');
+  const root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'vzt-projof-')));
+  fs.mkdirSync(path.join(root, 'app', '.git'), { recursive: true });
+  fs.mkdirSync(path.join(root, 'bare.git'));
+  const seen = [];
+  const exec = (common) => async (file, args) => {
+    seen.push([file, ...args]);
+    if (common === null) throw new Error('fatal: not a git repository');
+    return { stdout: `${common}\n` };
+  };
+  assert.equal(await projectOf(exec(path.join(root, 'app', '.git')), path.join(root, 'wt')), path.join(root, 'app'));
+  assert.deepEqual(seen[0], ['git', '-C', path.join(root, 'wt'), 'rev-parse', '--path-format=absolute', '--git-common-dir']);
+  assert.equal(await projectOf(exec(path.join(root, 'bare.git')), root), path.join(root, 'bare.git'), 'a bare repo is its own project');
+  assert.equal(await projectOf(exec(null), path.join(root, 'app')), path.join(root, 'app'), 'not git: the folder');
+  fs.rmSync(root, { recursive: true, force: true });
 });
