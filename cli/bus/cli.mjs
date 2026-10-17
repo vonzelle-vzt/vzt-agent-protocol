@@ -10,7 +10,7 @@ import path from 'node:path';
 import { execFileSync } from 'node:child_process';
 import { parseArgs } from 'node:util';
 import { pathToFileURL } from 'node:url';
-import { AGENT_ARGV, BOOTSTRAP_PROMPT } from '../agent-argv.mjs';
+import { AGENT_ARGV, BOOTSTRAP_PROMPT, RESUME_ARGV } from '../agent-argv.mjs';
 import { trustClaudeWorkspace } from '../claude-trust.mjs';
 
 export const BUS_HOOK_MARKER = 'vzt-bus-hook-form=1';
@@ -53,6 +53,9 @@ const OPTIONS = {
   attempt: { type: 'string' },
   all: { type: 'boolean' },
   project: { type: 'boolean' },
+  resume: { type: 'string' },
+  agent: { type: 'string' },
+  'from-window': { type: 'string' },
 };
 
 class CliError extends Error {
@@ -272,7 +275,7 @@ async function runHook(event, io) {
 export async function main(argv, io = { out: process.stdout, err: process.stderr }) {
   const [verb, ...rest] = argv;
   if (!verb || verb === 'help' || verb === '--help') {
-    io.err.write('usage: vzt-agent bus <register|argv|bootstrap-prompt|trust-claude|send|check|ack|reply|ask|complete|gate-resolve|agents|inbox|lease|wake-plan|wake-sent|hook|doctor> [--json]\n');
+    io.err.write('usage: vzt-agent bus <register|adopt|argv|bootstrap-prompt|trust-claude|send|check|ack|reply|ask|complete|gate-resolve|agents|inbox|lease|wake-plan|wake-sent|hook|doctor> [--json]\n');
     return verb ? 0 : 2;
   }
   if (verb === 'hook') return runHook(rest[0], io);
@@ -298,7 +301,12 @@ export async function main(argv, io = { out: process.stdout, err: process.stderr
     if (verb === 'argv') {
       const kind = req(values, 'kind');
       if (!AGENT_ARGV[kind]) throw new CliError(2, `--kind must be one of ${Object.keys(AGENT_ARGV).join('|')}`);
-      const argvOut = [...AGENT_ARGV[kind]];
+      let argvOut;
+      try {
+        argvOut = values.resume !== undefined ? RESUME_ARGV(kind, values.resume) : [...AGENT_ARGV[kind]];
+      } catch (err) {
+        throw new CliError(2, `--resume: ${err.message}`);
+      }
       emit(io.out, json ? argvOut : argvOut.map(shellQuote).join(' '), json);
       return 0;
     }
@@ -359,6 +367,8 @@ async function runVerb(verb, values, store, me, sleepMs) {
       });
       return { agent_id: r.agent_id, alias: r.alias, workspace: r.workspace, project: r.project, reused: r.reused };
     }
+    case 'adopt':
+      return store.adopt(req(values, 'agent'), req(values, 'window'), values['from-window']);
     case 'send': {
       if (values.body !== undefined && values['body-file'] !== undefined) throw new CliError(2, 'use --body or --body-file, not both');
       let body = values.body ?? '';

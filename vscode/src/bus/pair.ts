@@ -11,17 +11,31 @@
  * the plan.
  */
 
+import { execFile } from "child_process";
 import * as path from "path";
 import * as vscode from "vscode";
 import { BusCli, BusCliError } from "./busCli";
 import { BusTreeProvider } from "./busTree";
-import { AgentRegistry } from "./registry";
+import { AgentRegistry, SavedAgent } from "./registry";
+import { Adopted, adoptSaved, parsePs, PidTerminal, PsRow, restoreAgent, shellAlive } from "./restore";
 import { Kind, Launch, pairAliases, preflightReport, spawnAgent, SpawnDeps } from "./spawn";
 import { executeWakeAction, WakeAction } from "./wake";
 
 export type { Launch } from "./spawn";
 
 const POLL_MS = 1500;
+
+/** workspaceState key: this window's agents, restored after a reload or restart. */
+const SAVED_KEY = "vztMux.agents";
+/** How long to wait for VS Code to reattach terminals that survived a reload. */
+const REVIVE_WAIT_MS = 10_000;
+
+interface SavedState {
+  /** The window (vscode.env.sessionId) the agents ran under; adopt takes them over from it. */
+  window: string;
+  /** `from`: an agent restore could not adopt yet still belongs to that earlier window. */
+  agents: (SavedAgent & { from?: string })[];
+}
 
 /** The CLI's `worktree create` slug rule, capped at 57 so the alias `<slug>-claude` fits the bus's 64. */
 const SLUG_RE = /^[a-z0-9][a-z0-9._-]{0,56}$/;
@@ -47,6 +61,37 @@ function errorText(err: unknown): string {
 
 const sleep = (ms: number) => new Promise<void>((r) => setTimeout(r, ms));
 
+/** Every terminal with its shell pid; a pid that does not resolve within 1 s is left undefined. */
+async function pidTerminals(): Promise<PidTerminal[]> {
+  return Promise.all(
+    vscode.window.terminals.map(async (terminal) => ({
+      terminal,
+      pid: await Promise.race([terminal.processId, sleep(1000).then(() => undefined)]),
+    }))
+  );
+}
+
+function psRows(): Promise<PsRow[]> {
+  return new Promise((resolve) => {
+    execFile("ps", ["-A", "-o", "pid=,ppid=,comm="], { maxBuffer: 16 * 1024 * 1024 }, (err, stdout) =>
+      resolve(err ? [] : parsePs(stdout))
+    );
+  });
+}
+
+/** A tree node's worktree path or project, when a sidebar button passed one. */
+function argPath(arg: unknown): string | undefined {
+  const n = arg as { kind?: string; path?: unknown } | undefined;
+  return n?.kind === "worktree" && typeof n.path === "string" ? n.path : undefined;
+}
+
+function argProject(arg: unknown): { name: string; root: string } | undefined {
+  const n = arg as { kind?: string; name?: unknown; root?: unknown; registered?: unknown } | undefined;
+  return n?.kind === "project" && n.registered === true && typeof n.name === "string" && typeof n.root === "string"
+    ? { name: n.name, root: n.root }
+    : undefined;
+}
+
 export function registerAgentBus(
   context: vscode.ExtensionContext,
   outputChannel: vscode.OutputChannel,
@@ -59,7 +104,14 @@ export function registerAgentBus(
   const window = vscode.env.sessionId;
   const runTop: Run = (args, cwd) => bus.runTop(args, cwd);
 
-  const registry = new AgentRegistry();
+  // Persisted on every change, except while restore rebuilds the registry: a
+  // half-restored list must never overwrite the saved one.
+  let restoring = false;
+  const save = (agents: SavedState["agents"]) =>
+    void context.workspaceState.update(SAVED_KEY, { window: window, agents } satisfies SavedState);
+  const registry = new AgentRegistry((agents) => {
+    if (!restoring) save(agents);
+  });
   // The agent_ids of the last pair, so a second pair focuses it instead of
   // registering duplicates.
   let paired: { claude: string; codex: string } | undefined;
@@ -191,22 +243,27 @@ export function registerAgentBus(
     return pick?.label as Kind | undefined;
   };
 
-  // --- New Agent Workspace: worktree for a task + an agent in it
-  const newWorkspace = async () => {
+  // --- New Agent Workspace: worktree for a task + an agent in it.
+  // From a project row's + button the project comes with the click.
+  const newWorkspace = async (arg?: unknown) => {
     try {
-      const projects = await runTop<ProjectEntry[]>(["projects", "list", "--json"], workspaceCwd());
-      const usable = projects.filter((p) => p.exists);
-      if (!usable.length) {
-        const add = "Add Project";
-        const choice = await vscode.window.showInformationMessage("VZT: no projects registered yet.", add);
-        if (choice === add) await vscode.commands.executeCommand("vzt-mux.projects.add");
-        return;
+      let project = argProject(arg);
+      if (!project) {
+        const projects = await runTop<ProjectEntry[]>(["projects", "list", "--json"], workspaceCwd());
+        const usable = projects.filter((p) => p.exists);
+        if (!usable.length) {
+          const add = "Add Project";
+          const choice = await vscode.window.showInformationMessage("VZT: no projects registered yet.", add);
+          if (choice === add) await vscode.commands.executeCommand("vzt-mux.projects.add");
+          return;
+        }
+        const pick = await vscode.window.showQuickPick(
+          usable.map((p) => ({ label: p.name, description: p.root, project: p })),
+          { placeHolder: "Project for the new agent workspace" }
+        );
+        if (!pick) return;
+        project = pick.project;
       }
-      const project = await vscode.window.showQuickPick(
-        usable.map((p) => ({ label: p.name, description: p.root, project: p })),
-        { placeHolder: "Project for the new agent workspace" }
-      );
-      if (!project) return;
 
       const slug = await vscode.window.showInputBox({
         prompt: "Worktree / branch name",
@@ -220,10 +277,10 @@ export function registerAgentBus(
       if (task === undefined) return;
 
       // Gate BEFORE creating anything, so a refusal leaves no orphan worktree.
-      if (!(await preflightOk(project.project.root, "start an agent"))) return;
+      if (!(await preflightOk(project.root, "start an agent"))) return;
       const wt = await runTop<{ path: string; branch: string; base: string; head: string }>(
-        ["worktree", "create", "--project", project.project.name, "--name", slug, "--json"],
-        project.project.root
+        ["worktree", "create", "--project", project.name, "--name", slug, "--json"],
+        project.root
       );
       try {
         await spawnOne({ kind, alias: `${slug}-${kind}`, cwd: wt.path, task: task.trim() || undefined });
@@ -234,7 +291,7 @@ export function registerAgentBus(
           remove
         );
         if (choice === remove) {
-          await runTop(["worktree", "remove", "--project", project.project.name, "--name", slug, "--json"], project.project.root);
+          await runTop(["worktree", "remove", "--project", project.name, "--name", slug, "--json"], project.root);
         }
         return;
       }
@@ -253,37 +310,102 @@ export function registerAgentBus(
     }
   };
 
-  // --- Add Agent Here: another agent in a folder this window already has open
-  const addHere = async () => {
+  // --- Add Agent Here: another agent in a worktree row's folder (its + button)
+  // or in a folder this window already has open
+  const addHere = async (arg?: unknown) => {
     try {
-      const folders = vscode.workspace.workspaceFolders || [];
-      if (!folders.length) {
-        vscode.window.showErrorMessage("VZT: open the project folder first — the bus is scoped to its git workspace.");
-        return;
+      let cwd = argPath(arg);
+      if (!cwd) {
+        const folders = vscode.workspace.workspaceFolders || [];
+        if (!folders.length) {
+          vscode.window.showErrorMessage("VZT: open the project folder first — the bus is scoped to its git workspace.");
+          return;
+        }
+        cwd = (
+          await vscode.window.showQuickPick(
+            folders.map((f) => ({ label: f.name, description: f.uri.fsPath, cwd: f.uri.fsPath })),
+            { placeHolder: "Folder for the new agent" }
+          )
+        )?.cwd;
+        if (!cwd) return;
       }
-      const folder = (
-        await vscode.window.showQuickPick(
-          folders.map((f) => ({ label: f.name, description: f.uri.fsPath, folder: f })),
-          { placeHolder: "Folder for the new agent" }
-        )
-      )?.folder;
-      if (!folder) return;
       const kind = await pickKind();
       if (!kind) return;
       const alias = await vscode.window.showInputBox({
         prompt: "Agent alias (unique within the project)",
-        value: `${path.basename(folder.uri.fsPath)}-${kind}`,
+        value: `${path.basename(cwd)}-${kind}`,
         validateInput: (v) => (v.trim() ? undefined : "an alias is required"),
       });
       if (!alias) return;
-      if (!(await preflightOk(folder.uri.fsPath, "start an agent"))) return;
-      await spawnOne({ kind, alias: alias.trim(), cwd: folder.uri.fsPath });
+      if (!(await preflightOk(cwd, "start an agent"))) return;
+      await spawnOne({ kind, alias: alias.trim(), cwd });
     } catch (err) {
       const msg = errorText(err);
       log(`add agent failed: ${msg}`);
       vscode.window.showErrorMessage(`VZT: add agent failed — ${msg}`);
     }
   };
+
+  // --- restore this window's agents from before a reload or restart
+  const restore = async () => {
+    const saved = context.workspaceState.get<SavedState>(SAVED_KEY);
+    if (!saved?.agents?.length || !vscode.workspace.getConfiguration("vztMux").get<boolean>("agents.restore", true)) return;
+    if (!vscode.workspace.isTrusted) {
+      log(`restore skipped: workspace not trusted (${saved.agents.length} agents saved)`);
+      return;
+    }
+    restoring = true;
+    const keep: SavedState["agents"] = []; // not restored now, but not gone: try again next start
+    const counts: Record<string, number> = {};
+    try {
+      const adopted: { agent: SavedState["agents"][number]; a: Adopted }[] = [];
+      for (const agent of saved.agents) {
+        try {
+          const a = await adoptSaved(spawnDeps, agent, agent.from ?? saved.window);
+          if (typeof a === "string") log(`restore ${agent.alias} (${agent.agent_id}): ${a}`);
+          else adopted.push({ agent, a });
+        } catch (err) {
+          keep.push({ ...agent, from: agent.from ?? saved.window }); // the bus still names the old window
+          log(`restore ${agent.alias}: adopt failed, kept for next start — ${errorText(err)}`);
+        }
+      }
+
+      // Terminals that survived a reload come back asynchronously: wait until
+      // every live old shell has its terminal again, or the deadline.
+      let ps = await psRows();
+      let terminals = await pidTerminals();
+      const expected = adopted.filter(({ a }) => shellAlive(a.terminal_pid, ps)).map(({ a }) => a.terminal_pid);
+      for (let waited = 0; waited < REVIVE_WAIT_MS; waited += 250) {
+        if (expected.every((pid) => terminals.some((t) => t.pid === pid))) break;
+        await sleep(250);
+        terminals = await pidTerminals();
+      }
+      ps = await psRows();
+
+      for (const { agent, a } of adopted) {
+        try {
+          const outcome = await restoreAgent(spawnDeps, agent, a, terminals, ps);
+          counts[outcome] = (counts[outcome] || 0) + 1;
+          if (outcome === "waiting") keep.push({ ...agent, from: undefined }); // adopted: now this window's
+          log(`restore ${agent.alias} (${agent.agent_id}): ${outcome}`);
+        } catch (err) {
+          keep.push({ ...agent, from: undefined });
+          log(`restore ${agent.alias} failed, kept for next start: ${errorText(err)}`);
+        }
+      }
+    } finally {
+      restoring = false;
+      const live = [...registry.entries()].map(([agent_id, e]) => ({ agent_id, alias: e.alias, kind: e.kind, cwd: e.cwd }));
+      save([...live, ...keep.filter((k) => !registry.get(k.agent_id))]);
+    }
+    const back = registry.size;
+    if (back) {
+      const how = Object.entries(counts).filter(([k]) => k !== "waiting").map(([k, n]) => `${n} ${k}`).join(", ");
+      vscode.window.showInformationMessage(`VZT: ${back} agent${back === 1 ? "" : "s"} back (${how}).`);
+    }
+    await tree.reload();
+  };
+  void restore();
 
   context.subscriptions.push(
     view,
@@ -294,7 +416,11 @@ export function registerAgentBus(
     view.onDidChangeVisibility((e) => {
       if (e.visible) void tree.reload();
     }),
-    vscode.window.onDidCloseTerminal((closed) => registry.removeTerminal(closed)), // its lease lapses in 30 s → stale
+    // A terminal the user (or the agent) closed is forgotten; its lease lapses in
+    // 30 s → stale. One closed by VS Code shutting down stays saved for restore.
+    vscode.window.onDidCloseTerminal((closed) => {
+      if (closed.exitStatus?.reason !== vscode.TerminalExitReason.Shutdown) registry.removeTerminal(closed);
+    }),
     vscode.workspace.onDidChangeConfiguration((e) => {
       if (e.affectsConfiguration("vztMux.busCommand")) bus.reset();
     }),

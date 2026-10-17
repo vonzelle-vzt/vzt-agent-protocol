@@ -64,15 +64,43 @@ test('package contributes workspace commands', () => {
   for (const id of ['vzt-mux.watchShipRun', 'vzt-mux.doctor', 'vzt-mux.bus.pair', 'vzt-mux.herdr.refresh']) {
     assert.ok(byId.has(id), `lost command ${id}`);
   }
-  const titleMenu = PKG.contributes.menus['view/title'].filter((m) => m.when === 'view == vztProjects');
+  const titleMenu = PKG.contributes.menus['view/title'].filter((m) => m.when === 'view == vztProjects' && m.group.startsWith('navigation'));
   assert.deepEqual(
     titleMenu.map((m) => m.command).sort(),
     ['vzt-mux.agents.newWorkspace', 'vzt-mux.dashboard.open', 'vzt-mux.projects.add', 'vzt-mux.projects.importOrca', 'vzt-mux.projects.refresh']
   );
 });
 
-test('package version 0.8.0', () => {
-  assert.equal(PKG.version, '0.8.1'); // 0.8.1: Import Projects from Orca + Orca-style rows
+test('package version', () => {
+  assert.equal(PKG.version, '0.9.0'); // 0.9.0: clickable rows + agent restore
+});
+
+test('project and worktree rows carry their own + buttons; a worktree row is clickable', () => {
+  const inline = PKG.contributes.menus['view/item/context'].filter((m) => m.group?.startsWith('inline') && /view == vztProjects/.test(m.when));
+  const on = (item) => inline.filter((m) => m.when.includes(`viewItem == ${item}`)).map((m) => m.command).sort();
+  assert.deepEqual(on('vztProject'), ['vzt-mux.agents.newWorkspace', 'vzt-mux.projects.openWindow']);
+  assert.deepEqual(on('vztWorktree'), ['vzt-mux.agents.addHere']);
+  const tree = fs.readFileSync(path.join(ROOT, 'vscode', 'src', 'projects', 'projectsTree.ts'), 'utf8');
+  assert.match(tree, /command: "vzt-mux\.projects\.openWorktree", title: "Open Worktree", arguments: \[node\]/);
+  const hidden = PKG.contributes.menus.commandPalette.find((m) => m.command === 'vzt-mux.projects.openWorktree');
+  assert.equal(hidden?.when, 'false', 'a row-only command stays out of the palette');
+});
+
+test('workspace picker: create anywhere, choose projects only in a saved workspace', () => {
+  const title = PKG.contributes.menus['view/title'];
+  assert.ok(title.some((m) => m.command === 'vzt-mux.workspace.create' && m.when === 'view == vztProjects'));
+  const edit = title.find((m) => m.command === 'vzt-mux.workspace.editProjects');
+  assert.match(edit.when, /workbenchState == workspace/, 'never offered in a single-folder window');
+  const ext = fs.readFileSync(path.join(ROOT, 'vscode', 'src', 'extension.ts'), 'utf8');
+  assert.match(ext, /registerWorkspaceCommands\(context, \{ run: bus\.runTop, baseDir: path\.join\(os\.homedir\(\), \"\.vzt\"\) \}\)/);
+  const cmds = fs.readFileSync(path.join(ROOT, 'vscode', 'src', 'projects', 'workspaceCommands.ts'), 'utf8');
+  assert.equal((cmds.match(/updateWorkspaceFolders\(/g) || []).length, 1, 'exactly one folder update per edit');
+});
+
+test('agent restore setting defaults true', () => {
+  const prop = PKG.contributes.configuration.properties['vztMux.agents.restore'];
+  assert.equal(prop.type, 'boolean');
+  assert.equal(prop.default, true);
 });
 
 test('attention setting defaults true', () => {

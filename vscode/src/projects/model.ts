@@ -23,6 +23,8 @@ export interface WorktreeRow {
   primary: boolean;
   glyph: Glyph | null;
   activity: string | null;
+  /** The agent a click on the row goes to: the busiest one, unless every agent is stale. */
+  lead: BusAgentRow | null;
 }
 
 /** What a worktree line shows: branch, primary tag, rollup glyph, busiest agent. */
@@ -47,6 +49,7 @@ export function worktreeRow(
     primary: wt.main,
     glyph: rollup(scored.map((c) => c.g)),
     activity: best ? `${best.a.alias} ${best.g} · ${formatAge(nowMs - best.a.state_ts_ms)}` : null,
+    lead: best && best.g !== "stale" ? best.a : null,
   };
 }
 

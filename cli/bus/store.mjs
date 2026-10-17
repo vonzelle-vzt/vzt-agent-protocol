@@ -294,6 +294,27 @@ export class Store {
     });
   }
 
+  // Hand an agent to a new window (the same VS Code window after a reload or a
+  // restart) WITHOUT resetting its state or session: unlike register, the agent
+  // may still be running. `fromWindow` is the window the caller saved the agent
+  // under; while another window holds a live lease on it, adopt refuses (exit 4)
+  // so two windows can never both drive one agent. Returns the shell pid last
+  // leased, which identifies a terminal that survived a reload.
+  adopt(agentId, window, fromWindow) {
+    if (!window) throw usage('--window is required');
+    return this.tx(() => {
+      const a = this.requireAgent(agentId);
+      const now = this.nowMs();
+      if (a.window_id !== window && a.window_id !== fromWindow && a.lease_expires_ms > now) {
+        throw new BusError(4, `agent ${agentId} is live in another window (${a.window_id})`);
+      }
+      this.run('UPDATE agents SET window_id = ?, lease_expires_ms = ? WHERE agent_id = ?', window, now + LEASE_TTL_MS, a.agent_id);
+      this.event('agent_adopted', { agent_id: a.agent_id, detail: { from_window: a.window_id, window } });
+      const { agent_id, alias, kind, workspace, project, session_id, state, terminal_pid } = a;
+      return { agent_id, alias, kind, workspace, project, session_id, state, terminal_pid };
+    });
+  }
+
   liveness(a, now = this.nowMs()) {
     if (a.session_started_ms == null && now - a.registered_ms > NEVER_STARTED_MS) return 'never-started';
     return a.lease_expires_ms > now ? 'live' : 'stale';

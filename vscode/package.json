@@ -2,7 +2,7 @@
   "name": "vzt-mux",
   "displayName": "VZT Ship Mux",
   "description": "Runs VZT Agent Protocol ship units as native VS Code integrated terminals, with a live Ship Run tree — per-unit status, worktree diffs mid-run, and one-click oracle re-runs.",
-  "version": "0.8.1",
+  "version": "0.9.0",
   "publisher": "vzt",
   "icon": "media/ship-icon.png",
   "engines": {
@@ -201,14 +201,29 @@
         "icon": "$(terminal)"
       },
       {
+        "command": "vzt-mux.projects.openWorktree",
+        "title": "VZT: Open Worktree",
+        "icon": "$(go-to-file)"
+      },
+      {
         "command": "vzt-mux.agents.newWorkspace",
         "title": "VZT: New Agent Workspace",
-        "icon": "$(git-branch)"
+        "icon": "$(add)"
       },
       {
         "command": "vzt-mux.agents.addHere",
         "title": "VZT: Add Agent Here",
         "icon": "$(person-add)"
+      },
+      {
+        "command": "vzt-mux.workspace.create",
+        "title": "VZT: Create Workspace from Projects",
+        "icon": "$(new-folder)"
+      },
+      {
+        "command": "vzt-mux.workspace.editProjects",
+        "title": "VZT: Choose Projects in This Workspace",
+        "icon": "$(checklist)"
       },
       {
         "command": "vzt-mux.dashboard.open",
@@ -253,6 +268,11 @@
           "type": "boolean",
           "default": true,
           "description": "Show a notification when an agent in this window turns needs-you or done. The status-bar count shows either way."
+        },
+        "vztMux.agents.restore": {
+          "type": "boolean",
+          "default": true,
+          "description": "After a reload or restart, bring back the agents this window started: reattach a terminal that still runs its agent, else resume the agent's last session in a new terminal."
         }
       }
     },
@@ -312,6 +332,16 @@
           "command": "vzt-mux.dashboard.open",
           "when": "view == vztProjects",
           "group": "navigation@3"
+        },
+        {
+          "command": "vzt-mux.workspace.editProjects",
+          "when": "view == vztProjects && workbenchState == workspace",
+          "group": "navigation@0"
+        },
+        {
+          "command": "vzt-mux.workspace.create",
+          "when": "view == vztProjects",
+          "group": "1_workspace@1"
         }
       ],
       "view/item/context": [
@@ -344,6 +374,16 @@
           "command": "vzt-mux.herdr.sendReview",
           "when": "view == herdrFleet.agents && viewItem == herdrAgent",
           "group": "1_herdr@2"
+        },
+        {
+          "command": "vzt-mux.agents.newWorkspace",
+          "when": "view == vztProjects && viewItem == vztProject",
+          "group": "inline@0"
+        },
+        {
+          "command": "vzt-mux.agents.addHere",
+          "when": "view == vztProjects && viewItem == vztWorktree",
+          "group": "inline@0"
         },
         {
           "command": "vzt-mux.projects.openWindow",
@@ -381,6 +421,10 @@
         },
         {
           "command": "vzt-mux.herdr.focusAgent",
+          "when": "false"
+        },
+        {
+          "command": "vzt-mux.projects.openWorktree",
           "when": "false"
         }
       ]

@@ -21,6 +21,7 @@ import { ShipTreeProvider, UnitItem } from "./shipTree";
 import { registerHerdrFleet } from "./herdr/fleet";
 import { registerAgentBus } from "./bus/pair";
 import { registerProjects } from "./projects/projectsTree";
+import { registerWorkspaceCommands } from "./projects/workspaceCommands";
 import { registerAttention } from "./attention/statusBar";
 import { openDashboard } from "./dashboard/panel";
 
@@ -684,6 +685,8 @@ export function activate(context: vscode.ExtensionContext): void {
     baseDir: baseDir(),
     focusLocal,
   });
+  // ~/.vzt/workspaces/<name>.code-workspace: next to the projects registry, easy to find.
+  registerWorkspaceCommands(context, { run: bus.runTop, baseDir: path.join(os.homedir(), ".vzt") });
   registerAttention(context, {
     run: bus.runTop,
     windowId: vscode.env.sessionId,

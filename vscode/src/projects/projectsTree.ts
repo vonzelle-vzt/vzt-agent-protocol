@@ -12,7 +12,7 @@
 
 import * as vscode from "vscode";
 import { BusAgentRow, GLYPH_ICON, Glyph } from "./status";
-import { AgentNode, buildProjectTree, ProjectEntry, ProjectNode, TreeNode } from "./model";
+import { AgentNode, buildProjectTree, ProjectEntry, ProjectNode, TreeNode, WorktreeNode } from "./model";
 import { claimFocus, requestFocus } from "./focus";
 
 type Run = <T>(args: string[], cwd?: string) => Promise<T>;
@@ -140,6 +140,9 @@ class ProjectsTreeProvider implements vscode.TreeDataProvider<Node> {
         item.iconPath = glyphIcon(row.glyph) ?? new vscode.ThemeIcon("git-branch");
         item.tooltip = node.path;
         item.contextValue = "vztWorktree";
+        // A click jumps to the row's agent; without one it only selects (no
+        // surprise windows) — the + button starts an agent there.
+        if (row.lead) item.command = { command: "vzt-mux.projects.openWorktree", title: "Open Worktree", arguments: [node] };
         return item;
       }
       case "agent":
@@ -255,6 +258,12 @@ export function registerProjects(context: vscode.ExtensionContext, deps: Project
     vscode.commands.registerCommand("vzt-mux.projects.openWindow", async (arg?: unknown) =>
       openWindow(await pickProject(arg))
     ),
+    // A worktree row click: its busiest agent's terminal, else the folder itself.
+    vscode.commands.registerCommand("vzt-mux.projects.openWorktree", async (arg?: unknown) => {
+      const wt = arg as Partial<WorktreeNode> | undefined;
+      if (wt?.kind !== "worktree" || typeof wt.path !== "string") return;
+      if (wt.row?.lead) await focusAgent(wt.row.lead);
+    }),
     vscode.commands.registerCommand("vzt-mux.projects.focusAgent", async (arg?: unknown) => {
       const agent = asAgent(arg);
       if (agent) await focusAgent(agent);

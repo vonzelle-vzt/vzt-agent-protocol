@@ -255,13 +255,20 @@ test('worktree row shows primary and busiest agent', async () => {
     agent({ agent_id: 'c', alias: 'busy', state: 'working', state_ts_ms: NOW - 5 * MIN }),
   ];
   assert.deepEqual(worktreeRow(wt, agents, NOW), {
-    label: 'main', primary: true, glyph: 'working', activity: 'busy working · 5m',
+    label: 'main', primary: true, glyph: 'working', activity: 'busy working · 5m', lead: agents[2],
   });
 });
 
 test('worktree row without agents', async () => {
   const { worktreeRow } = await load('model');
   assert.deepEqual(worktreeRow({ path: '/r/app-wt/feat', branch: null, main: false }, [], NOW), {
-    label: 'feat', primary: false, glyph: null, activity: null,
+    label: 'feat', primary: false, glyph: null, activity: null, lead: null,
   });
+});
+
+test('worktree row whose agents are all stale has no lead to focus', async () => {
+  const { worktreeRow } = await load('model');
+  const row = worktreeRow({ path: '/r/app', branch: 'main', main: true }, [agent({ agent_id: 'd', alias: 'dead', liveness: 'stale' })], NOW);
+  assert.equal(row.glyph, 'stale');
+  assert.equal(row.lead, null);
 });

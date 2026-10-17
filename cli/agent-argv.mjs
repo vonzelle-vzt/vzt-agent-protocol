@@ -12,6 +12,15 @@ export const AGENT_ARGV = Object.freeze({
   ]),
 });
 
+// Resume a recorded session: the house argv plus each CLI's own resume form.
+// sessionId is the one the agent's SessionStart hook reported to the bus.
+export function RESUME_ARGV(kind, sessionId) {
+  if (!/^[A-Za-z0-9][A-Za-z0-9-]{0,127}$/.test(sessionId || '')) throw new Error('session id must be 1-128 chars of [A-Za-z0-9-], not starting with -');
+  return kind === 'claude'
+    ? [...AGENT_ARGV.claude, '--resume', sessionId]
+    : [...AGENT_ARGV.codex, 'resume', sessionId];
+}
+
 // The only text ever typed into an agent terminal (plus a bare Enter).
 // ASCII, fixed, never carries message data.
 export const WAKE_LINE = 'vzt: new bus message - run: vzt-agent bus check --json';
