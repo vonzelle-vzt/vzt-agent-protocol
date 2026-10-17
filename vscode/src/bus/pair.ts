@@ -248,6 +248,15 @@ export function registerAgentBus(
   const newWorkspace = async (arg?: unknown) => {
     try {
       let project = argProject(arg);
+      if (!project && arg instanceof vscode.Uri) {
+        // Right-click on a project folder in the Explorer: the folder names the project.
+        const projects = await runTop<ProjectEntry[]>(["projects", "list", "--json"], workspaceCwd());
+        project = projects.find((p) => p.root === arg.fsPath);
+        if (!project) {
+          vscode.window.showErrorMessage(`VZT: ${arg.fsPath} is not a registered project — add it with VZT: Add Project.`);
+          return;
+        }
+      }
       if (!project) {
         const projects = await runTop<ProjectEntry[]>(["projects", "list", "--json"], workspaceCwd());
         const usable = projects.filter((p) => p.exists);

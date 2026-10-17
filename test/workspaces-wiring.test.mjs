@@ -72,7 +72,7 @@ test('package contributes workspace commands', () => {
 });
 
 test('package version', () => {
-  assert.equal(PKG.version, '0.9.0'); // 0.9.0: clickable rows + agent restore
+  assert.equal(PKG.version, '0.9.1'); // 0.9.1: New Agent Workspace on Explorer root folders
 });
 
 test('project and worktree rows carry their own + buttons; a worktree row is clickable', () => {
@@ -95,6 +95,11 @@ test('workspace picker: create anywhere, choose projects only in a saved workspa
   assert.match(ext, /registerWorkspaceCommands\(context, \{ run: bus\.runTop, baseDir: path\.join\(os\.homedir\(\), \"\.vzt\"\) \}\)/);
   const cmds = fs.readFileSync(path.join(ROOT, 'vscode', 'src', 'projects', 'workspaceCommands.ts'), 'utf8');
   assert.equal((cmds.match(/updateWorkspaceFolders\(/g) || []).length, 1, 'exactly one folder update per edit');
+});
+
+test('Explorer root folders offer New Agent Workspace on right-click', () => {
+  const item = (PKG.contributes.menus['explorer/context'] || []).find((m) => m.command === 'vzt-mux.agents.newWorkspace');
+  assert.equal(item?.when, 'explorerResourceIsRoot');
 });
 
 test('agent restore setting defaults true', () => {
