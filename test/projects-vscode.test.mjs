@@ -233,3 +233,35 @@ test('pure modules do not import vscode', () => {
     assert.deepEqual(runtime, [], `${name}.ts must not import vscode at runtime`);
   }
 });
+
+test('format age', async () => {
+  const { formatAge } = await load('model');
+  assert.equal(formatAge(0), 'now');
+  assert.equal(formatAge(59_999), 'now');
+  assert.equal(formatAge(MIN), '1m');
+  assert.equal(formatAge(59 * MIN), '59m');
+  assert.equal(formatAge(60 * MIN), '1h');
+  assert.equal(formatAge(23 * 60 * MIN), '23h');
+  assert.equal(formatAge(24 * 60 * MIN), '1d');
+  assert.equal(formatAge(3 * 24 * 60 * MIN), '3d');
+});
+
+test('worktree row shows primary and busiest agent', async () => {
+  const { worktreeRow } = await load('model');
+  const wt = { path: '/r/app', branch: 'main', main: true };
+  const agents = [
+    agent({ agent_id: 'a', alias: 'idler', state: 'idle', state_ts_ms: NOW - 2 * 60 * MIN }),
+    agent({ agent_id: 'b', alias: 'old', state: 'working', state_ts_ms: NOW - 10 * MIN }),
+    agent({ agent_id: 'c', alias: 'busy', state: 'working', state_ts_ms: NOW - 5 * MIN }),
+  ];
+  assert.deepEqual(worktreeRow(wt, agents, NOW), {
+    label: 'main', primary: true, glyph: 'working', activity: 'busy working · 5m',
+  });
+});
+
+test('worktree row without agents', async () => {
+  const { worktreeRow } = await load('model');
+  assert.deepEqual(worktreeRow({ path: '/r/app-wt/feat', branch: null, main: false }, [], NOW), {
+    label: 'feat', primary: false, glyph: null, activity: null,
+  });
+});

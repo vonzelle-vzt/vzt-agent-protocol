@@ -33,7 +33,7 @@ export interface ProjectsApi {
 const POLL_MS = 3_000;
 const CLAIM_MS = 1_000;
 
-type Node = TreeNode | { kind: "error"; text: string };
+type Node = TreeNode | { kind: "error"; text: string } | { kind: "import" };
 
 function glyphIcon(g: Glyph | null): vscode.ThemeIcon | undefined {
   if (!g) return undefined;
@@ -83,7 +83,11 @@ class ProjectsTreeProvider implements vscode.TreeDataProvider<Node> {
   }
 
   getChildren(node?: Node): Node[] {
-    if (!node) return this.loaded ? this.roots : [];
+    if (!node) {
+      if (!this.loaded) return [];
+      if (!this.projects.length && !this.roots.length) return [{ kind: "import" }];
+      return this.roots;
+    }
     switch (node.kind) {
       case "unregistered":
         return node.projects;
@@ -105,6 +109,12 @@ class ProjectsTreeProvider implements vscode.TreeDataProvider<Node> {
         item.tooltip = node.text;
         return item;
       }
+      case "import": {
+        const item = new vscode.TreeItem("Import projects from Orca");
+        item.iconPath = new vscode.ThemeIcon("cloud-download");
+        item.command = { command: "vzt-mux.projects.importOrca", title: "Import Projects from Orca" };
+        return item;
+      }
       case "unregistered": {
         const item = new vscode.TreeItem(node.label, Collapsed);
         item.iconPath = glyphIcon(node.rollup) ?? new vscode.ThemeIcon("question");
@@ -112,10 +122,11 @@ class ProjectsTreeProvider implements vscode.TreeDataProvider<Node> {
         return item;
       }
       case "project": {
-        const item = new vscode.TreeItem(node.name, node.worktrees.length ? Expanded : vscode.TreeItemCollapsibleState.None);
-        item.description = node.exists ? node.root : `${node.root} · missing`;
-        item.iconPath = glyphIcon(node.rollup) ?? new vscode.ThemeIcon(node.exists ? "repo" : "warning");
-        item.tooltip = node.registered ? `${node.root}\nbase: ${node.baseRef}` : node.root;
+        const item = new vscode.TreeItem(node.name, node.worktrees.length ? Collapsed : vscode.TreeItemCollapsibleState.None);
+        const count = node.worktrees.reduce((n, w) => n + w.agents.length, 0);
+        item.description = count > 0 ? `${count} agents` : undefined;
+        item.iconPath = new vscode.ThemeIcon(node.exists ? "repo" : "warning");
+        item.tooltip = node.root;
         item.contextValue = node.registered ? "vztProject" : "vztProjectUnregistered";
         if (node.registered) {
           item.command = { command: "vzt-mux.projects.openWindow", title: "Open Project Window", arguments: [node] };
@@ -123,11 +134,10 @@ class ProjectsTreeProvider implements vscode.TreeDataProvider<Node> {
         return item;
       }
       case "worktree": {
-        const label = node.branch ?? (node.known ? `(detached ${node.head.slice(0, 7)})` : node.path);
-        const item = new vscode.TreeItem(label, node.agents.length ? Expanded : vscode.TreeItemCollapsibleState.None);
-        const parts = [node.main ? "main" : "", node.agents.length ? `${node.agents.length} agent(s)` : ""];
-        item.description = parts.filter(Boolean).join(" · ");
-        item.iconPath = glyphIcon(node.rollup) ?? new vscode.ThemeIcon("git-branch");
+        const row = node.row;
+        const item = new vscode.TreeItem(row.label, node.agents.length ? Expanded : vscode.TreeItemCollapsibleState.None);
+        item.description = [row.primary ? "primary" : "", row.activity].filter(Boolean).join(" · ");
+        item.iconPath = glyphIcon(row.glyph) ?? new vscode.ThemeIcon("git-branch");
         item.tooltip = node.path;
         item.contextValue = "vztWorktree";
         return item;
@@ -218,6 +228,15 @@ export function registerProjects(context: vscode.ExtensionContext, deps: Project
       if (!picked?.length) return;
       try {
         await deps.run(["projects", "add", picked[0].fsPath, "--json"]);
+      } catch (err) {
+        showError(err);
+      }
+      refresh();
+    }),
+    vscode.commands.registerCommand("vzt-mux.projects.importOrca", async () => {
+      try {
+        const r = await deps.run<{ added: string[] }>(["projects", "import", "--from-orca", "--json"]);
+        vscode.window.showInformationMessage(`Imported ${r.added.length} projects from Orca`);
       } catch (err) {
         showError(err);
       }

@@ -105,6 +105,42 @@ export function addProject(file, dir, { name, base } = {}) {
   return project;
 }
 
+function sanitizeName(raw, fallback) {
+  const cleaned = String(raw ?? '').replace(/[^A-Za-z0-9._-]/g, '-').replace(/^[^A-Za-z0-9]+/, '').slice(0, 63);
+  return cleaned || fallback;
+}
+
+// Register every git repo Orca lists, in order, with one atomic registry write.
+// Idempotent: a root that is already registered is skipped silently.
+export function importFromOrca(file, repos) {
+  const reg = readRegistry(file);
+  const added = [];
+  const skipped = [];
+  for (const repo of repos) {
+    const p = repo && typeof repo.path === 'string' ? repo.path : '';
+    if (!p || !fs.existsSync(p)) {
+      skipped.push({ path: p, reason: 'path does not exist' });
+      continue;
+    }
+    if (!isGitDir(p)) {
+      skipped.push({ path: p, reason: 'not a git repository' });
+      continue;
+    }
+    const root = resolveProject(p);
+    if (reg.projects.some((x) => x.root === root)) continue;
+    const base = sanitizeName(repo.displayName, sanitizeName(path.basename(root), 'project'));
+    let name = base;
+    for (let n = 2; reg.projects.some((x) => x.name === name); n++) {
+      const suffix = `-${n}`;
+      name = base.slice(0, 63 - suffix.length) + suffix;
+    }
+    reg.projects.push({ name, root, baseRef: defaultBaseRef(root) });
+    added.push(name);
+  }
+  if (added.length) writeRegistry(file, reg);
+  return { added, skipped };
+}
+
 export function removeProject(file, name) {
   const reg = readRegistry(file);
   const project = findProject(reg, name);

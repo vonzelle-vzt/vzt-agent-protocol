@@ -8,6 +8,48 @@
 
 import { BusAgentRow, Glyph, glyphFor, rollup } from "./status";
 
+const PRECEDENCE: Glyph[] = ["needs-you", "working", "launching", "done", "idle", "stale"];
+
+/** Orca-style age: now, 5m, 3h, 1d. */
+export function formatAge(ms: number): string {
+  if (ms < 60_000) return "now";
+  if (ms < 3_600_000) return `${Math.floor(ms / 60_000)}m`;
+  if (ms < 86_400_000) return `${Math.floor(ms / 3_600_000)}h`;
+  return `${Math.floor(ms / 86_400_000)}d`;
+}
+
+export interface WorktreeRow {
+  label: string;
+  primary: boolean;
+  glyph: Glyph | null;
+  activity: string | null;
+}
+
+/** What a worktree line shows: branch, primary tag, rollup glyph, busiest agent. */
+export function worktreeRow(
+  wt: { path: string; branch: string | null; main: boolean },
+  agents: BusAgentRow[],
+  nowMs: number
+): WorktreeRow {
+  const scored = agents.map((a) => ({ a, g: glyphFor(a, nowMs) }));
+  let best: { a: BusAgentRow; g: Glyph } | undefined;
+  for (const c of scored) {
+    if (
+      !best ||
+      PRECEDENCE.indexOf(c.g) < PRECEDENCE.indexOf(best.g) ||
+      (c.g === best.g && c.a.state_ts_ms > best.a.state_ts_ms)
+    ) {
+      best = c;
+    }
+  }
+  return {
+    label: wt.branch ?? (wt.path.split("/").filter(Boolean).pop() || wt.path),
+    primary: wt.main,
+    glyph: rollup(scored.map((c) => c.g)),
+    activity: best ? `${best.a.alias} ${best.g} · ${formatAge(nowMs - best.a.state_ts_ms)}` : null,
+  };
+}
+
 export interface ProjectEntry {
   name: string;
   root: string;
@@ -32,6 +74,7 @@ export interface WorktreeNode {
   known: boolean;
   agents: AgentNode[];
   rollup: Glyph | null;
+  row: WorktreeRow;
 }
 
 export interface ProjectNode {
@@ -75,7 +118,14 @@ function worktreeNode(
   nowMs: number
 ): WorktreeNode {
   const nodes = agentNodes(agents, nowMs);
-  return { kind: "worktree", ...wt, known, agents: nodes, rollup: rollup(nodes.map((n) => n.glyph)) };
+  return {
+    kind: "worktree",
+    ...wt,
+    known,
+    agents: nodes,
+    rollup: rollup(nodes.map((n) => n.glyph)),
+    row: worktreeRow(wt, agents, nowMs),
+  };
 }
 
 /** Workspaces holding agents that no listed worktree claims, as synthetic worktree nodes. */

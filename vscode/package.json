@@ -2,7 +2,7 @@
   "name": "vzt-mux",
   "displayName": "VZT Ship Mux",
   "description": "Runs VZT Agent Protocol ship units as native VS Code integrated terminals, with a live Ship Run tree — per-unit status, worktree diffs mid-run, and one-click oracle re-runs.",
-  "version": "0.8.0",
+  "version": "0.8.1",
   "publisher": "vzt",
   "icon": "media/ship-icon.png",
   "engines": {
@@ -181,6 +181,11 @@
         "icon": "$(add)"
       },
       {
+        "command": "vzt-mux.projects.importOrca",
+        "title": "VZT: Import Projects from Orca",
+        "icon": "$(cloud-download)"
+      },
+      {
         "command": "vzt-mux.projects.remove",
         "title": "VZT: Remove Project",
         "icon": "$(trash)"
@@ -292,6 +297,11 @@
           "command": "vzt-mux.projects.add",
           "when": "view == vztProjects",
           "group": "navigation@1"
+        },
+        {
+          "command": "vzt-mux.projects.importOrca",
+          "when": "view == vztProjects",
+          "group": "navigation@5"
         },
         {
           "command": "vzt-mux.agents.newWorkspace",

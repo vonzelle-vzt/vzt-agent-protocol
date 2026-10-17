@@ -4,15 +4,17 @@
 // Exit codes: 0 ok, 2 usage/not found, 4 conflict. stdout is JSON only with --json.
 
 import fs from 'node:fs';
+import { execFileSync } from 'node:child_process';
 import { parseArgs } from 'node:util';
 import { pathToFileURL } from 'node:url';
 import {
   WorkspaceError, registryPath, addProject, removeProject, listProjects,
-  createWorktree, removeWorktree,
+  createWorktree, removeWorktree, importFromOrca,
 } from './projects.mjs';
 
 const USAGE = `usage:
   vzt-agent projects add <dir> [--name N] [--base REF] [--json]
+  vzt-agent projects import --from-orca [--orca-json FILE] [--json]
   vzt-agent projects remove <name> [--json]
   vzt-agent projects list [--json]
   vzt-agent worktree create --project N --name SLUG [--base REF] [--json]
@@ -24,6 +26,8 @@ const OPTIONS = {
   project: { type: 'string' },
   force: { type: 'boolean' },
   json: { type: 'boolean' },
+  'from-orca': { type: 'boolean' },
+  'orca-json': { type: 'string' },
 };
 
 function usage(msg) {
@@ -34,6 +38,27 @@ function req(values, name) {
   const v = values[name];
   if (v === undefined || v === '') throw usage(`--${name} is required`);
   return v;
+}
+
+// `orca repo list --json` envelope is {result:{repos}}; also accept {repos} or a bare array.
+function orcaRepos(values) {
+  let raw;
+  try {
+    raw = values['orca-json']
+      ? fs.readFileSync(values['orca-json'], 'utf8')
+      : execFileSync('orca', ['repo', 'list', '--json'], { encoding: 'utf8', maxBuffer: 256 * 1024 * 1024, stdio: ['ignore', 'pipe', 'pipe'] });
+  } catch (err) {
+    throw new WorkspaceError(2, `cannot read the Orca repo list: ${err.code === 'ENOENT' ? 'orca not found' : err.message}`);
+  }
+  let data;
+  try {
+    data = JSON.parse(raw);
+  } catch {
+    throw new WorkspaceError(2, 'the Orca repo list is not valid JSON');
+  }
+  const repos = Array.isArray(data) ? data : data?.result?.repos ?? data?.repos;
+  if (!Array.isArray(repos)) throw new WorkspaceError(2, 'the Orca repo list has no "repos" array');
+  return repos;
 }
 
 function formatList(projects) {
@@ -55,6 +80,11 @@ function run(group, verb, positionals, values, file) {
         if (positionals.length !== 1) throw usage('projects add takes exactly one <dir>');
         const p = addProject(file, positionals[0], { name: values.name, base: values.base });
         return [p, `added ${p.name}  ${p.root}  base=${p.baseRef}`];
+      }
+      case 'import': {
+        if (positionals.length || !values['from-orca']) throw usage('projects import takes --from-orca and no arguments');
+        const r = importFromOrca(file, orcaRepos(values));
+        return [r, `imported ${r.added.length} project(s) from Orca${r.skipped.length ? `, skipped ${r.skipped.length}` : ''}`];
       }
       case 'remove': {
         if (positionals.length !== 1) throw usage('projects remove takes exactly one <name>');

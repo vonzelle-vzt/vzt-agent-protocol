@@ -230,3 +230,63 @@ test('usage errors exit 2', () => {
   assert.equal(cli(file, ['projects', 'frob']).code, 2);
   assert.equal(cli(file, ['projects', 'list', '--bogus']).code, 2);
 });
+
+function orcaJson(repos, envelope = true) {
+  const f = path.join(tmp('vzt-ws-orca-'), 'repos.json');
+  fs.writeFileSync(f, JSON.stringify(envelope ? { result: { repos } } : repos));
+  return f;
+}
+
+test('import from orca adds git repos in order', () => {
+  const a = gitRepo('alpha');
+  const b = gitRepo('beta');
+  const file = registry();
+  const src = orcaJson([{ path: b, displayName: 'Beta App', kind: 'git' }, { path: a, displayName: 'alpha' }]);
+  const r = ok(file, ['projects', 'import', '--from-orca', '--orca-json', src]);
+  assert.deepEqual(r, { added: ['Beta-App', 'alpha'], skipped: [] });
+  const reg = JSON.parse(fs.readFileSync(file, 'utf8'));
+  assert.deepEqual(reg.projects.map((p) => [p.name, p.root, p.baseRef]), [['Beta-App', b, 'main'], ['alpha', a, 'main']]);
+  assert.equal(fs.statSync(file).mode & 0o777, 0o600);
+  // a bare array is accepted too
+  const bare = ok(registry(), ['projects', 'import', '--from-orca', '--orca-json', orcaJson([{ path: a, displayName: 'a' }], false)]);
+  assert.deepEqual(bare.added, ['a']);
+});
+
+test('import from orca is idempotent', () => {
+  const a = gitRepo('alpha');
+  const file = registry();
+  const src = orcaJson([{ path: a, displayName: 'alpha' }]);
+  assert.deepEqual(ok(file, ['projects', 'import', '--from-orca', '--orca-json', src]).added, ['alpha']);
+  const before = fs.readFileSync(file, 'utf8');
+  assert.deepEqual(ok(file, ['projects', 'import', '--from-orca', '--orca-json', src]), { added: [], skipped: [] });
+  assert.equal(fs.readFileSync(file, 'utf8'), before);
+});
+
+test('import from orca skips missing and non-git paths', () => {
+  const a = gitRepo('alpha');
+  const plain = tmp('vzt-ws-plain-');
+  const gone = path.join(plain, 'nope');
+  const file = registry();
+  const src = orcaJson([{ path: gone, displayName: 'gone' }, { path: plain, displayName: 'plain' }, { path: a, displayName: 'alpha' }]);
+  const r = ok(file, ['projects', 'import', '--from-orca', '--orca-json', src]);
+  assert.deepEqual(r.added, ['alpha']);
+  assert.deepEqual(r.skipped.map((s) => s.path), [gone, plain]);
+  const bad = path.join(tmp('vzt-ws-orca-'), 'bad.json');
+  fs.writeFileSync(bad, 'not json');
+  assert.equal(cli(file, ['projects', 'import', '--from-orca', '--orca-json', bad]).code, 2);
+});
+
+test('import from orca sanitizes names', () => {
+  const a = gitRepo('one');
+  const b = gitRepo('two');
+  const c = gitRepo('three');
+  const file = registry();
+  const long = 'x'.repeat(80);
+  const src = orcaJson([
+    { path: a, displayName: 'my repo/v2' },
+    { path: b, displayName: 'my repo/v2' },
+    { path: c, displayName: long },
+  ]);
+  const r = ok(file, ['projects', 'import', '--from-orca', '--orca-json', src]);
+  assert.deepEqual(r.added, ['my-repo-v2', 'my-repo-v2-2', 'x'.repeat(63)]);
+});

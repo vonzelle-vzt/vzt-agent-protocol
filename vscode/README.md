@@ -187,6 +187,10 @@ project → git worktree → the bus agents running in it.
   own window, or focuses that window if it is already open. Clicking an agent
   focuses its terminal, even when another window owns it: that window claims a
   focus request under `<vztMux.baseDir>/focus/` within a second.
+- **VZT: Import Projects from Orca** (`vzt-mux.projects.importOrca`) registers
+  every git repo `orca repo list` knows, once; the Projects view shows them as
+  a flat, collapsed list like Orca's sidebar. Same as
+  `vzt-agent projects import --from-orca`.
 - **VZT: New Agent Workspace** (`vzt-mux.agents.newWorkspace`). Pick a project
   and a slug; it runs `vzt-agent worktree create`, then starts Claude or Codex
   there in a terminal named `<worktree>·<alias>`, on the bus. **VZT: Add Agent
@@ -200,7 +204,7 @@ project → git worktree → the bus agents running in it.
   focuses that agent.
 
 Commands: `vzt-mux.projects.refresh`, `.add`, `.remove`, `.openWindow`,
-`.focusAgent`. Refresh, add, New Agent Workspace and the dashboard are buttons
+`.focusAgent`, `.importOrca`. Refresh, add, New Agent Workspace and the dashboard are buttons
 on the Projects view title.
 
 ## Settings

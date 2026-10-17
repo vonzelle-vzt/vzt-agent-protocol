@@ -67,12 +67,12 @@ test('package contributes workspace commands', () => {
   const titleMenu = PKG.contributes.menus['view/title'].filter((m) => m.when === 'view == vztProjects');
   assert.deepEqual(
     titleMenu.map((m) => m.command).sort(),
-    ['vzt-mux.agents.newWorkspace', 'vzt-mux.dashboard.open', 'vzt-mux.projects.add', 'vzt-mux.projects.refresh']
+    ['vzt-mux.agents.newWorkspace', 'vzt-mux.dashboard.open', 'vzt-mux.projects.add', 'vzt-mux.projects.importOrca', 'vzt-mux.projects.refresh']
   );
 });
 
 test('package version 0.8.0', () => {
-  assert.equal(PKG.version, '0.8.0');
+  assert.equal(PKG.version, '0.8.1'); // 0.8.1: Import Projects from Orca + Orca-style rows
 });
 
 test('attention setting defaults true', () => {
