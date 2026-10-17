@@ -16,6 +16,8 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import os from 'node:os';
+import { spawn } from 'node:child_process';
+import { fileURLToPath } from 'node:url';
 // Shipped templates must be named by an ABSOLUTE path: the chair profile below is
 // read by an agent standing in the user's project, where `templates/` does not
 // exist. Both hooks install side by side, so this import always resolves.
@@ -55,6 +57,25 @@ try {
   /* best-effort */
 }
 
+// Self-heal: installs are copies, so a source change reached no project until
+// someone re-ran install. If `vzt-agent install` registered THIS .claude in
+// ~/.vzt/installs.json and its source checkout still exists, fire a detached
+// `sync --only <this>` — it no-ops when current, and a refresh lands for the next
+// session. Detached and silent so this hook stays fast and fail-open.
+// Opt out with VZT_NO_AUTOSYNC=1.
+try {
+  if (process.env.VZT_NO_AUTOSYNC !== '1') {
+    const dotClaude = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..');
+    const reg = JSON.parse(fs.readFileSync(path.join(os.homedir(), '.vzt', 'installs.json'), 'utf8'));
+    const cli = reg.installs?.[dotClaude]?.source && path.join(reg.installs[dotClaude].source, 'cli', 'vzt-agent.js');
+    if (cli && fs.existsSync(cli)) {
+      spawn(process.execPath, [cli, 'sync', '--only', dotClaude], { detached: true, stdio: 'ignore' }).unref();
+    }
+  }
+} catch {
+  /* no registry, or not a registered install — nothing to heal */
+}
+
 const NO_ORCA_PARALLELISM = '- VISIBLE PARALLELISM — not available: no Orca terminal detected (ORCA_TERMINAL_HANDLE unset). Use Agent-tool subagents and say so.';
 
 function visibleParallelism(rest) {
@@ -78,19 +99,21 @@ const PROFILES = {
 - Long-horizon builds do NOT belong at this chair: they are spec-first process work, not frontier reasoning. Write the spec, then hand it to /vzt-ship on Opus.
 - When orchestrating multi-step work: you design and verify; workers (vzt-builder/vzt-mechanic) execute and report back — equal results at a fraction of the cost. Never promote a worker step to your own tier without a stated reason.
 - Delegate with a worker brief: FILES_IN_SCOPE (collision boundary), one-shot operation spec, MACHINE_CHECK chosen BEFORE dispatch (${templateRef('worker-brief.md')}).
+- Per-worker effort/model: state it in the dispatch prompt (Claude Code ≥2.1.292 honours it and it overrides the session effort for that subagent) — e.g. low-effort Haiku scouts for the grep sweep, one high-effort reviewer to reason over what they found. Set it per worker; do not let every worker inherit the chair's effort.
 - Parallel waves: dispatch independent steps as multiple Agent calls in ONE message. FILES_IN_SCOPE sets must be pairwise disjoint. Fan out for divergence/evidence, never for correctness — Sonnet/Haiku only, never Opus/Fable. On a hard bug, /vzt-diagnose (N≤4 read-only probes in parallel) BEFORE burning this chair on serial grep work.
 ${visibleParallelism(VISIBLE_PARALLELISM.fable)}
 - Reporting ≠ persistence: verify worker artifacts on disk (git diff, re-run the check) before accepting a report.`,
   opus: `Chair = Opus 5.5. Wall-clock and Opus quota are the constraints.
 - Wall-clock lever: /fast runs this Opus chair at up to ~2.5× output speed (same Opus 5.5 model, premium tokens: $8/$40 per MTok — 2× standard Opus 5.5, close to Fable-tier price for Opus-tier intelligence). Reach for it when latency matters more than token cost, e.g. a long interactive build you're watching; it is a bad default.
 - Fable discipline is ALWAYS on at this chair: run the five gates on every non-trivial turn — (1) scope before acting, (2) evidence before reasoning (never reason about code you haven't read this session), (3) attack your own approach once, (4) machine-checkable verification chosen before the change, (5) report only what you verified. You are Opus with Fable's process; /vzt-fable-mode is the canonical long form.
-- Handle complex implementation inline. Push mechanical edits and recon down to Haiku agents ("vzt-mechanic", "vzt-scout").
+- Handle complex implementation inline. Push mechanical edits and recon down to Haiku agents ("vzt-mechanic", "vzt-scout" — Haiku 5.5 has a 1M context window, so whole-tree recon fits in one scout).
 - Route routine execution to "vzt-builder" (Sonnet 5.5 — it draws on a separate weekly usage bucket).
 - PLANNING IS YOURS NOW — the opus@max rung. Architecture, tech specs, roadmaps, migration plans and PRD breakdowns run HERE at max effort (inline, or "vzt-architect" / /vzt-design), not on Fable. Fable keeps only planning with no prior art to reason from — a novel/greenfield architecture, a one-way-door distributed-systems or multi-tenancy call — and impossible bugs.
 - Escalate to Fable only for those two cases: "vzt-planner"/"vzt-oracle" subagents or the /vzt-plan, /vzt-fix turn skills. Escalating to look thorough is a cost bug, not diligence.
 - On a hard bug, run /vzt-diagnose BEFORE escalating to Fable: N≤4 read-only agents test one hypothesis each in parallel and return CONFIRMED/REFUTED with pasted command output. Cheap parallel evidence first; frontier reasoning only once it is earned.
 - When orchestrating multi-step work: you design and verify; workers (vzt-builder/vzt-mechanic) execute and report back — equal results at a fraction of the cost. Never promote a worker step to your own tier without a stated reason.
 - Delegate with a worker brief: FILES_IN_SCOPE (collision boundary), one-shot operation spec, MACHINE_CHECK chosen BEFORE dispatch (${templateRef('worker-brief.md')}).
+- Per-worker effort/model: state it in the dispatch prompt (Claude Code ≥2.1.292 honours it and it overrides the session effort for that subagent) — e.g. low-effort Haiku scouts for the grep sweep, one high-effort reviewer to reason over what they found. Set it per worker; do not let every worker inherit the chair's effort.
 - DELEGATION CAP — this chair over-reaches for subagents by default, so bound it. Do NOT delegate work you could finish in a handful of tool calls; a subagent re-establishes context, re-explores, reports back, and then you re-read the report. Prefer ONE subagent over several. Keep spawn counts low, and never exceed 20 parallel agents unless explicitly asked. Once you delegate, COMMIT: never redo a worker's work or re-derive its findings.
 - Parallel waves are for genuinely independent tracks (unrelated modules, a wide multi-file sweep), NOT for splitting one modest job into pieces. When steps really are independent, dispatch them as multiple Agent calls in ONE message with pairwise-disjoint FILES_IN_SCOPE. Fan out for divergence/evidence, never for correctness — Sonnet/Haiku only, never Opus/Fable.
 ${visibleParallelism(VISIBLE_PARALLELISM.opus)}

@@ -23,12 +23,23 @@ OPERATION: <precise spec of the change — executable in one shot, no open
 ACCEPTANCE: <the done-state in one sentence>
 MACHINE_CHECK: <shell command(s) that prove completion — test, build, curl, grep>
 EXPECT: <what MACHINE_CHECK must output for the work to count as done>
-CONSTRAINTS: <hard rules verbatim — style, no-new-deps, do-not-touch list>
+EFFORT / MODEL: <optional — e.g. `low` / `haiku` for a grep sweep, `high` for the one
+  worker that reasons over findings. Stated in the dispatch prompt it overrides
+  the session effort for this subagent (Claude Code ≥2.1.292). Omit to use the
+  agent's frontmatter.>
+CONSTRAINTS: <hard rules verbatim — style, no-new-deps, do-not-touch list.
+  Default first line, verbatim: "Time matters here: do not spend time that can
+  be avoided, and the earlier a correct result is obtained, the better.">
 REPORT: <what to include in the report back: diff summary, MACHINE_CHECK output
   pasted verbatim, anything discovered outside scope>
 ```
 
 ## Rules
+
+- **Pace the worker explicitly.** Subagents default to thoroughness over
+  speed. The pacing sentence in CONSTRAINTS is the phrasing Anthropic's
+  engineering team measured as the best speed/quality balance; keep it unless
+  the task is genuinely open-ended research where exhaustiveness is the point.
 
 - **Collision boundary is law.** If completing the task requires writing a file
   outside FILES_IN_SCOPE, the worker STOPS and reports the conflict instead of

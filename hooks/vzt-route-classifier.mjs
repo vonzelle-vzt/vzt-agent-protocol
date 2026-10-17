@@ -30,7 +30,9 @@ const STATE_DIR = process.env.VZT_ROUTER_STATE_DIR || path.join(os.homedir(), '.
 // cost = relative price multiplier vs Haiku, anchored to current sticker pricing
 // (Fable 5.1 $10/$50, Opus 5.5 $4/$20, Sonnet 5.5 $2/$10, Haiku 5.5 $0.10/$0.50
 // per 1M in/out → ratios 100/40/20/1; Haiku 5.5 is $0.50/$2.50 past 100K-token
-// prompts, where the ratios compress to 20/8/4/1); intelligence/taste on a 10-scale.
+// prompts, where the ratios compress to 20/8/4/1). Sonnet 5.5 cache reads are
+// $0.10/MTok (halved from $0.20, 2026-10) — input/output ratios unaffected.
+// Intelligence/taste on a 10-scale.
 // Mirrored in docs/ROUTING-MATRIX.md and skills/vzt-route/SKILL.md — a sync
 // test enforces the cost values match across all three.
 export const TIERS = {

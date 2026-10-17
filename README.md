@@ -495,6 +495,7 @@ Two habits generalise beyond mobile and are worth stating here:
 vzt-agent install [--global] [--target <dir>]   # install + wire settings.json
 vzt-agent uninstall [--global] [--target <dir>] # clean removal
 vzt-agent doctor [--global]                     # health check
+vzt-agent sync [--check] [--only <.claude dir>] # refresh every install on this machine (~/.vzt/installs.json)
 vzt-agent stats                                 # routing distribution + Fable budget, /vzt-ship and ui taste-cache falsification
 vzt-agent matrix                                # print the routing matrix
 vzt-agent ship-check <SPEC.md>                  # gate a /vzt-ship spec — disjoint scopes, an oracle per unit
@@ -508,6 +509,16 @@ vzt-agent ship-watch    <SPEC.md> [--mux orca|herdr|vscode] [--timeout-ms <n>]  
 vzt-agent ship-dispatch <SPEC.md> [--mux orca|herdr|vscode] [--execute]        # one worktree+claude per unit
 vzt-agent ship-supervise <SPEC.md> [--mux orca|herdr|vscode]                   # verify each oracle → shared ledger + mux card
 ```
+
+**Keeping installs current.** Installs are copies, so every `install` records
+itself in `~/.vzt/installs.json` and `vzt-agent sync` refreshes each one whose
+source content changed (the first run also adopts existing installs: `~/.claude`
+plus `~/github-projects/*/.claude`, or `VZT_PROJECTS_DIRS`). It runs automatically
+from two places. One is the protocol repo's git hooks: run `npm run hooks:enable`
+once and every commit, merge or rebase on `main` in the primary checkout syncs in
+the background (log in `~/.vzt/sync.log`). The other is every SessionStart, which
+fires a detached `sync --only <that .claude>`. Refreshed project `.claude/` files
+are left uncommitted for you. Set `VZT_NO_AUTOSYNC=1` to opt out.
 
 Get the bare `vzt-agent` command with `npm install -g github:vonzelle-vzt/vzt-agent-protocol`,
 or prefix any of the above with `npx github:vonzelle-vzt/vzt-agent-protocol`
@@ -629,6 +640,45 @@ a vibe.
 - [CLAUDE.md snippet for manual installs](templates/CLAUDE-snippet.md)
 
 ## Release notes
+
+### 1.20.0 — Claude Code 2.1.290–2.1.299, and installs that keep themselves current
+
+**Installs keep themselves current.** On 2026-10-17 `vzt-agent doctor` found the
+global `~/.claude` install and all four project installs on this machine out of
+date. The global one was still injecting the retired model lineup on every
+session. The cause was that installs are copies and nothing re-ran `install`.
+Now `install` registers itself in `~/.vzt/installs.json`, and the new
+`vzt-agent sync` (with `--check`) refreshes every install whose source content
+hash changed. It runs from the repo's `.githooks` (`npm run hooks:enable`),
+but only on `main` in the primary checkout, so unmerged ship-unit worktree code
+never reaches real projects. It also runs as a detached self-heal from every
+SessionStart. See [CLI](#cli).
+
+**Doctrine updates from the October Claude Code releases:**
+
+- **Per-subagent effort and model in the prompt (2.1.292).** A dispatch prompt can
+  set effort for each subagent, and that overrides the session effort with no
+  frontmatter needed. The chair profiles, both routing docs and the worker brief
+  (new `EFFORT / MODEL` field) now say to set it per worker: low-effort Haiku
+  scouts plus one high-effort reasoner.
+- **Subagent pacing.** Every worker brief's CONSTRAINTS now opens with the
+  engineering team's measured line: *"Time matters here: do not spend time that
+  can be avoided, and the earlier a correct result is obtained, the better."*
+- **Haiku 5.5 has a 1M context window.** `vzt-scout` reads whole trees instead of sampling.
+- **Sonnet 5.5 cache reads cost $0.10/MTok**, down from $0.20. This is noted in the cost
+  comment. The input/output ratios (100/40/20/1) are unchanged.
+- **Fast mode is GA on the Claude API for Opus 5.5** (`"speed": "fast"`), the API twin of `/fast`.
+- **`onFailure: "block"` (2.1.295) is deliberately not used.** Every managed hook
+  is advisory and fail-open. A new test fails if `install` ever writes `onFailure`.
+- **UserPromptSubmit now runs before skill and slash-command expansion (2.1.299).**
+  This doesn't affect the classifier: it already skips `/` prompts and never blocks.
+- **Idle compaction (2.1.299).** A session over 200K tokens is compacted while idle,
+  right before the one-hour cache expires. `/vzt-ship` now treats any long idle
+  (such as waiting on `ship-watch`) as a compaction: re-run `ship-status` and
+  re-read the SPEC.
+- Noted, with no protocol change: desktop nested sessions, `/btw` tabs, cloud
+  session handoff, Team network secrets, API credits, `/usage` warnings, the
+  web-search refill and `claude plugin install --marketplace`.
 
 ### 1.19.0 — the 5.5 lineup: Fable 5.1, Opus 5.5, Sonnet 5.5, Haiku 5.5
 

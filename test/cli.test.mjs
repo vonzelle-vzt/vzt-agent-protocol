@@ -296,3 +296,48 @@ test('doctor chooses the newest installed VS Code extension semantically', () =>
   assert.deepEqual(versions.sort(compareVersions), ['0.6.0', '0.6.1', '0.9.9', '0.10.0']);
   assert.ok(src.includes('.sort(compareVersions)'), 'doctor must use the semantic comparator for installed VS Code extensions');
 });
+
+test('managed hooks stay fail-open: install never writes onFailure', () => {
+  const target = fs.mkdtempSync(path.join(os.tmpdir(), 'vzt-agent-test-'));
+  try {
+    run(['install', '--target', target]);
+    const settings = JSON.parse(fs.readFileSync(path.join(target, '.claude', 'settings.json'), 'utf8'));
+    const entries = Object.values(settings.hooks).flat().flatMap((m) => m.hooks || []);
+    assert.ok(entries.length > 0);
+    for (const h of entries) assert.equal(h.onFailure, undefined, `${h.command} must not set onFailure`);
+  } finally {
+    fs.rmSync(target, { recursive: true, force: true });
+  }
+});
+
+test('install registers itself; sync --check flags drift, sync heals, uninstall unregisters', () => {
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'vzt-sync-home-'));
+  const target = fs.mkdtempSync(path.join(os.tmpdir(), 'vzt-sync-target-'));
+  const env = { ...process.env, HOME: home, VZT_PROJECTS_DIRS: path.join(home, 'none') };
+  const go = (args) => execFileSync('node', [CLI, ...args], { encoding: 'utf8', env });
+  try {
+    go(['install', '--target', target]);
+    const dotClaude = path.join(target, '.claude');
+    const reg = JSON.parse(fs.readFileSync(path.join(home, '.vzt', 'installs.json'), 'utf8'));
+    assert.ok(reg.installs[dotClaude]?.sourceHash, 'install did not register its target');
+    assert.match(go(['sync', '--check']), /current/);
+
+    // Simulate "the source changed since this install".
+    reg.installs[dotClaude].sourceHash = 'stale';
+    fs.writeFileSync(path.join(home, '.vzt', 'installs.json'), JSON.stringify(reg));
+    const skill = path.join(dotClaude, 'skills', 'vzt-route', 'SKILL.md');
+    fs.writeFileSync(skill, 'drifted');
+    assert.throws(() => go(['sync', '--check']), (e) => e.status === 1 && /STALE/.test(e.stdout));
+
+    assert.match(go(['sync']), /updated/);
+    assert.notEqual(fs.readFileSync(skill, 'utf8'), 'drifted');
+    assert.match(go(['sync', '--check']), /current/);
+
+    go(['uninstall', '--target', target]);
+    const after = JSON.parse(fs.readFileSync(path.join(home, '.vzt', 'installs.json'), 'utf8'));
+    assert.equal(after.installs[dotClaude], undefined);
+  } finally {
+    fs.rmSync(home, { recursive: true, force: true });
+    fs.rmSync(target, { recursive: true, force: true });
+  }
+});

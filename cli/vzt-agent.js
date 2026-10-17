@@ -9,6 +9,7 @@
  *   vzt-agent install [--global] [--target <dir>]   copy agents/skills/hooks + wire settings
  *   vzt-agent uninstall [--global] [--target <dir>] remove installed files + unwire hooks
  *   vzt-agent doctor [--global] [--target <dir>]    verify installation health
+ *   vzt-agent sync [--check] [--only <.claude dir>]  refresh every registered install
  *   vzt-agent matrix                                 print the routing matrix
  *   vzt-agent stats                                  routing-decision distribution vs targets
  *   vzt-agent bus <verb>                             durable Claude + Codex agent bus (cli/bus/cli.mjs)
@@ -17,6 +18,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import os from 'node:os';
 import { execFileSync, spawn, spawnSync } from 'node:child_process';
+import { createHash } from 'node:crypto';
 import { fileURLToPath } from 'node:url';
 import { trustClaudeWorkspace } from './claude-trust.mjs';
 import { parseSpec, parseConnections, connectionsOf, validateSpec, planWaves, depsOf, pathInScope, reduceLedger, nextAction, unitLine } from './ship-lib.mjs';
@@ -40,6 +42,9 @@ const ORCA_SRC_DIR = path.join(PKG_ROOT, 'orca');
 // Doctrine surfaces the skills point at by relative path; see install().
 const DOCS_DIR = path.join(PKG_ROOT, 'docs');
 
+// Every managed hook is ADVISORY and fail-open by design: a broken router must
+// never stop a prompt. Never set `onFailure: "block"` (Claude Code ≥2.1.295) on
+// these entries — a test enforces that wireSettings() never writes it.
 const HOOKS = [
   { event: 'UserPromptSubmit', basename: 'vzt-route-classifier.mjs', timeout: 10 },
   { event: 'SessionStart', basename: 'vzt-session-start.mjs', timeout: 10 },
@@ -91,6 +96,8 @@ function parseArgs(argv) {
     else if (a === '--mux') args.mux = argv[++i];
     else if (a === '--timeout-ms') args.timeoutMs = argv[++i];
     else if (a === '--max-concurrent') args.maxConcurrent = argv[++i];
+    else if (a === '--check') args.check = true;
+    else if (a === '--only') args.only = argv[++i];
     // This list is a WHITELIST: anything not named here lands in `_` as a
     // positional and is silently ignored. A flag added to the help text but not
     // to this switch reads as "supported" and does nothing at all.
@@ -310,7 +317,7 @@ function installOrcaHelpers() {
   return out;
 }
 
-function install(args) {
+function install(args, { hash = sourceHash() } = {}) {
   const dotClaude = claudeDir(args);
   console.log(`Installing VZT Agent Protocol → ${dotClaude}`);
 
@@ -360,14 +367,115 @@ function install(args) {
   } else {
     console.log('  bus hooks: skipped (per-user — run: vzt-agent install --global)');
   }
+  recordInstall(dotClaude, args.global, hash);
   console.log('\nDone. Restart Claude Code to activate.');
   console.log('Chair is up to you — the protocol adapts either way:');
   console.log('  /model opus   → build inline, delegate routine work DOWN to Sonnet/Haiku, Fable for the hard stuff');
   console.log('  /model sonnet → stay on the Sonnet bucket, escalate UP only when a task earns it');
 }
 
+// Install registry. Installs are COPIES, so nothing reached a project when the
+// source changed: on 2026-10-17 the global install and all four project
+// installs on this machine had drifted, the global one still naming the
+// retired model lineup. Every install records itself here (per machine, so no
+// absolute path is ever committed into a project) and `sync` refreshes them.
+const registryPath = () => path.join(os.homedir(), '.vzt', 'installs.json');
+
+/** Content hash of everything install() copies — content, not version: edits
+ *  land without a version bump (vzt-mobile-release drifted at 1.19.0). */
+function sourceHash() {
+  const h = createHash('sha256');
+  for (const dir of [AGENT_FILES_DIR, SKILLS_DIR, HOOKS_DIR, TEMPLATES_DIR, WORKFLOWS_DIR, DOCS_DIR, ORCA_SRC_DIR]) {
+    for (const rel of listFilesRecursive(dir).sort()) {
+      h.update(`${path.basename(dir)}/${rel}\0`);
+      h.update(fs.readFileSync(path.join(dir, rel)));
+    }
+  }
+  return h.digest('hex');
+}
+
+function writeRegistry(reg) {
+  fs.mkdirSync(path.dirname(registryPath()), { recursive: true });
+  fs.writeFileSync(registryPath(), JSON.stringify(reg, null, 2) + '\n');
+}
+
+function recordInstall(dotClaude, global, hash) {
+  try {
+    const reg = readJson(registryPath(), { installs: {} });
+    reg.installs[dotClaude] = { global: !!global, source: PKG_ROOT, sourceHash: hash, at: new Date().toISOString() };
+    writeRegistry(reg);
+  } catch { /* the registry is a convenience; never fail an install over it */ }
+}
+
+/** First sync on a machine: adopt installs that predate the registry. */
+function seedRegistry(reg) {
+  const found = [];
+  const globalDir = path.join(os.homedir(), '.claude');
+  if (fs.existsSync(path.join(globalDir, 'hooks', 'vzt-router'))) found.push([globalDir, true]);
+  const roots = (process.env.VZT_PROJECTS_DIRS || path.join(os.homedir(), 'github-projects')).split(path.delimiter);
+  for (const root of roots) {
+    let entries = [];
+    try { entries = fs.readdirSync(root, { withFileTypes: true }); } catch { continue; }
+    for (const e of entries) {
+      const dotClaude = path.join(root, e.name, '.claude');
+      if (e.isDirectory() && fs.existsSync(path.join(dotClaude, 'hooks', 'vzt-router'))) found.push([dotClaude, false]);
+    }
+  }
+  for (const [dotClaude, global] of found) {
+    if (!reg.installs[dotClaude]) reg.installs[dotClaude] = { global, source: PKG_ROOT, sourceHash: null, at: null };
+  }
+}
+
+function sync(args) {
+  const reg = readJson(registryPath(), { installs: {} });
+  if (!args.only) seedRegistry(reg);
+  const only = args.only ? path.resolve(args.only) : null;
+  const hash = sourceHash();
+  let stale = 0;
+  const updated = [];
+  for (const [dotClaude, entry] of Object.entries(reg.installs)) {
+    if (only && dotClaude !== only) continue;
+    if (!fs.existsSync(dotClaude)) {
+      delete reg.installs[dotClaude];
+      console.log(`  pruned   ${dotClaude} (gone)`);
+      continue;
+    }
+    if (entry.sourceHash === hash) {
+      console.log(`  current  ${dotClaude}`);
+      continue;
+    }
+    stale++;
+    if (args.check) {
+      console.log(`  STALE    ${dotClaude}`);
+      continue;
+    }
+    const log = console.log;
+    console.log = () => {};
+    try {
+      install(entry.global ? { global: true } : { target: path.dirname(dotClaude) }, { hash });
+    } finally {
+      console.log = log;
+    }
+    // install() recorded the fresh entry on disk; adopt it before we write reg back.
+    reg.installs[dotClaude] = readJson(registryPath(), { installs: {} }).installs[dotClaude] || entry;
+    updated.push(dotClaude);
+    console.log(`  updated  ${dotClaude}`);
+  }
+  writeRegistry(reg);
+  if (args.check && stale) {
+    console.log(`${stale} install(s) behind this source — run: vzt-agent sync`);
+    process.exitCode = 1;
+  } else if (updated.length) {
+    console.log(`${updated.length} install(s) refreshed. Project .claude/ diffs are left uncommitted for you to review.`);
+  }
+}
+
 function uninstall(args) {
   const dotClaude = claudeDir(args);
+  try {
+    const reg = readJson(registryPath(), null);
+    if (reg?.installs?.[dotClaude]) { delete reg.installs[dotClaude]; writeRegistry(reg); }
+  } catch { /* convenience only */ }
   console.log(`Uninstalling VZT Agent Protocol from ${dotClaude}`);
   let removed = 0;
   if (fs.existsSync(AGENT_FILES_DIR)) {
@@ -2677,6 +2785,9 @@ switch (cmd) {
   case 'doctor':
     doctor(args);
     break;
+  case 'sync':
+    sync(args);
+    break;
   case 'stats':
     stats();
     break;
@@ -2718,6 +2829,8 @@ Usage:
   vzt-agent install [--global] [--target <dir>]
   vzt-agent uninstall [--global] [--target <dir>]
   vzt-agent doctor [--global] [--target <dir>]
+  vzt-agent sync [--check] [--only <.claude dir>]
+                                          refresh every install on this machine (~/.vzt/installs.json)
   vzt-agent stats
   vzt-agent matrix
   vzt-agent bus <verb> [--json]            Claude + Codex agent bus (vzt-agent bus help)

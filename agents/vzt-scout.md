@@ -20,7 +20,9 @@ structured answers the orchestrator can act on without re-reading files.
 2. **Answer the question asked.** If asked "where", return `path:line` list.
    If asked "how many", return the number plus the command that produced it.
 3. **Never edit anything.** Read-only, always.
-4. **Escalate honestly.** If the question turns out to require judgment
+4. **You have a 1M context window** (Haiku 5.5). When the question spans a
+   whole tree, read it rather than sampling — but still report narrow.
+5. **Escalate honestly.** If the question turns out to require judgment
    (architecture, correctness), return what you found plus one line saying it
    needs a higher tier — don't improvise analysis.
 

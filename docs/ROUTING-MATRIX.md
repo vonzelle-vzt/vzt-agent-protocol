@@ -130,6 +130,9 @@ down a tier.
   carried over from earlier models over-spend. `xhigh` remains the right call
   for the heavy-builder's dense work.
 - API effort defaults differ by tier: Opus 5.5 and Haiku 5.5 default to `medium`, Sonnet 5.5 and Fable 5.1 to `high` (Sonnet 5.5 recalibrated its levels, so re-sweep rather than carry old settings over). Set effort explicitly rather than relying on the default.
+- **Per-subagent effort in the prompt (Claude Code ≥2.1.292).** A dispatch prompt can name the effort (and model) per subagent, and it overrides the session effort for that subagent — no custom frontmatter needed. Use it to split one wave: low-effort Haiku scouts sweep, one high-effort worker reasons over the result.
+- **Haiku 5.5 has a 1M context window.** Recon that used to be sampled can be ingested whole by one `vzt-scout`.
+- **Fast mode is GA on the Claude API for Opus 5.5** (`"speed": "fast"` per request): same model, up to ~2.5× output tokens/s, premium price — the API twin of `/fast`.
 
 **`/vzt-fable-mode` is a separate dial from tier/effort routing above**: it
 carries no `model:` pin and runs on whichever model the router already picked,

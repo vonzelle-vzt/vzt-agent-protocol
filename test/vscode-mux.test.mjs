@@ -91,7 +91,7 @@ test('hook: NO-OPS outside a ship unit — this is what keeps it off your normal
 
 test('install wires all three lifecycle events, each with its action argument', () => {
   const home = tmpdir('vzt-mux-install-');
-  execFileSync('node', [CLI, 'install', '--target', home], { stdio: 'ignore' });
+  execFileSync('node', [CLI, 'install', '--target', home], { stdio: 'ignore', env: { ...process.env, HOME: home } });
   const settings = JSON.parse(fs.readFileSync(path.join(home, '.claude', 'settings.json'), 'utf8'));
 
   const cmdFor = (event) =>
@@ -128,7 +128,7 @@ test('re-install UPGRADES a managed hook whose command changed (not just adds mi
   // machine kept the stale argument-less command and `install` still reported
   // success. An install that cannot upgrade is an install that silently rots.
   const home = tmpdir('vzt-mux-upgrade-');
-  execFileSync('node', [CLI, 'install', '--target', home], { stdio: 'ignore' });
+  execFileSync('node', [CLI, 'install', '--target', home], { stdio: 'ignore', env: { ...process.env, HOME: home } });
   const settingsPath = path.join(home, '.claude', 'settings.json');
 
   // Simulate an older install: strip the action argument off the Stop entry.
@@ -140,7 +140,7 @@ test('re-install UPGRADES a managed hook whose command changed (not just adds mi
   }
   fs.writeFileSync(settingsPath, JSON.stringify(before, null, 2));
 
-  execFileSync('node', [CLI, 'install', '--target', home], { stdio: 'ignore' });
+  execFileSync('node', [CLI, 'install', '--target', home], { stdio: 'ignore', env: { ...process.env, HOME: home } });
 
   const after = JSON.parse(fs.readFileSync(settingsPath, 'utf8'));
   const stop = (after.hooks.Stop || [])
@@ -153,7 +153,7 @@ test('re-install UPGRADES a managed hook whose command changed (not just adds mi
 
 test('uninstall removes every lifecycle hook it wired', () => {
   const home = tmpdir('vzt-mux-uninstall-');
-  execFileSync('node', [CLI, 'install', '--target', home], { stdio: 'ignore' });
+  execFileSync('node', [CLI, 'install', '--target', home], { stdio: 'ignore', env: { ...process.env, HOME: home } });
   execFileSync('node', [CLI, 'uninstall', '--target', home], { stdio: 'ignore' });
   const raw = fs.readFileSync(path.join(home, '.claude', 'settings.json'), 'utf8');
   assert.ok(!raw.includes('vzt-vscode-agent-state.sh'), 'uninstall left a lifecycle hook behind');

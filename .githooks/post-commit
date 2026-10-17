@@ -1,0 +1,12 @@
+#!/bin/sh
+# Push protocol changes to every install on this machine (vzt-agent sync).
+# Enabled by `npm run hooks:enable`. Opt out per command with VZT_NO_AUTOSYNC=1.
+# Primary checkout on main only: ship-watch units commit in linked worktrees,
+# and unmerged unit code must never be synced into real projects.
+[ "${VZT_NO_AUTOSYNC-}" = 1 ] && exit 0
+[ "$(git rev-parse --git-dir)" = "$(git rev-parse --git-common-dir)" ] || exit 0
+[ "$(git symbolic-ref --short -q HEAD)" = main ] || exit 0
+root=$(git rev-parse --show-toplevel)
+mkdir -p "$HOME/.vzt"
+nohup node "$root/cli/vzt-agent.js" sync >"$HOME/.vzt/sync.log" 2>&1 &
+exit 0

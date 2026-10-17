@@ -205,6 +205,11 @@ the diff.
 
 You will lose the plan. You will not lose the spec.
 
+Assume a compaction happened after **any long idle**, not only after a visible
+one: since Claude Code 2.1.299 a session over 200K tokens that sits idle is
+compacted right before the one-hour prompt cache expires — exactly what a chair
+waiting on a long `ship-watch` does.
+
 ```bash
 vzt-agent ship-status
 ```
