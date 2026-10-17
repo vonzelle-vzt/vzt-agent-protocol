@@ -956,6 +956,8 @@ function programGate(specPath, spec) {
     try { prog = JSON.parse(fs.readFileSync(progFile, 'utf8')); } catch { return `${progFile} is not valid JSON`; }
     const listed = Object.values(prog.lanes || {}).some((l) => (l.order || []).includes(spec.slug));
     if (!listed) continue;
+    // vzt-orca-flow's `ship` already ran this gate and consumed the claim.
+    if (process.env.VZT_PROGRAM_GATE_PASSED === spec.slug) return null;
     if (process.env.VZT_PROGRAM_GATE === '0') {
       console.error(`⚠️  VZT_PROGRAM_GATE=0: dispatching ${spec.slug} WITHOUT the ${d} program-order gate.`);
       return null;
