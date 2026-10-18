@@ -3,10 +3,12 @@
 // agents. Contract: .vzt/ship/vscode-project-swap/SPEC.md (Oracle 3).
 //
 // Two sessions in two temp git repos run `cat`; a line goes in through the wake
-// sink and comes back in capture-pane; pane pids are read both ways; a real
-// `attach-session` client under a pty (pty_host.py) is attached, swapped away
-// (session survives), reattached (history redrawn) and user-closed (session
-// killed). Actions go through the compiled vscode/out/bus/{tmux,registry}.js;
+// sink and comes back in capture-pane; pane pids are read both ways. Then the
+// worktree layouts (0.11): a real attach client under a pty (pty_host.py) on
+// alpha's layout of split panes is attached, swapped away (sessions and layout
+// survive), reattached (same panes, the user's split width kept), loses a pane
+// when its agent exits, gains one when an agent starts, and is user-closed
+// (every session in it killed). Actions go through the compiled vscode/out/bus/{tmux,registry}.js;
 // every check is a raw tmux call of its own.
 //
 // Never touches the real agent server: it runs its own socket
@@ -159,7 +161,7 @@ async function main() {
   for (const name of ['tmux', 'registry']) {
     if (!fs.existsSync(path.join(OUT, `${name}.js`))) fail(`vscode/out/bus/${name}.js missing — run \`npm --prefix vscode run compile\` first`);
   }
-  const { Tmux, findTmux, writeConf } = await import(pathToFileURL(path.join(OUT, 'tmux.js')).href);
+  const { Tmux, findTmux, writeConf, layoutSession } = await import(pathToFileURL(path.join(OUT, 'tmux.js')).href);
   const { AgentRegistry } = await import(pathToFileURL(path.join(OUT, 'registry.js')).href);
 
   BIN = findTmux(process.env.PATH || '');
@@ -223,46 +225,87 @@ async function main() {
     if (!kids.length) fail(`nothing runs under pane pid ${pidA}`);
     log(`pane pid ${A} = ${pidA} (cat ${kids.join(',')} under it); ${B} = ${pids.get(B)}`);
 
-    // --- the swap, through the real registry with pty-hosted attach clients
+    // --- the swap, through the real registry with pty-hosted attach clients:
+    // alpha has two sessions, so its worktree terminal is ONE client on a
+    // layout of two split panes, each an attach client of one session.
+    const A2 = 'vzt-live-a2';
+    await tmux.newSession(A2, repoA, {});
     const registry = new AgentRegistry(() => {}, {
       createTerminal: (opts) => ptyTerminal(opts),
       tmux: () => tmux,
       log: (l) => log(`registry: ${l}`),
     });
     registry.set('a', { alias: 'alpha-claude', kind: 'claude', cwd: repoA, session: A, project: repoA });
+    registry.set('a2', { alias: 'alpha-codex', kind: 'codex', cwd: repoA, session: A2, project: repoA });
     registry.set('b', { alias: 'beta-claude', kind: 'claude', cwd: repoB, session: B, project: repoB });
+    const LA = layoutSession(repoA);
+    const layoutPanes = () =>
+      raw('list-panes', '-s', '-t', `=${LA}`, '-F', '#{@vzt-session}\t#{pane_id}\t#{pane_width}')
+        .split('\n')
+        .filter(Boolean)
+        .map((l) => l.split('\t'));
 
-    registry.showProject(repoA, { show: false });
+    await registry.showProject(repoA, { show: false });
     const clientA = registry.get('a').terminal;
-    if (!clientA || registry.get('b').terminal) fail('showProject(alpha) must attach only alpha');
-    await until(`a client attached to ${A}`, () => clients().some(([, s]) => s === A));
+    if (!clientA || registry.get('a2').terminal !== clientA) fail('both alpha sessions must share ONE worktree terminal');
+    if (registry.get('b').terminal) fail('showProject(alpha) must attach only alpha');
+    await until(`a client attached to the layout ${LA}`, () => clients().some(([, s]) => s === LA));
+    await until('each layout pane attached its session', () => clients().some(([, s]) => s === A) && clients().some(([, s]) => s === A2));
+    const panes1 = layoutPanes();
+    if (panes1.map(([s]) => s).join(',') !== `${A},${A2}`) fail(`layout panes: ${JSON.stringify(panes1)}`);
+    if (raw('show-options', '-wv', '-t', `=${LA}:`, 'pane-border-status').trim() !== 'top') fail('the layout panes are not titled');
+    if (raw('display-message', '-p', '-t', `=${LA}:`, '#{@vzt-session}').trim() !== A) fail('the split took focus from the first pane');
     clientA.send('typed-through-client\r');
-    await until('a keystroke through the attach client reached the session', () => count(screen(A), 'typed-through-client') >= 2);
-    log(`attached ${A} under a pty (client pid ${clientA.pid}); typed through it`);
+    await until('a keystroke through the worktree terminal reached the active pane\'s session', () => count(screen(A), 'typed-through-client') >= 2);
+    if (screen(A2).includes('typed-through-client')) fail('a keystroke reached the wrong pane');
+    log(`attached ${LA} under a pty: panes ${panes1.map(([s, p]) => `${p}=${s}`).join(' ')}; typed into ${A}`);
 
-    registry.showProject(repoB, { show: false });
-    await until(`the ${A} client detached`, () => !clients().some(([, s]) => s === A));
-    await until(`a client attached to ${B}`, () => clients().some(([, s]) => s === B));
-    if (!rawOk('has-session', '-t', `=${A}`)) fail('a project swap killed the other session');
+    // The user drags the split: tmux keeps it.
+    raw('resize-pane', '-t', panes1[0][1], '-x', '40');
+    const width = layoutPanes()[0][2];
+
+    await registry.showProject(repoB, { show: false });
+    await until(`the ${LA} client detached`, () => !clients().some(([, s]) => s === LA));
+    await until(`a client attached to beta's layout`, () => clients().some(([, s]) => s === layoutSession(repoB)));
+    if (!rawOk('has-session', '-t', `=${A}`) || !rawOk('has-session', '-t', `=${A2}`) || !rawOk('has-session', '-t', `=${LA}`)) {
+      fail('a project swap killed a session or the layout');
+    }
     if (registry.get('a').terminal !== undefined) fail('the swapped-away entry must be detached');
     await registry.closed(clientA, 'other'); // VS Code's close event for the swap's own dispose
     if (!registry.get('a') || !rawOk('has-session', '-t', `=${A}`)) fail("the swap's close event ended the session");
-    log(`swapped to beta: ${A} detached and still running; ${B} attached`);
+    log(`swapped to beta: ${LA} detached, it and both alpha sessions still running`);
 
-    registry.showProject(repoA, { show: false });
+    await registry.showProject(repoA, { show: false });
     const clientA2 = registry.get('a').terminal;
     if (!clientA2 || clientA2 === clientA) fail('showing alpha again must attach a new client');
-    await until(`a client re-attached to ${A}`, () => clients().some(([, s]) => s === A));
-    await until('the reattached client redraws the session (history kept)', async () => (await clientA2.tail()).includes('hello-from-sink-A'));
-    log(`reattached ${A}: the earlier lines are on the new client's screen`);
+    await until(`a client re-attached to ${LA}`, () => clients().some(([, s]) => s === LA));
+    const panes2 = layoutPanes();
+    if (panes2.map(([, p]) => p).join() !== panes1.map(([, p]) => p).join()) fail(`the layout was rebuilt: ${JSON.stringify(panes2)}`);
+    if (panes2[0][2] !== width) fail(`the user's split width was lost: ${panes2[0][2]} != ${width}`);
+    await until('the reattached client redraws the session (history kept)', async () => (await clientA2.tail()).includes('typed-through-client'));
+    log(`reattached ${LA}: same panes, split width ${width} kept, history on screen`);
 
-    // --- the user closes alpha's terminal: Orca semantics, the session ends
+    // --- an agent that exits closes its own pane; the worktree terminal stays
+    raw('kill-session', '-t', `=${A2}`);
+    await until(`${A2}'s pane closed`, () => layoutPanes().length === 1);
+    if (clientA2.exitStatus) fail('one agent exiting closed the worktree terminal');
+
+    // --- a new agent of the shown project opens its pane at once (Orca)
+    const A3 = 'vzt-live-a3';
+    await tmux.newSession(A3, repoA, {});
+    registry.set('a3', { alias: 'alpha-third', kind: 'claude', cwd: repoA, session: A3, project: repoA });
+    await registry.idle();
+    await until(`${A3} got its pane`, () => layoutPanes().some(([s]) => s === A3));
+    if (registry.get('a3').terminal !== clientA2) fail('the new agent must join the worktree terminal');
+    log(`${A2} exited → its pane closed; new ${A3} → split in at once`);
+
+    // --- the user closes alpha's terminal: Orca semantics, every pane's session ends
     clientA2.dispose();
     await registry.closed(clientA2, 'user');
-    if (rawOk('has-session', '-t', `=${A}`)) fail('a user-closed terminal must kill its session');
-    if (registry.get('a')) fail('a user-closed entry must be forgotten');
-    if (!rawOk('has-session', '-t', `=${B}`)) fail('killing alpha touched beta');
-    log(`user-closed ${A}: has-session false; ${B} unaffected`);
+    for (const s of [A, A3, LA]) if (rawOk('has-session', '-t', `=${s}`)) fail(`a user-closed worktree terminal must end ${s}`);
+    if (registry.get('a') || registry.get('a3')) fail('user-closed entries must be forgotten');
+    if (!rawOk('has-session', '-t', `=${B}`)) fail('closing alpha touched beta');
+    log(`user-closed alpha: ${A}, ${A3} and ${LA} gone; ${B} unaffected`);
   } finally {
     for (const t of ptys) {
       try {

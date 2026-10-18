@@ -188,8 +188,8 @@ project → git worktree → the bus agents running in it.
   request under `<vztMux.baseDir>/focus/` within a second.
 - **One window, one terminal set per project** (0.10). Clicking a project
   makes it the *active* project (its row says `active`): the terminal panel
-  swaps to that project's agents and terminals — one split group per worktree
-  — and the Explorer reveals its folder when it is a workspace folder. The
+  swaps to that project's agents and terminals — one terminal per worktree —
+  and the Explorer reveals its folder when it is a workspace folder. The
   other projects' agents keep running; clicking their project brings their
   terminals back. **Open Project Window** is still on the row's right-click
   menu.
@@ -198,14 +198,25 @@ project → git worktree → the bus agents running in it.
   in the project's main checkout, alias `<folder>-<kind>` (`-2` … `-9` when the
   bus says that alias is taken). The + on a worktree row offers the same,
   minus New worktree…, in that worktree.
+- **A worktree's agents split side by side in one terminal** (0.11), the way
+  Orca splits a worktree's tab. Each pane is titled with its agent; a new
+  agent splits in to the right at once without taking focus, and an agent
+  that exits closes its pane. Drag a border to resize — the split is kept
+  across project switches and window reloads (tmux holds it in a layout
+  session per worktree). Drag a worktree's terminal into the editor area and
+  it comes back in that column, reloads included.
+- **Right-click pastes, selecting copies**, as in Orca (VS Code defaults set by
+  the extension: `terminal.integrated.rightClickBehavior` = `paste`,
+  `terminal.integrated.copyOnSelection` = on; override them in Settings).
+  Option+right-click still opens tmux's pane menu.
 - **Agents live in tmux.** Each agent (and each Terminal) runs in a session on
   a private tmux server, `tmux -L vzt-mux` with `~/.vzt/mux/tmux.conf`
   (rewritten on activation: mouse scrolling, no status bar, 50k lines of
   history, drag-to-copy into the macOS clipboard). Your own tmux server and
   `~/.tmux.conf` are never touched. A VS Code terminal is only an attach
   client: switching projects detaches it, and so does closing or reloading
-  the window — the agent runs on and comes back attached. Closing a terminal
-  yourself ends its session, like closing a tab in Orca. Without tmux
+  the window — the agent runs on and comes back attached. Closing a worktree's
+  terminal yourself ends every session in it, like closing a tab in Orca. Without tmux
   installed (or with `vztMux.agents.tmux` off) agents run in plain terminals
   as before, which close with the window.
 - **Claude still connects to VS Code inside tmux.** A tmux session does not

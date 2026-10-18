@@ -67,8 +67,10 @@ export function confText(platform: NodeJS.Platform = process.platform): string {
     'set -g default-terminal "tmux-256color"',
     "set -g window-size latest",
     "set -s set-clipboard on",
-    // Truecolor for agent TUIs (VS Code's terminal renders it).
+    // Truecolor for agent TUIs (VS Code's terminal renders it), and through a
+    // layout pane, whose attach client sees TERM=tmux-256color.
     'set -as terminal-features ",xterm-256color:RGB"',
+    'set -as terminal-features ",tmux-256color:RGB"',
     "set-environment -g COLORTERM truecolor",
     // No prefix key: the server is invisible, and C-b is Claude Code's
     // background-a-command key — a prefix would eat the first press.
@@ -128,6 +130,15 @@ function safeName(s: string): string {
 /** One session per bus agent. */
 export function agentSession(agentId: string): string {
   return `vzt-${safeName(agentId)}`;
+}
+
+/**
+ * One layout session per worktree: its panes are attach clients of that
+ * worktree's agent sessions, so they split side by side in ONE VS Code
+ * terminal and tmux keeps the arrangement across swaps and reloads.
+ */
+export function layoutSession(cwd: string): string {
+  return `vzt-lay-${crypto.createHash("sha256").update(cwd).digest("hex").slice(0, 12)}`;
 }
 
 /** One session per plain terminal. */
@@ -287,6 +298,70 @@ export class Tmux {
     } catch {
       // no server yet: the next new-session reads the file itself
     }
+  }
+
+  /**
+   * A layout pane's command: an attach client of `session`, run as argv (never
+   * through the pane's shell — zsh reads `=name` as a command lookup). $TMUX
+   * unset, or tmux refuses to attach from inside one of its own panes.
+   */
+  private attachArgv(session: string): string[] {
+    return ["env", "-u", "TMUX", this.bin, "-L", this.socket, "attach-session", "-t", `=${session}`];
+  }
+
+  /**
+   * The layout's panes by the session each one shows; undefined when the
+   * layout session does not exist. A pane not marked yet (the window reloaded
+   * between its split and its mark) is known by its attach command, so it is
+   * never added twice.
+   */
+  async layoutPanes(layout: string): Promise<Map<string, string> | undefined> {
+    let stdout: string;
+    try {
+      ({ stdout } = await this.run(["list-panes", "-s", "-t", `=${layout}`, "-F", "#{@vzt-session}\t#{pane_id}\t#{pane_start_command}"]));
+    } catch {
+      return undefined;
+    }
+    const panes = new Map<string, string>();
+    for (const line of stdout.split("\n")) {
+      const [marked, pane, command = ""] = line.split("\t");
+      const session = marked || /attach-session -t =([A-Za-z0-9_-]+)/.exec(command)?.[1];
+      if (session && pane) panes.set(session, pane);
+    }
+    return panes;
+  }
+
+  /** Mark a layout pane with the session it shows and the label on its border. */
+  private async markPane(pane: string, session: string, label: string): Promise<void> {
+    await this.run(["set-option", "-p", "-t", pane, "@vzt-session", session]);
+    await this.run(["set-option", "-p", "-t", pane, "@vzt-label", label]);
+  }
+
+  /** Start the layout session for `cwd` with one pane showing `session`. */
+  async newLayout(layout: string, cwd: string, session: string, label: string): Promise<void> {
+    const pane = (
+      await this.run(["new-session", "-d", "-P", "-F", "#{pane_id}", "-s", layout, "-c", cwd, "--", ...this.attachArgv(session)], true)
+    ).stdout.trim();
+    // Each pane is titled with its agent, as Orca's pane headers are.
+    await this.run(["set-option", "-w", "-t", `=${layout}:`, "pane-border-status", "top"]);
+    await this.run(["set-option", "-w", "-t", `=${layout}:`, "pane-border-format", " #{?@vzt-label,#{@vzt-label},#{pane_current_command}} "]);
+    await this.markPane(pane, session, label);
+  }
+
+  /** Split a pane showing `session` to the right of the active one, keeping focus where it is (Orca's split). */
+  async addPane(layout: string, cwd: string, session: string, label: string): Promise<void> {
+    const pane = (
+      await this.run(["split-window", "-h", "-d", "-P", "-F", "#{pane_id}", "-t", `=${layout}:`, "-c", cwd, "--", ...this.attachArgv(session)])
+    ).stdout.trim();
+    await this.markPane(pane, session, label);
+  }
+
+  /** Make the pane showing `session` the layout's active one; false when it has none. */
+  async selectPane(layout: string, session: string): Promise<boolean> {
+    const pane = (await this.layoutPanes(layout))?.get(session);
+    if (!pane) return false;
+    await this.run(["select-pane", "-t", pane]);
+    return true;
   }
 
   /**

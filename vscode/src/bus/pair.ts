@@ -667,9 +667,9 @@ export function registerAgentBus(
     view.onDidChangeVisibility((e) => {
       if (e.visible) void tree.reload();
     }),
-    // A terminal the user closed ends its tmux session; one whose session ended
-    // is forgotten (its lease lapses in 30 s → stale); a project swap's own
-    // disposals change nothing. One closed by VS Code shutting down stays saved
+    // A worktree terminal the user closed ends every tmux session in it; one
+    // whose sessions ended is forgotten (its lease lapses in 30 s → stale); a
+    // project swap's own disposals change nothing. One closed by VS Code shutting down stays saved
     // for restore — its session lives on in tmux.
     vscode.window.onDidCloseTerminal((closed) => {
       const r = closed.exitStatus?.reason;

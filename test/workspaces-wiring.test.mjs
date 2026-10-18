@@ -72,7 +72,7 @@ test('package contributes workspace commands', () => {
 });
 
 test('package version', () => {
-  assert.equal(PKG.version, '0.10.3'); // 0.10.3: terminal placement survives a reload; right-click pastes, selecting copies
+  assert.equal(PKG.version, '0.11.0'); // 0.11.0: a worktree's agents split side by side in one terminal (tmux layout), Orca-style
 });
 
 test('terminals: right-click pastes and selecting copies, as in Orca (defaults the user can override)', () => {
