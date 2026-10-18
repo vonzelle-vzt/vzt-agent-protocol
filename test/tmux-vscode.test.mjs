@@ -338,6 +338,7 @@ async function swapHarness({ live = () => true, tmuxPresent = true, editorColumn
     reveal: (root) => events.push(`reveal:${root}`),
     onActive: (root) => events.push(`active:${root}`),
     editorColumn,
+    warn: (m) => events.push(`warn:${m}`),
     log: (l) => events.push(`log:${l}`),
   });
   return { registry, created, events, saves, calls, layouts };
@@ -653,6 +654,7 @@ test('focus: an agent of another project shows that project first, selects its p
   assert.equal(h.registry.active, P);
   assert.deepEqual(verbs(h.calls, 'select-pane'), [['-L', 'vzt-mux', 'select-pane', '-t', '%2']], "m2's pane");
   assert.deepEqual(h.created[0].shown, [false], 'focus takes keyboard focus; the swap did not raise the lead itself');
+  assert.ok(!h.events.some((e) => e.startsWith('warn:')), 'no warning when it worked');
   assert.equal(h.registry.focus('nope'), false);
 
   // No tmux binary any more: a detached session cannot be attached, so nothing is shown.
@@ -661,6 +663,27 @@ test('focus: an agent of another project shows that project first, selects its p
   assert.equal(n.registry.focus('m1'), false, 'so the caller can fall back');
   await n.registry.idle();
   assert.deepEqual(n.created, []);
+});
+
+test('focus on an agent whose pane cannot open warns instead of silently doing nothing', async () => {
+  const h = await swapHarness({ live: (sess) => sess !== 'vzt-m1' });
+  seed(h.registry, [['m1', { alias: 'app-claude', kind: 'claude', cwd: P, session: 'vzt-m1', project: P }]]);
+  assert.equal(h.registry.focus('m1'), true);
+  await h.registry.idle();
+  assert.deepEqual(h.events.filter((e) => e.startsWith('warn:')),
+    ['warn:VZT: could not show app-claude — its tmux pane did not open. See the VZT output for why.']);
+});
+
+test('the active project changes the moment it is asked for, before tmux answers', async () => {
+  const h = await swapHarness();
+  seed(h.registry, [['m1', { alias: 'a', kind: 'claude', cwd: P, session: 'vzt-m1', project: P }]]);
+  const pending = h.registry.showProject(P);
+  assert.equal(h.registry.active, P, 'the sidebar reads it right away');
+  assert.deepEqual(h.events, [`active:${P}`]);
+  assert.equal(h.created.length, 0, 'the attach itself is still queued');
+  await pending;
+  assert.equal(h.created.length, 1);
+  assert.deepEqual(h.events, [`active:${P}`, `reveal:${P}`]);
 });
 
 test('leasePlan: pane pid for tmux entries, terminal pid for legacy, no shells; a gone session = ended, attached or not', async () => {

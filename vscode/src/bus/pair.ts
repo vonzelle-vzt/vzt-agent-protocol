@@ -225,6 +225,7 @@ export function registerAgentBus(
         for (const l of activeListeners) l();
       },
       editorColumn,
+      warn: (message) => void vscode.window.showWarningMessage(message),
       log,
     }
   );

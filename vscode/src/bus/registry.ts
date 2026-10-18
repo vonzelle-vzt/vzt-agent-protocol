@@ -83,6 +83,8 @@ export interface TerminalView {
   /** Reveal `root` in the Explorer — only called when it is a workspace folder. */
   reveal?(root: string): void;
   onActive?(root: string): void;
+  /** Tell the user something they asked for did not happen. */
+  warn?(message: string): void;
   /** The editor column holding `terminal`, undefined when it is in the panel. */
   editorColumn?(terminal: vscode.Terminal): number | undefined;
   log?(line: string): void;
@@ -206,14 +208,17 @@ export class AgentRegistry {
       const session = entry.session;
       void this.showProject(entry.project, { show: false });
       void this.queue(async () => {
+        if (this.agents.get(id) !== entry) return; // forgotten meanwhile: nothing to show
         const t = entry.terminal;
-        if (!isLive(t)) return;
+        let selected = false;
         try {
-          await this.view?.tmux()?.selectPane(layoutSession(entry.cwd), session);
+          selected = isLive(t) && !!(await this.view?.tmux()?.selectPane(layoutSession(entry.cwd), session));
         } catch (err) {
           this.view?.log?.(`focus ${entry.alias}: ${err instanceof Error ? err.message : String(err)}`);
         }
-        t.show(false);
+        if (isLive(t)) t.show(false);
+        // A click must never silently do nothing.
+        if (!selected) this.view?.warn?.(`VZT: could not show ${entry.alias} — its tmux pane did not open. See the VZT output for why.`);
       });
       return true;
     }
@@ -232,13 +237,15 @@ export class AgentRegistry {
    * terminal or one this registry does not own. Runs queued.
    */
   showProject(root: string, opts: ShowOptions = {}): Promise<vscode.Terminal | undefined> {
-    return this.queue(() => this.attach(root, opts));
+    // Active at once, so the sidebar's `active` tag never waits on tmux.
+    const changed = root !== this.active;
+    this.active = root;
+    if (changed) this.view?.onActive?.(root);
+    const { reveal = changed, show = true } = opts;
+    return this.queue(() => this.attach(root, reveal, show));
   }
 
-  private async attach(root: string, opts: ShowOptions): Promise<vscode.Terminal | undefined> {
-    const changed = root !== this.active;
-    const { reveal = changed, show = true } = opts;
-
+  private async attach(root: string, reveal: boolean, show: boolean): Promise<vscode.Terminal | undefined> {
     let moved = false;
     const dropped = new Set<vscode.Terminal>();
     for (const entry of this.agents.values()) {
@@ -257,8 +264,6 @@ export class AgentRegistry {
       t.dispose();
     }
     if (moved) this.changed();
-    this.active = root;
-    if (changed) this.view?.onActive?.(root);
 
     // Main checkout first, then worktrees by path; within one, start order.
     const mine = [...this.agents.values()].filter((e) => e.project === root);
