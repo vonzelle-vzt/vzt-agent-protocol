@@ -239,7 +239,7 @@ test('the config: listed options, pbcopy copy on macOS only, written atomically'
     'set -g mouse on', 'set -g status off', 'set -g history-limit 50000', 'set -s escape-time 0',
     'set -g default-terminal "tmux-256color"', 'set -g window-size latest', 'set -s set-clipboard on',
     'set -as terminal-features ",xterm-256color:RGB"', 'set -as terminal-features ",tmux-256color:RGB"', 'set-environment -g COLORTERM truecolor',
-    'set -g prefix None', 'unbind-key C-b', 'unbind-key -n MouseDown3Pane',
+    'set -g prefix None', 'unbind-key C-b', 'bind-key -n MouseDown3Pane select-pane -t =',
     'bind-key -T copy-mode MouseDragEnd1Pane send-keys -X copy-pipe-and-cancel "pbcopy"',
     'bind-key -T copy-mode-vi MouseDragEnd1Pane send-keys -X copy-pipe-and-cancel "pbcopy"',
   ]) assert.ok(mac.split('\n').includes(line), `missing: ${line}`);

@@ -285,6 +285,20 @@ async function main() {
     await until('the reattached client redraws the session (history kept)', async () => (await clientA2.tail()).includes('typed-through-client'));
     log(`reattached ${LA}: same panes, split width ${width} kept, history on screen`);
 
+    // --- right-click paste: VS Code sends the click as a mouse report, then the
+    // clipboard as a bracketed paste; it must land in the pane right-clicked,
+    // not the active one (A's pane is 40 wide, so column 100 is A2's).
+    await until(`${A2}'s shell runs cat`, async () => {
+      await tmux.launch(A2, 'cat', 1, 0);
+      return raw('display-message', '-p', '-t', `=${A2}:`, '#{pane_current_command}').trim() === 'cat';
+    });
+    clientA2.send('\x1b[<2;100;10M\x1b[<2;100;10m');
+    await sleep(300);
+    clientA2.send('\x1b[200~right-click-paste\x1b[201~\r');
+    await until('the paste reached the right-clicked pane', () => count(screen(A2), 'right-click-paste') >= 1);
+    if (screen(A).includes('right-click-paste')) fail('the paste went to the active pane, not the right-clicked one');
+    log(`right-click on ${A2}'s pane, then paste: it landed in ${A2}, not ${A}`);
+
     // --- an agent that exits closes its own pane; the worktree terminal stays
     raw('kill-session', '-t', `=${A2}`);
     await until(`${A2}'s pane closed`, () => layoutPanes().length === 1);

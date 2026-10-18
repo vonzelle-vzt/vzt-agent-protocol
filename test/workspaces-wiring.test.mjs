@@ -72,7 +72,7 @@ test('package contributes workspace commands', () => {
 });
 
 test('package version', () => {
-  assert.equal(PKG.version, '0.11.1'); // 0.11.1: active project set at once; a focus that cannot show its pane warns
+  assert.equal(PKG.version, '0.11.2'); // 0.11.2: right-click selects the pane under the mouse, so the paste lands there
 });
 
 test('terminals: right-click pastes and selecting copies, as in Orca (defaults the user can override)', () => {

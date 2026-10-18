@@ -77,9 +77,10 @@ export function confText(platform: NodeJS.Platform = process.platform): string {
     "set -g prefix None",
     "unbind-key C-b",
     // Right-click pastes (VS Code's terminal.integrated.rightClickBehavior,
-    // defaulted to "paste" by package.json); tmux's own right-click menu would
-    // pop up over it.
-    "unbind-key -n MouseDown3Pane",
+    // defaulted to "paste" by package.json). In a worktree's split layout the
+    // paste goes to the active pane, so the right-click selects the pane under
+    // the mouse first; tmux's own right-click menu would pop up over it.
+    "bind-key -n MouseDown3Pane select-pane -t =",
   ];
   if (platform === "darwin") {
     // Both tables: tmux picks vi copy-mode keys on its own when $EDITOR or
