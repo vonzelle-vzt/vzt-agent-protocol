@@ -205,10 +205,13 @@ project → git worktree → the bus agents running in it.
   across project switches and window reloads (tmux holds it in a layout
   session per worktree). Drag a worktree's terminal into the editor area and
   it comes back in that column, reloads included.
-- **Right-click pastes, selecting copies**, as in Orca (VS Code defaults set by
-  the extension: `terminal.integrated.rightClickBehavior` = `paste`,
-  `terminal.integrated.copyOnSelection` = on; override them in Settings).
-  Option+right-click still opens tmux's pane menu.
+- **Right-click pastes, selecting copies**, as in Orca. On its first start the
+  extension writes `terminal.integrated.rightClickBehavior` = `paste` and
+  `terminal.integrated.copyOnSelection` = on into your user settings — once,
+  and only where you set nothing; change or remove them and it never writes
+  them again. (As extension defaults they did not take effect.) In a split,
+  the right-click also selects the pane under the mouse, so the paste lands
+  there. Option+right-click still opens tmux's pane menu.
 - **Agents live in tmux.** Each agent (and each Terminal) runs in a session on
   a private tmux server, `tmux -L vzt-mux` with `~/.vzt/mux/tmux.conf`
   (rewritten on activation: mouse scrolling, no status bar, 50k lines of

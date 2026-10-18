@@ -24,6 +24,7 @@ import { registerProjects } from "./projects/projectsTree";
 import { registerWorkspaceCommands } from "./projects/workspaceCommands";
 import { registerAttention } from "./attention/statusBar";
 import { openDashboard } from "./dashboard/panel";
+import { APPLIED_KEY, applyTerminalDefaults } from "./terminalDefaults";
 
 // Shape of a queue file written by the CLI.
 interface QueueRecord {
@@ -534,6 +535,24 @@ export function activate(context: vscode.ExtensionContext): void {
 }
 
 function activateTrusted(context: vscode.ExtensionContext): void {
+  void applyTerminalDefaults({
+    isSet: (key) => {
+      const i = vscode.workspace.getConfiguration().inspect(key);
+      return [i?.globalValue, i?.workspaceValue, i?.workspaceFolderValue].some((v) => v !== undefined);
+    },
+    write: async (key, value) => {
+      await vscode.workspace.getConfiguration().update(key, value, vscode.ConfigurationTarget.Global);
+    },
+    applied: () => context.globalState.get<boolean>(APPLIED_KEY) === true,
+    markApplied: async () => {
+      await context.globalState.update(APPLIED_KEY, true);
+    },
+  }).then(
+    (keys) => {
+      if (keys.length) outputChannel?.appendLine(`[terminal] set in your user settings: ${keys.join(", ")} (right-click pastes, selecting copies)`);
+    },
+    (err) => outputChannel?.appendLine(`[terminal] could not set the terminal mouse defaults: ${err}`)
+  );
   ensureDirs();
   writeHostHeartbeat(context);
 

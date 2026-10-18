@@ -72,14 +72,7 @@ test('package contributes workspace commands', () => {
 });
 
 test('package version', () => {
-  assert.equal(PKG.version, '0.11.2'); // 0.11.2: right-click selects the pane under the mouse, so the paste lands there
-});
-
-test('terminals: right-click pastes and selecting copies, as in Orca (defaults the user can override)', () => {
-  assert.deepEqual(PKG.contributes.configurationDefaults, {
-    'terminal.integrated.rightClickBehavior': 'paste',
-    'terminal.integrated.copyOnSelection': true,
-  });
+  assert.equal(PKG.version, '0.11.3'); // 0.11.3: right-click paste / select-copy written to user settings (configurationDefaults never took effect)
 });
 
 test('terminal moves are tracked from tab events, and a closed tab only clears a still-live one, later', () => {
