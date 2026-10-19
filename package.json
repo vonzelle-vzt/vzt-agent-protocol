@@ -60,6 +60,6 @@
     "verify": "npm test && npm run audit:root && npm run audit:vscode && npm run compile:vscode && npm run pack:dry"
   },
   "engines": {
-    "node": ">=18"
+    "node": ">=22"
   }
 }
