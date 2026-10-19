@@ -44,6 +44,7 @@
   "scripts": {
     "install:project": "node cli/vzt-agent.js install",
     "install:global": "node cli/vzt-agent.js install --global",
+    "pretest": "node vscode/node_modules/typescript/bin/tsc -p vscode",
     "test": "node --test 'test/*.test.mjs'",
     "test:live": "node test/live/herdr-review-live.mjs",
     "doctor": "node cli/vzt-agent.js doctor",
