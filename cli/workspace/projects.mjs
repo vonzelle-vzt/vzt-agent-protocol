@@ -9,8 +9,8 @@ import path from 'node:path';
 import { execFileSync } from 'node:child_process';
 import { resolveProject } from '../bus/cli.mjs';
 
-export const NAME_RE = /^[A-Za-z0-9][A-Za-z0-9._-]{0,62}$/;
-export const SLUG_RE = /^[a-z0-9][a-z0-9._-]{0,62}$/;
+const NAME_RE = /^[A-Za-z0-9][A-Za-z0-9._-]{0,62}$/;
+const SLUG_RE = /^[a-z0-9][a-z0-9._-]{0,62}$/;
 
 export class WorkspaceError extends Error {
   constructor(code, message) {
@@ -42,7 +42,7 @@ export function registryPath(env = process.env) {
   return path.join(env.HOME || os.homedir(), '.vzt', 'projects.json');
 }
 
-export function readRegistry(file) {
+function readRegistry(file) {
   let raw;
   try {
     raw = fs.readFileSync(file, 'utf8');
@@ -62,7 +62,7 @@ export function readRegistry(file) {
   return { version: 1, projects: reg.projects };
 }
 
-export function writeRegistry(file, reg) {
+function writeRegistry(file, reg) {
   const dir = path.dirname(file);
   fs.mkdirSync(dir, { recursive: true, mode: 0o700 });
   const tmp = path.join(dir, `.${path.basename(file)}.${process.pid}.${Date.now()}.tmp`);
@@ -157,7 +157,7 @@ function realOrResolved(p) {
   }
 }
 
-export function parseWorktreePorcelain(text) {
+function parseWorktreePorcelain(text) {
   const worktrees = [];
   for (const block of text.split(/\n\s*\n/)) {
     const lines = block.split('\n').filter(Boolean);
@@ -187,7 +187,7 @@ export function listProjects(file) {
   });
 }
 
-export function worktreePath(root, slug) {
+function worktreePath(root, slug) {
   return path.join(path.dirname(root), `${path.basename(root)}-worktrees`, slug);
 }
 

@@ -18,7 +18,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 
-export function claudeConfigFile() {
+function claudeConfigFile() {
   return path.join(process.env.CLAUDE_CONFIG_DIR || os.homedir(), '.claude.json');
 }
 

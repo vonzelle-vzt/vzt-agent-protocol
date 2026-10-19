@@ -678,7 +678,7 @@ const DOCS_HOME = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..
 const DOCS_FALLBACK = path.join(os.homedir(), '.claude', 'docs');
 
 /** Absolute path to a shipped doc, or null. */
-export function installedDoc(name) {
+function installedDoc(name) {
   for (const dir of [DOCS_HOME, DOCS_FALLBACK]) {
     const p = path.join(dir, name);
     try {
@@ -750,7 +750,7 @@ function designDocIn(root) {
  * The project's taste cache, as a path relative to its root — or null.
  * @param {string|undefined} cwd
  */
-export function designDocPath(cwd) {
+function designDocPath(cwd) {
   // No filesystem context (unit tests, a payload with no cwd, a sandboxed hook)
   // is a cache MISS, never a hit. That is the safe side of the asymmetry: a wrong
   // MISS costs 5× instead of 3× on one prompt; a wrong HIT sends a taste question
@@ -770,7 +770,7 @@ export function designDocPath(cwd) {
   return null;
 }
 
-export function activeShipBlock(cwd) {
+function activeShipBlock(cwd) {
   try {
     let base = path.join(cwd, '.vzt', 'ship');
     if (!fs.existsSync(base)) {
