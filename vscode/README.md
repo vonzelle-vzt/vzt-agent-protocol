@@ -186,6 +186,11 @@ project → git worktree → the bus agents running in it.
   30 min), idle, stale (red; lease lapsed). Clicking an agent focuses its
   terminal, even when another window owns it: that window claims a focus
   request under `<vztMux.baseDir>/focus/` within a second.
+- **Files view** (0.12). Under Projects: the active project's file tree —
+  falling back to the first workspace folder — re-rooted on every project
+  click, so its files show without the Explorer. Click a file to open it;
+  right-click to open to the side, reveal in Finder or copy its path.
+  `.git` and `files.exclude` entries are hidden.
 - **One window, one terminal set per project** (0.10). Clicking a project
   makes it the *active* project (its row says `active`): the terminal panel
   swaps to that project's agents and terminals — one terminal per worktree —

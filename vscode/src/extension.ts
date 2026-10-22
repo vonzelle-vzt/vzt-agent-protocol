@@ -21,6 +21,7 @@ import { ShipTreeProvider, UnitItem } from "./shipTree";
 import { registerHerdrFleet } from "./herdr/fleet";
 import { registerAgentBus } from "./bus/pair";
 import { registerProjects } from "./projects/projectsTree";
+import { registerFiles } from "./projects/filesTree";
 import { registerWorkspaceCommands } from "./projects/workspaceCommands";
 import { registerAttention } from "./attention/statusBar";
 import { openDashboard } from "./dashboard/panel";
@@ -722,7 +723,12 @@ function activateTrusted(context: vscode.ExtensionContext): void {
     showProject: (root) => void bus.registry.showProject(root, { reveal: true }),
     activeProject: () => bus.registry.active,
   });
-  bus.onActiveProject(() => projects.refresh());
+  // The Files view follows the active project, like the terminal panel.
+  const files = registerFiles(context, { activeProject: () => bus.registry.active });
+  bus.onActiveProject(() => {
+    projects.refresh();
+    files.setRoot(bus.registry.active);
+  });
   // ~/.vzt/workspaces/<name>.code-workspace: next to the projects registry, easy to find.
   registerWorkspaceCommands(context, { run: bus.runTop, baseDir: path.join(os.homedir(), ".vzt") });
   registerAttention(context, {

@@ -50,8 +50,15 @@ test('package contributes projects view first', () => {
   const views = PKG.contributes.views.vztShip;
   assert.equal(views[0].id, 'vztProjects');
   assert.equal(views[0].name, 'Projects');
-  // Existing views are kept, after it.
-  assert.deepEqual(views.slice(1).map((v) => v.id), ['vztShipRun', 'vztBus']);
+  // The Files view (0.12) right under it, then the existing views.
+  assert.deepEqual(views.slice(1).map((v) => v.id), ['vztFiles', 'vztShipRun', 'vztBus']);
+});
+
+test('the Files view re-roots at the active project on every swap', () => {
+  assert.match(EXTENSION, /registerFiles\(context, \{ activeProject: \(\) => bus\.registry\.active \}\)/);
+  assert.match(EXTENSION, /bus\.onActiveProject\(\(\) => \{[^}]*files\.setRoot\(bus\.registry\.active\)/);
+  const cmds = PKG.contributes.commands.map((c) => c.command);
+  for (const c of ['refresh', 'openToSide', 'revealInOS', 'copyPath', 'copyRelativePath']) assert.ok(cmds.includes(`vzt-mux.files.${c}`), c);
 });
 
 test('package contributes workspace commands', () => {
@@ -72,7 +79,7 @@ test('package contributes workspace commands', () => {
 });
 
 test('package version', () => {
-  assert.equal(PKG.version, '0.11.3'); // 0.11.3: right-click paste / select-copy written to user settings (configurationDefaults never took effect)
+  assert.equal(PKG.version, '0.12.0'); // 0.12.0: Files view — the active project's file tree under Projects
 });
 
 test('terminal moves are tracked from tab events, and a closed tab only clears a still-live one, later', () => {

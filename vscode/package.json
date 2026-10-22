@@ -2,7 +2,7 @@
   "name": "vzt-mux",
   "displayName": "VZT Ship Mux",
   "description": "Runs VZT Agent Protocol ship units as native VS Code integrated terminals, with a live Ship Run tree — per-unit status, worktree diffs mid-run, and one-click oracle re-runs.",
-  "version": "0.11.3",
+  "version": "0.12.0",
   "publisher": "vzt",
   "icon": "media/ship-icon.png",
   "engines": {
@@ -42,6 +42,11 @@
           "id": "vztProjects",
           "name": "Projects",
           "contextualTitle": "VZT Projects"
+        },
+        {
+          "id": "vztFiles",
+          "name": "Files",
+          "contextualTitle": "VZT Files"
         },
         {
           "id": "vztShipRun",
@@ -264,6 +269,27 @@
         "command": "vzt-mux.dashboard.open",
         "title": "VZT: Open Agent Dashboard",
         "icon": "$(dashboard)"
+      },
+      {
+        "command": "vzt-mux.files.refresh",
+        "title": "VZT: Refresh Files",
+        "icon": "$(refresh)"
+      },
+      {
+        "command": "vzt-mux.files.openToSide",
+        "title": "Open to the Side"
+      },
+      {
+        "command": "vzt-mux.files.revealInOS",
+        "title": "Reveal in Finder"
+      },
+      {
+        "command": "vzt-mux.files.copyPath",
+        "title": "Copy Path"
+      },
+      {
+        "command": "vzt-mux.files.copyRelativePath",
+        "title": "Copy Relative Path"
       }
     ],
     "configuration": {
@@ -382,6 +408,11 @@
           "command": "vzt-mux.workspace.create",
           "when": "view == vztProjects",
           "group": "1_workspace@1"
+        },
+        {
+          "command": "vzt-mux.files.refresh",
+          "when": "view == vztFiles",
+          "group": "navigation@1"
         }
       ],
       "view/item/context": [
@@ -434,6 +465,26 @@
           "command": "vzt-mux.projects.remove",
           "when": "view == vztProjects && viewItem == vztProject",
           "group": "1_project@1"
+        },
+        {
+          "command": "vzt-mux.files.openToSide",
+          "when": "view == vztFiles && viewItem == vztFile",
+          "group": "1_open@0"
+        },
+        {
+          "command": "vzt-mux.files.revealInOS",
+          "when": "view == vztFiles && viewItem =~ /^vzt(File|Folder)$/",
+          "group": "2_reveal@0"
+        },
+        {
+          "command": "vzt-mux.files.copyPath",
+          "when": "view == vztFiles && viewItem =~ /^vzt(File|Folder)$/",
+          "group": "3_copy@0"
+        },
+        {
+          "command": "vzt-mux.files.copyRelativePath",
+          "when": "view == vztFiles && viewItem =~ /^vzt(File|Folder)$/",
+          "group": "3_copy@1"
         }
       ],
       "comments/commentThread/context": [
@@ -465,6 +516,22 @@
         },
         {
           "command": "vzt-mux.projects.openWorktree",
+          "when": "false"
+        },
+        {
+          "command": "vzt-mux.files.openToSide",
+          "when": "false"
+        },
+        {
+          "command": "vzt-mux.files.revealInOS",
+          "when": "false"
+        },
+        {
+          "command": "vzt-mux.files.copyPath",
+          "when": "false"
+        },
+        {
+          "command": "vzt-mux.files.copyRelativePath",
           "when": "false"
         }
       ],

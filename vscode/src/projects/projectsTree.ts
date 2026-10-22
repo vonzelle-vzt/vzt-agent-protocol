@@ -9,7 +9,8 @@
  * the active project — the terminal panel swaps to its agents and shells
  * (bus/registry.ts showProject) — and its description starts with `active`.
  * The row's + starts Claude, Codex or a shell there at once
- * (vzt-mux.agents.startInProject). "Open Project Window" stays on the row's
+ * (vzt-mux.agents.startInProject); the Files view below (filesTree.ts) re-roots
+ * at it. "Open Project Window" stays on the row's
  * context menu: it reveals this window when it already holds the project, else
  * asks VS Code to open (or focus) the project's own. Terminals belong to one
  * window, so focusing another window's agent goes through a focus request file
