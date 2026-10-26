@@ -13,8 +13,8 @@ import { pathToFileURL } from 'node:url';
 import { AGENT_ARGV, BOOTSTRAP_PROMPT, RESUME_ARGV } from '../agent-argv.mjs';
 import { trustClaudeWorkspace } from '../claude-trust.mjs';
 
-export const BUS_HOOK_MARKER = 'vzt-bus-hook-form=1';
-export const BUS_HOOK_EVENTS = ['SessionStart', 'UserPromptSubmit', 'Stop', 'PermissionRequest'];
+const BUS_HOOK_MARKER = 'vzt-bus-hook-form=1';
+const BUS_HOOK_EVENTS = ['SessionStart', 'UserPromptSubmit', 'Stop', 'PermissionRequest'];
 const EVENT_SNAKE = {
   SessionStart: 'session_start',
   UserPromptSubmit: 'user_prompt_submit',
@@ -163,7 +163,7 @@ function markedEvents(hooksObj) {
 }
 
 // Minimal reader for `[hooks.state."<key>"]` tables in Codex config.toml.
-export function parseHookTrust(toml) {
+function parseHookTrust(toml) {
   const state = new Map();
   let current = null;
   for (const raw of toml.split(/\r?\n/)) {
@@ -185,7 +185,7 @@ export function parseHookTrust(toml) {
   return state;
 }
 
-export function doctor({ sqlite }) {
+function doctor({ sqlite }) {
   const home = homeDir();
   const claudeSettings = path.join(home, '.claude', 'settings.json');
   const claudeWired = markedEvents((readJson(claudeSettings) || {}).hooks);

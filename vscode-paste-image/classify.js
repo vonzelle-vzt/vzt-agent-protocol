@@ -89,4 +89,4 @@ function classifyDrop(fsPath, opts) {
   return 'outside';
 }
 
-module.exports = { classifyDrop, isInsideWorkspace, IMAGE_RE, FILE_RE };
+module.exports = { classifyDrop };

@@ -50,7 +50,7 @@ export const AGENT_TYPES = [
  * delivered at exactly the moment (post-compaction rehydration) when the chair
  * has no other source of truth. Every consumer must go through this set.
  */
-export const FAILED_STATUSES = new Set(['FAIL', 'ORACLE_FAIL', 'SCOPE_BREACH']);
+const FAILED_STATUSES = new Set(['FAIL', 'ORACLE_FAIL', 'SCOPE_BREACH']);
 
 const SPEC_MARKER = '<!-- vzt-spec';
 

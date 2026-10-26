@@ -44,6 +44,7 @@
   "scripts": {
     "install:project": "node cli/vzt-agent.js install",
     "install:global": "node cli/vzt-agent.js install --global",
+    "pretest": "node test/support/build-vscode.mjs",
     "test": "node --test 'test/*.test.mjs'",
     "test:live": "node test/live/herdr-review-live.mjs",
     "doctor": "node cli/vzt-agent.js doctor",
@@ -59,6 +60,6 @@
     "verify": "npm test && npm run audit:root && npm run audit:vscode && npm run compile:vscode && npm run pack:dry"
   },
   "engines": {
-    "node": ">=18"
+    "node": ">=24"
   }
 }
