@@ -22,11 +22,12 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const CLI = path.join(__dirname, '..', 'cli', 'vzt-agent.js');
 const git = (cwd, ...a) => execFileSync('git', ['-C', cwd, ...a], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] });
 
-function scaffold() {
+function scaffold({ u2Check = 'test -f u1.txt' } = {}) {
   const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'vzt-resume-'));
   const repo = path.join(tmp, 'repo');
   const muxDir = path.join(tmp, 'mux');
   const marker = path.join(tmp, 'u1-done');
+  const marker2 = path.join(tmp, 'u2-done');
   fs.mkdirSync(repo, { recursive: true });
   git(repo, 'init', '-q', '-b', 'main', '.');
   git(repo, 'config', 'user.email', 't@t.local');
@@ -46,7 +47,7 @@ function scaffold() {
       unit('u1', `test -f '${marker}'`),
       // u2 passes only when it was SEEDED with u1's work, so a PASS proves the
       // resumed u1 still counted as a satisfied dependency.
-      unit('u2', 'test -f u1.txt', { dependsOn: ['u1'] }),
+      unit('u2', u2Check.replace('{marker2}', marker2), { dependsOn: ['u1'] }),
     ],
     integration: { machineCheck: 'true', expect: 'exit 0' },
   };
@@ -54,7 +55,7 @@ function scaffold() {
   fs.mkdirSync(specDir, { recursive: true });
   const specPath = path.join(specDir, 'SPEC.md');
   fs.writeFileSync(specPath, `# Resume\n\n<!-- vzt-spec -->\n\`\`\`json\n${JSON.stringify(spec, null, 2)}\n\`\`\`\n`);
-  return { tmp, muxDir, marker, specPath, specDir };
+  return { tmp, repo, muxDir, marker, marker2, specPath, specDir };
 }
 
 function watch(specPath, muxDir, extra = []) {
@@ -124,6 +125,53 @@ test('without --resume every unit is dispatched again (behaviour unchanged)', ()
     assert.match(out3, /dispatched u2 /, out3);
     const run3 = lastRun(s.specDir);
     assert.ok(run3.length >= 2 && run3.every((e) => e.via === 'ship-watch'), JSON.stringify(run3));
+  } finally {
+    fs.rmSync(s.tmp, { recursive: true, force: true });
+  }
+});
+
+// MEDIUM-3: a resumed PASS must stand on resumed PASSes. u2 re-grades green, but
+// u1 (its dependency) re-grades red and is rebuilt — so u2 is not taken as
+// resumed; it goes through its wave and is BLOCKED when u1 fails again.
+test('--resume does not keep a PASS whose dependency was not also resumed PASS', () => {
+  const s = scaffold({ u2Check: "test -f '{marker2}'" });
+  try {
+    fs.writeFileSync(s.marker, '');
+    fs.writeFileSync(s.marker2, '');
+    const out1 = watch(s.specPath, s.muxDir);
+    assert.match(out1, /2\/2 unit oracle\(s\) PASS/, out1);
+
+    fs.rmSync(s.marker); // u1 now fails on re-grade, and again after its re-dispatch
+    const out2 = watch(s.specPath, s.muxDir, ['--resume']);
+    // LOW: a failed re-grade says what happens next.
+    assert.match(out2, /u1: re-grade failed \(was PASS\) → dispatching/, out2);
+    assert.match(out2, /u2: re-grade passed, but dependency u1 did not → graded in its wave/, out2);
+    assert.doesNotMatch(out2, /u2 … PASS \(resumed/, out2);
+    assert.match(out2, /u1 … FAIL/, out2);
+    assert.match(out2, /u2 … BLOCKED \(dependency u1 did not pass\)/, out2);
+    const run2 = lastRun(s.specDir);
+    assert.deepEqual(run2.filter((e) => e.unit === 'u2').map((e) => [e.status, e.via]), [['PASS', 'ship-watch-resume'], ['BLOCKED', 'ship-watch']]);
+  } finally {
+    fs.rmSync(s.tmp, { recursive: true, force: true });
+  }
+});
+
+// HIGH-1, vscode side: ~/.vzt/vscode-mux/worktrees is keyed by slug-unit alone,
+// so it can hold another repo's same-named unit. --resume must not grade it, and
+// dispatch must not build on it.
+test('--resume never grades a same-named vscode-mux worktree of a different repo', () => {
+  const s = scaffold();
+  try {
+    const foreign = path.join(s.muxDir, 'worktrees', 'res-u1');
+    fs.mkdirSync(foreign, { recursive: true });
+    git(foreign, 'init', '-q', '-b', 'main', '.');
+    fs.writeFileSync(s.marker, ''); // u1's oracle would PASS anywhere
+    const out = watch(s.specPath, s.muxDir, ['--resume']);
+    assert.match(out, /u1 … no worktree \(no prior result\) — will dispatch/, out);
+    assert.doesNotMatch(out, /resumed — not re-dispatched/, out);
+    assert.match(out, /u1: DISPATCH FAILED — .*res-u1 is a worktree of another repo/, out);
+    const run = lastRun(s.specDir);
+    assert.equal(run.filter((e) => e.via === 'ship-watch-resume').length, 0, JSON.stringify(run));
   } finally {
     fs.rmSync(s.tmp, { recursive: true, force: true });
   }

@@ -69,6 +69,9 @@ if (verb === 'terminal read' && /^term_startup_/.test(flag('--terminal') || '') 
   s.reads = s.reads || {}; s.reads[h] = (s.reads[h] || 0) + 1; write(s);
   out({ terminal: { tail: process.env.FAKE_ORCA_STARTUP_PREVIEW.replace('{n}', String(s.reads[h])).split('\\n') } });
 }
+// \`terminal list\` is scripted per test: FAKE_ORCA_TERMINALS is a JSON array, and
+// \`{wt}\` in it becomes this fake's worktree dir.
+if (verb === 'terminal list') out({ terminals: JSON.parse((process.env.FAKE_ORCA_TERMINALS || '[]').split('{wt}').join(path.join(path.dirname(state), 'wt'))) });
 if (verb === 'terminal read') out({ latestCursor: 1 });          // proof of life for waitIdle
 if (verb === 'worktree list') out({ worktrees: read().worktrees });
 out({ ok: true });                                                // wait / close / set
@@ -107,7 +110,7 @@ function scaffold(units, integrationCheck = 'true') {
 }
 
 /** Run ship-watch against the fake orca and return {out, calls}. */
-function watch({ tmp, orca, specPath }, env = {}) {
+function watch({ tmp, orca, specPath }, env = {}, extra = []) {
   const log = path.join(tmp, 'orca.log');
   const state = path.join(tmp, 'orca-state.json');
   fs.writeFileSync(log, '');
@@ -119,7 +122,7 @@ function watch({ tmp, orca, specPath }, env = {}) {
   env = { CLAUDE_CONFIG_DIR: claudeDir, ...env };
   // spawnSync, not execFileSync: the dispatch diagnostics this asserts on go to
   // STDERR, which execFileSync throws away on a zero exit.
-  const r = spawnSync(process.execPath, [CLI, 'ship-watch', specPath, '--mux', 'orca', '--orca', orca], {
+  const r = spawnSync(process.execPath, [CLI, 'ship-watch', specPath, '--mux', 'orca', '--orca', orca, ...extra], {
     encoding: 'utf8',
     env: { ...process.env, FAKE_ORCA_LOG: log, FAKE_ORCA_STATE: state, VZT_START_GRACE_MS: '30', ...env },
   });
@@ -312,7 +315,8 @@ test('a unit whose worktree already exists is not given a second one', () => {
     watch(s);                                   // run 1 creates both worktrees
     const { out, calls } = watch(s);            // run 2: `worktree list` now names them
     assert.equal(calls.filter((a) => verbOf(a) === 'worktree create').length, 0, out);
-    assert.match(out, /u1: reusing existing worktree .*\/wt\/panes-u1/);
+    // A plain re-run keeps the old worktree AND its old work — the line says so.
+    assert.match(out, /u1: reusing existing worktree .*\/wt\/panes-u1 \(prior work kept\)/);
     // Reused, and still dispatched: each unit still gets an agent pane.
     assert.equal(calls.filter((a) => ['terminal create', 'terminal split'].includes(verbOf(a))).length, 2, out);
   } finally {
@@ -337,6 +341,58 @@ test('a same-named worktree of a different repo is not reused', () => {
   }
 });
 
+// HIGH-1: --resume used to GRADE that foreign worktree, record PASS, skip the
+// dispatch, and the integration gate then merged the other repo's files. The
+// repo check lives in resolve(), so resume never sees it.
+test('--resume never grades a same-named worktree of a different repo', () => {
+  const s = scaffold(['u1', 'u2']);
+  try {
+    const other = path.join(s.tmp, 'other');
+    fs.mkdirSync(other);
+    git(other, 'init', '-q', '-b', 'main', '.');
+    fs.writeFileSync(path.join(other, 'u1.txt'), 'FOREIGN\n');
+    fs.writeFileSync(path.join(s.tmp, 'orca-state.json'), JSON.stringify({ n: 0, worktrees: [{ name: 'panes-u1', path: other }] }));
+    const { out, calls } = watch(s, {}, ['--resume']);
+    assert.match(out, /u1 … no worktree \(no prior result\) — will dispatch/, out);
+    assert.doesNotMatch(out, /resumed — not re-dispatched/, out);
+    assert.equal(calls.filter((a) => verbOf(a) === 'worktree create').length, 2, out);
+    const ledger = fs.readFileSync(path.join(s.specDir, 'LEDGER.jsonl'), 'utf8').split('\n').filter(Boolean).map((l) => JSON.parse(l));
+    assert.equal(ledger.filter((e) => e.kind === 'unit_result' && e.via === 'ship-watch-resume').length, 0, JSON.stringify(ledger));
+  } finally {
+    fs.rmSync(s.tmp, { recursive: true, force: true });
+  }
+});
+
+// MEDIUM-1: a worktree whose old agent is still running (timeout, Ctrl-C) must
+// not get a second agent beside it — on resume or on a plain re-run. Refused
+// with the reason, recorded FAIL, and never killed.
+for (const resume of [true, false]) {
+  test(`a worktree with a live agent is refused, not joined (${resume ? '--resume' : 'plain re-run'})`, () => {
+    const s = scaffold(['u1', 'u2']);
+    try {
+      watch(s);                                   // run 1 creates both worktrees
+      const terminals = JSON.stringify([
+        { handle: 'term_old', worktreePath: '{wt}/panes-u1', agentIdentity: 'claude', preview: '✻ Working…' },
+        { handle: 'term_idle', worktreePath: '{wt}/panes-u2', agentIdentity: null, preview: 'user@host panes-u2 % ' },
+      ]);
+      const { out, calls } = watch(s, { FAKE_ORCA_TERMINALS: terminals }, resume ? ['--resume'] : []);
+      assert.match(out, /refusing to (resume|reuse) .*\/wt\/panes-u1: terminal term_old is running claude/, out);
+      // u1 got no new agent pane; u2 (only a shell at a prompt) was handled normally.
+      const panes = calls.filter((a) => ['terminal create', 'terminal split'].includes(verbOf(a)));
+      assert.ok(panes.every((a) => !(arg(a, '--command') || '').includes("VZT_VSCODE_UNIT='panes-u1'")), out);
+      assert.ok(!calls.some((a) => verbOf(a) === 'terminal close' && arg(a, '--terminal') === 'term_old'), 'the live agent was closed');
+      const ledger = fs.readFileSync(path.join(s.specDir, 'LEDGER.jsonl'), 'utf8').split('\n').filter(Boolean).map((l) => JSON.parse(l));
+      const runStart = ledger.map((e) => e.kind).lastIndexOf('run_started');
+      const u1 = ledger.slice(runStart).filter((e) => e.kind === 'unit_result' && e.unit === 'u1');
+      assert.deepEqual(u1.map((e) => e.status), ['FAIL'], JSON.stringify(u1));
+      assert.match(u1[0].output, /term_old is running claude/);
+      if (resume) assert.match(out, /u2 … PASS \(resumed — not re-dispatched\)/, out);
+    } finally {
+      fs.rmSync(s.tmp, { recursive: true, force: true });
+    }
+  });
+}
+
 const indexOfCall = (calls, pred) => calls.findIndex(pred);
 const closeOf = (calls, name) => indexOfCall(calls, (a) => verbOf(a) === 'terminal close' && arg(a, '--terminal') === `term_startup_${name}`);
 const gradeOf = (calls, name) => indexOfCall(calls, (a) => verbOf(a) === 'worktree set' && arg(a, '--worktree') === `name:${name}`);
@@ -346,12 +402,15 @@ const gradeOf = (calls, name) => indexOfCall(calls, (a) => verbOf(a) === 'worktr
 test('a setup shell back at its prompt is closed before its unit is graded', () => {
   const s = scaffold(['u1', 'u2']);
   try {
-    const { out, calls } = watch(s, { FAKE_ORCA_STARTUP_PREVIEW: 'setup: done\nuser@host panes-u1 % ', VZT_STARTUP_POLL_MS: '0', VZT_START_GRACE_MS: '2500' });
+    const { out, calls } = watch(s, { FAKE_ORCA_STARTUP_PREVIEW: 'user@host wt % ./setup.sh\nsetup: done\nuser@host wt % ', VZT_STARTUP_POLL_MS: '0', VZT_STARTUP_MIN_MS: '0', VZT_START_GRACE_MS: '2500' });
     for (const name of ['panes-u1', 'panes-u2']) {
       const close = closeOf(calls, name);
       const graded = gradeOf(calls, name);
       assert.ok(close >= 0 && graded >= 0, `${name}: close ${close}, graded ${graded}\n${out}`);
       assert.ok(close < graded, `${name}: setup shell closed at ${close}, after grading at ${graded}`);
+      // LOW-1: the early close takes the terminal alone — `--tab` would close
+      // every pane in that tab.
+      assert.ok(!calls[close].includes('--tab'), `${name}: early close used --tab: ${JSON.stringify(calls[close])}`);
       // Closed early means the after-grading fallback must not close it again.
       assert.equal(calls.filter((a) => verbOf(a) === 'terminal close' && arg(a, '--terminal') === `term_startup_${name}`).length, 1);
     }
@@ -393,3 +452,26 @@ test('a setup shell whose preview ends in % but keeps changing is not closed ear
     fs.rmSync(s.tmp, { recursive: true, force: true });
   }
 });
+
+// MEDIUM-2: each early-close condition, held back on its own, keeps the shell
+// open until after grading. `######## 100.0%` then silence reads at-prompt twice
+// and identically — only the exact-prompt rule stops it.
+for (const [label, env] of [
+  ['a hook stopped at `######## 100.0%`', { FAKE_ORCA_STARTUP_PREVIEW: 'user@host wt % ./setup.sh\n######## 100.0%', VZT_STARTUP_MIN_MS: '0' }],
+  ['no command line ever seen', { FAKE_ORCA_STARTUP_PREVIEW: 'setup: done\nuser@host wt % ', VZT_STARTUP_MIN_MS: '0' }],
+  ['less than 20 s since dispatch', { FAKE_ORCA_STARTUP_PREVIEW: 'user@host wt % ./setup.sh\nsetup: done\nuser@host wt % ' }],
+]) {
+  test(`a setup shell is not closed early: ${label}`, () => {
+    const s = scaffold(['u1', 'u2']);
+    try {
+      const { out, calls } = watch(s, { VZT_STARTUP_POLL_MS: '0', VZT_START_GRACE_MS: '2500', ...env });
+      for (const name of ['panes-u1', 'panes-u2']) {
+        const reads = calls.filter((a) => verbOf(a) === 'terminal read' && arg(a, '--terminal') === `term_startup_${name}`).length;
+        assert.ok(reads >= 2, `${name}: read only ${reads} time(s), so the guard was never exercised\n${out}`);
+        assert.ok(gradeOf(calls, name) < closeOf(calls, name), `${name}: closed before grading`);
+      }
+    } finally {
+      fs.rmSync(s.tmp, { recursive: true, force: true });
+    }
+  });
+}

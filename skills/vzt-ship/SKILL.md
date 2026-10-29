@@ -111,7 +111,10 @@ vzt-agent ship-watch .vzt/ship/<slug>/SPEC.md --resume  # after a partial failur
 ```
 
 A re-run never makes a `-2` worktree: the orca backend reuses a unit's existing
-worktree. Each unit's setup shell is closed as soon as it is back at a prompt.
+worktree of THIS repo, prior work included. A worktree with an agent still live in
+it is refused (FAIL, never killed). A resumed PASS stands only if every dependency
+also resumed PASS. Each unit's setup shell is closed once it sits, unchanged, at
+its own prompt (20 s after dispatch at the earliest), or after grading.
 
 The built-in default is **orca** — `--mux` beats `VZT_MUX`, which beats orca. Export
 `VZT_MUX=herdr` (or `vscode`) to change it, or pass `--mux herdr|vscode|orca` per run.

@@ -1529,12 +1529,15 @@ function orcaBackend(args) {
   // compares and closes it — so the lifecycle files are looked up here rather
   // than by widening the handle contract for one backend.
   const sentinelsByHandle = new Map();
-  // Setup shells not yet closed, and the ones already closed (so the after-grading
-  // fallback never closes a handle twice). See tidyStartups.
-  const pendingStartups = new Set();
+  // Setup shells not yet closed (handle -> when it was dispatched), and the ones
+  // already closed (so the after-grading fallback never closes a handle twice).
+  // See tidyStartups.
+  const pendingStartups = new Map();
   const closedStartups = new Set();
   const lastPromptPreview = new Map(); // handle -> the previous sweep's at-prompt preview
+  const shellPrompt = new Map();       // handle -> the shell's own prompt, from its command line
   const STARTUP_POLL_MS = Number(process.env.VZT_STARTUP_POLL_MS || 5000);
+  const STARTUP_MIN_MS = Number(process.env.VZT_STARTUP_MIN_MS ?? 20_000);
   let lastStartupPoll = 0;
   let plannedPanes = 0;   // dry-run only (plan()), never touched by a real dispatch
   const tabArgv = (spec, u, wtId, extras) => ['terminal', 'create',
@@ -1582,11 +1585,17 @@ function orcaBackend(args) {
       // existed — including ones that had passed. Only a worktree of THIS repo
       // counts: Orca lists worktrees across every repo, and a same-named one
       // elsewhere is not this unit's. A reused worktree has no new setup shell.
-      const prior = be.resolve(spec, u);
-      const reuse = prior && prior.path && fs.existsSync(prior.path) && sameGitRepo(prior.path, spec.root) ? prior : null;
+      // resolve() already keeps only worktrees of spec.root's repo. One with an
+      // agent still running in it (an old timeout, a Ctrl-C'd run) is refused, not
+      // joined by a second agent — and never killed.
+      const reuse = be.resolve(spec, u);
+      if (reuse) {
+        const busy = be.busyAgent(spec, u, reuse.path);
+        if (busy) throw new Error(`refusing to reuse ${reuse.path}: ${busy} — let it finish or close it, then re-run`);
+      }
       const res = reuse ? null : envJson(bin, createArgv(spec, u));
       const wt = reuse ? { id: reuse.id, path: reuse.path } : (res.worktree || res);
-      if (reuse) console.log(`  ${u.id}: reusing existing worktree ${reuse.path}`);
+      if (reuse) console.log(`  ${u.id}: reusing existing worktree ${reuse.path} (prior work kept)`);
       const wpath = wt.path || (wt.id && String(wt.id).split('::')[1]) || null;
       // The worktree id is a two-part `<repo-id>::<path>` address; a bare repo id
       // is not a worktree id, so prefer the returned id verbatim.
@@ -1606,7 +1615,7 @@ function orcaBackend(args) {
       // setup hook, so it is closed only once its preview is back at a prompt
       // (tidyStartups), or at the latest once this unit has been graded.
       const startupHandle = (res && res.startupTerminal?.handle) || null;
-      if (startupHandle) pendingStartups.add(startupHandle);
+      if (startupHandle) pendingStartups.set(startupHandle, Date.now());
       // Clear a prior run's sentinels BEFORE the pane opens, so the agent's own
       // hooks are the only thing that can create them.
       sentinelReset(stateDir, key(spec, u));
@@ -1657,14 +1666,41 @@ function orcaBackend(args) {
     // early by tidyStartups once setup has returned to the shell, and by shipWatch
     // after grading as the fallback. Never throws — a stray tab costs one
     // command, a failed run costs the work.
-    closeStartup(startupHandle) {
+    // The early close takes the terminal alone: `--tab` closes every pane in the
+    // tab, and an early close must never reach past the shell it judged.
+    closeStartup(startupHandle, { early = false } = {}) {
       if (!startupHandle || closedStartups.has(startupHandle)) return;
       closedStartups.add(startupHandle);
       pendingStartups.delete(startupHandle);
       try {
-        execFileSync(bin, ['terminal', 'close', '--terminal', startupHandle, '--tab', '--json'],
+        execFileSync(bin, ['terminal', 'close', '--terminal', startupHandle, ...(early ? [] : ['--tab']), '--json'],
           { stdio: ['ignore', 'ignore', 'ignore'] });
       } catch { /* already gone, or Orca not live */ }
+    },
+    // Is an agent still live in this unit's worktree? A terminal there with an
+    // agentIdentity, or one not sitting at a shell prompt, is busy (the fields
+    // vzt-orca-flow's census reads). A SPLIT pane is listed under its anchor's
+    // worktreePath, not its own, so this unit's prior agent may sit under a
+    // sibling's path: then its sentinels decide — started and never stopped,
+    // while some agent terminal of this repo is still live. Returns a
+    // description, or null. Unreadable → null: this guards reuse, it must not
+    // block a run Orca cannot answer for.
+    busyAgent(spec, u, wpath) {
+      let r;
+      try { r = envJson(bin, ['terminal', 'list', '--json']); } catch { return null; }
+      const list = (Array.isArray(r) ? r : r.terminals || []).filter((t) => t && t.worktreePath);
+      const real = (p) => { try { return fs.realpathSync(p); } catch { return path.resolve(p); } };
+      const want = real(wpath);
+      for (const t of list.filter((x) => real(x.worktreePath) === want)) {
+        if (t.agentIdentity) return `terminal ${t.handle} is running ${t.agentIdentity}`;
+        if (!SHELL_PROMPT_RE.test(String(t.preview || '').trimEnd())) return `terminal ${t.handle} is not at a shell prompt`;
+      }
+      const h = sentinelPaths(stateDir, key(spec, u));
+      if (fs.existsSync(h.startedFile) && !fs.existsSync(h.idleFile)) {
+        const live = list.find((t) => t.agentIdentity && fs.existsSync(t.worktreePath) && sameGitRepo(t.worktreePath, spec.root));
+        if (live) return `its agent from a prior run started and never stopped (${h.startedFile}; ${live.agentIdentity} still live in ${live.handle})`;
+      }
+      return null;
     },
     // Close each setup shell as soon as its setup has FINISHED, not after grading.
     //
@@ -1677,21 +1713,37 @@ function orcaBackend(args) {
     // is still running must never be killed. Rate-limited to one sweep per
     // VZT_STARTUP_POLL_MS (default 5 s); the first call sweeps at once.
     //
-    // ONE matching read is not enough: the prompt test only asks whether the last
-    // line ends in % $ or #, and a setup hook mid-way through `progress 100%`
-    // passes it. So the shell must read at-prompt on TWO consecutive sweeps with
-    // an identical preview — a hook that is still printing changes its preview
-    // between them; a shell that has returned does not.
+    // "Ends in % $ or #" is not enough: a hook printing `######## 100.0%` and
+    // then going quiet passes it on two identical reads. So an early close needs
+    // ALL of: VZT_STARTUP_MIN_MS (20 s) since dispatch; two consecutive identical
+    // reads; and a last line EXACTLY equal to this shell's own prompt, captured
+    // from the line where the setup command was typed (`user@host wt % ./setup`
+    // → `user@host wt %`). No command line seen, no early close — the
+    // after-grading close remains the fallback.
     tidyStartups() {
       if (!pendingStartups.size || Date.now() - lastStartupPoll < STARTUP_POLL_MS) return;
       lastStartupPoll = Date.now();
-      for (const h of [...pendingStartups]) {
+      for (const [h, since] of [...pendingStartups]) {
         let lines = [];
-        try { lines = previewLines(envJson(bin, ['terminal', 'read', '--terminal', h, '--limit', '5', '--json'])); } catch { continue; }
+        try { lines = previewLines(envJson(bin, ['terminal', 'read', '--terminal', h, '--limit', '20', '--json'])); } catch { continue; }
+        if (!shellPrompt.has(h)) {
+          // The prompt is everything up to the first prompt char that is followed
+          // by whitespace and then a command; `100.0%` alone never qualifies.
+          for (const l of lines) {
+            const m = /^(.*?[%$#])\s+\S/.exec(l);
+            if (m) { shellPrompt.set(h, m[1]); break; }
+          }
+        }
+        const prompt = shellPrompt.get(h);
         const preview = lines.join('\n');
-        if (!SHELL_PROMPT_RE.test(preview)) { lastPromptPreview.delete(h); continue; }
-        if (lastPromptPreview.get(h) === preview) { lastPromptPreview.delete(h); be.closeStartup(h); continue; }
+        const last = (lines.filter((l) => l.trim()).pop() || '').trimEnd();
+        if (!prompt || last !== prompt) { lastPromptPreview.delete(h); continue; }
+        const steady = lastPromptPreview.get(h) === preview;
         lastPromptPreview.set(h, preview);
+        if (steady && Date.now() - since >= STARTUP_MIN_MS) {
+          lastPromptPreview.delete(h);
+          be.closeStartup(h, { early: true });
+        }
       }
     },
     // TWO-PHASE on the agent's OWN lifecycle hooks — see waitOnSentinels.
@@ -1759,8 +1811,14 @@ function orcaBackend(args) {
         const r = envJson(bin, ['worktree', 'list', '--json']);
         const list = Array.isArray(r) ? r : r.worktrees || [];
         const n = key(spec, u);
-        const hit = list.find((w) => w.name === n || w.displayName === n);
-        return hit ? { id: hit.id || null, path: hit.path || (hit.id && String(hit.id).split('::')[1]) || null, ws: n } : null;
+        // Orca lists worktrees across EVERY repo and matches here by name, so a
+        // same-named worktree of another repo is not this unit's. Keeping only
+        // entries of spec.root's own repo covers every caller at once: resume,
+        // dispatch reuse, dependency seeding, the integration gate and stamp.
+        const pathOf = (w) => w.path || (w.id && String(w.id).split('::')[1]) || null;
+        const hit = list.find((w) => (w.name === n || w.displayName === n)
+          && pathOf(w) && fs.existsSync(pathOf(w)) && sameGitRepo(pathOf(w), spec.root));
+        return hit ? { id: hit.id || null, path: pathOf(hit), ws: n } : null;
       } catch { return null; }
     },
     stamp(spec, u, info, status, pass) {
@@ -2004,7 +2062,12 @@ function vscodeBackend(/* args */) {
     // `fresh` decides whether a BASE DRIFT block is worth emitting: a worktree
     // created just now is by definition at HEAD, and a drift section that fires
     // on every unit is one workers stop reading.
-    if (fs.existsSync(path.join(wtPath, '.git'))) return { path: wtPath, fresh: false }; // reuse from a prior run
+    if (fs.existsSync(path.join(wtPath, '.git'))) {
+      // This dir is keyed by slug-unit alone, so it can hold ANOTHER repo's
+      // same-named unit — never build on (or grade) that.
+      if (!sameGitRepo(wtPath, spec.root)) throw new Error(`${wtPath} is a worktree of another repo — move it aside, then re-run`);
+      return { path: wtPath, fresh: false }; // reuse from a prior run
+    }
     try {
       execFileSync('git', ['-C', spec.root, 'worktree', 'add', '-b', k, wtPath, 'HEAD'], { stdio: ['ignore', 'ignore', 'pipe'] });
     } catch {
@@ -2144,8 +2207,10 @@ function vscodeBackend(/* args */) {
           }
         }
       } catch { /* not a git repo / no worktrees */ }
+      // The shared ~/.vzt/vscode-mux/worktrees dir is keyed by slug-unit alone,
+      // so it can hold another repo's same-named unit: same repo check as orca.
       const wtPath = path.join(wtRoot, k);
-      return fs.existsSync(path.join(wtPath, '.git')) ? { path: wtPath, ws: k } : null;
+      return fs.existsSync(path.join(wtPath, '.git')) && sameGitRepo(wtPath, spec.root) ? { path: wtPath, ws: k } : null;
     },
     stamp(spec, u, info, status /*, pass */) {
       try { fs.writeFileSync(path.join(stateDir, `${key(spec, u)}.status`), status); } catch { /* best-effort */ }
@@ -2770,9 +2835,14 @@ function shipWatch(args) {
   // exists has its oracle re-run IN PLACE, with no agent; one that passes is PASS
   // for this run and is never dispatched, while still counting as a satisfied
   // dependency so it seeds its dependents. Everything else dispatches as usual.
+  //
+  // A worktree with an agent still live in it (old timeout, Ctrl-C) is neither
+  // graded nor reused: it is FAIL with the reason, and the agent is left alone.
   const resumed = new Set();
+  const refused = new Set();
   if (args.resume) {
     console.log('\n## resume — re-grading units that already have a worktree (no dispatch)');
+    const regraded = new Set();
     for (const u of [spec.barrier, ...spec.units].filter(Boolean)) {
       let ref = null;
       try { ref = be.resolve(spec, u); } catch { /* not live */ }
@@ -2781,14 +2851,34 @@ function shipWatch(args) {
         console.log(`  ${u.id} … no worktree (${was}) — will dispatch`);
         continue;
       }
-      if (verifyAndRecord(be, spec, u, specPath, ref, 'ship-watch-resume')) resumed.add(u.id);
-      else console.log(`  ${u.id}: ${was} — will dispatch`);
+      const busy = be.busyAgent ? be.busyAgent(spec, u, ref.path) : null;
+      if (busy) {
+        console.error(`  ${u.id} … FAIL — refusing to resume ${ref.path}: ${busy}. Not killed; let it finish or close it, then re-run.`);
+        note({ kind: 'unit_result', unit: u.id, status: 'FAIL', via: 'ship-watch-resume', mux: be.name, code: -1, output: `refused: ${busy}` });
+        refused.add(u.id);
+        continue;
+      }
+      if (verifyAndRecord(be, spec, u, specPath, ref, 'ship-watch-resume')) regraded.add(u.id);
+      else console.log(`  ${u.id}: re-grade failed (${was}) → dispatching`);
+    }
+    // A resumed PASS stands only on resumed PASSes: if any dependency (the
+    // barrier included) is going to be rebuilt, this unit is graded again in its
+    // normal wave, so a dependency that ends BLOCKED or FAIL still blocks it.
+    for (const u of [spec.barrier, ...spec.units].filter(Boolean)) {
+      if (!regraded.has(u.id)) continue;
+      const notResumed = transitiveDeps(spec, u).filter((d) => d.id !== u.id && !regraded.has(d.id)).map((d) => d.id);
+      if (notResumed.length) console.log(`  ${u.id}: re-grade passed, but dependency ${notResumed.join(', ')} did not → graded in its wave`);
+      else resumed.add(u.id);
     }
   }
 
   // Phase 1 — barrier gates everything.
   if (spec.barrier && resumed.has(spec.barrier.id)) {
     console.log('\n## barrier — PASS on resume, not re-dispatched');
+  } else if (spec.barrier && refused.has(spec.barrier.id)) {
+    console.error('\n❌ barrier refused — an agent is still live in its worktree. Aborting before dispatching units.');
+    note({ kind: 'aborted', reason: 'barrier refused: agent still live in its worktree' });
+    process.exit(1);
   } else if (spec.barrier) {
     console.log('\n## barrier (runs first; its oracle grades every unit)');
     const b = dispatch(spec.barrier);
@@ -2833,6 +2923,11 @@ function shipWatch(args) {
         verdict.set(u.id, 'PASS');
         passed++;
         passedUnits.push(u);
+        continue;
+      }
+      if (refused.has(u.id)) {
+        console.log(`  ${u.id} … FAIL (refused on resume — an agent is still live in its worktree)`);
+        verdict.set(u.id, 'FAIL');
         continue;
       }
       const unmet = depsOf(u).filter((d) => verdict.get(d) !== 'PASS');
