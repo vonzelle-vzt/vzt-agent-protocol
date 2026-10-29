@@ -62,6 +62,13 @@ if (verb === 'terminal create' || verb === 'terminal split') {
   const node = verb.endsWith('create') ? 'create' : 'split';
   out({ [node]: { handle: 'term_' + s.n } });
 }
+// A setup shell's preview is scripted per test; unset, it has none (never a prompt).
+// \`{n}\` becomes this shell's read count, so a preview can change between reads.
+if (verb === 'terminal read' && /^term_startup_/.test(flag('--terminal') || '') && process.env.FAKE_ORCA_STARTUP_PREVIEW) {
+  const s = read(); const h = flag('--terminal');
+  s.reads = s.reads || {}; s.reads[h] = (s.reads[h] || 0) + 1; write(s);
+  out({ terminal: { tail: process.env.FAKE_ORCA_STARTUP_PREVIEW.replace('{n}', String(s.reads[h])).split('\\n') } });
+}
 if (verb === 'terminal read') out({ latestCursor: 1 });          // proof of life for waitIdle
 if (verb === 'worktree list') out({ worktrees: read().worktrees });
 out({ ok: true });                                                // wait / close / set
@@ -294,5 +301,95 @@ test('a spec listed in a sibling PROGRAM.json is refused unless its program gate
     } finally {
       fs.rmSync(s.tmp, { recursive: true, force: true });
     }
+  }
+});
+
+// A re-run must find the unit's worktree rather than make a `-2` beside it —
+// workspace-dx's manual re-dispatch left one per unit that had already passed.
+test('a unit whose worktree already exists is not given a second one', () => {
+  const s = scaffold(['u1', 'u2']);
+  try {
+    watch(s);                                   // run 1 creates both worktrees
+    const { out, calls } = watch(s);            // run 2: `worktree list` now names them
+    assert.equal(calls.filter((a) => verbOf(a) === 'worktree create').length, 0, out);
+    assert.match(out, /u1: reusing existing worktree .*\/wt\/panes-u1/);
+    // Reused, and still dispatched: each unit still gets an agent pane.
+    assert.equal(calls.filter((a) => ['terminal create', 'terminal split'].includes(verbOf(a))).length, 2, out);
+  } finally {
+    fs.rmSync(s.tmp, { recursive: true, force: true });
+  }
+});
+
+// CONTROL: Orca lists worktrees across EVERY repo, so a same-named worktree of
+// another repo must not be mistaken for this unit's.
+test('a same-named worktree of a different repo is not reused', () => {
+  const s = scaffold(['u1', 'u2']);
+  try {
+    const other = path.join(s.tmp, 'other');
+    fs.mkdirSync(other);
+    git(other, 'init', '-q', '-b', 'main', '.');
+    fs.writeFileSync(path.join(s.tmp, 'orca-state.json'), JSON.stringify({ n: 0, worktrees: [{ name: 'panes-u1', path: other }] }));
+    const { out, calls } = watch(s);
+    assert.equal(calls.filter((a) => verbOf(a) === 'worktree create').length, 2, out);
+    assert.doesNotMatch(out, /reusing existing worktree/);
+  } finally {
+    fs.rmSync(s.tmp, { recursive: true, force: true });
+  }
+});
+
+const indexOfCall = (calls, pred) => calls.findIndex(pred);
+const closeOf = (calls, name) => indexOfCall(calls, (a) => verbOf(a) === 'terminal close' && arg(a, '--terminal') === `term_startup_${name}`);
+const gradeOf = (calls, name) => indexOfCall(calls, (a) => verbOf(a) === 'worktree set' && arg(a, '--worktree') === `name:${name}`);
+
+// The setup shell sat at `%` for the whole run, and vzt-orca-flow doctor read
+// each one as a dead dispatch (9 false alarms in workspace-dx, 2026-10-29).
+test('a setup shell back at its prompt is closed before its unit is graded', () => {
+  const s = scaffold(['u1', 'u2']);
+  try {
+    const { out, calls } = watch(s, { FAKE_ORCA_STARTUP_PREVIEW: 'setup: done\nuser@host panes-u1 % ', VZT_STARTUP_POLL_MS: '0', VZT_START_GRACE_MS: '2500' });
+    for (const name of ['panes-u1', 'panes-u2']) {
+      const close = closeOf(calls, name);
+      const graded = gradeOf(calls, name);
+      assert.ok(close >= 0 && graded >= 0, `${name}: close ${close}, graded ${graded}\n${out}`);
+      assert.ok(close < graded, `${name}: setup shell closed at ${close}, after grading at ${graded}`);
+      // Closed early means the after-grading fallback must not close it again.
+      assert.equal(calls.filter((a) => verbOf(a) === 'terminal close' && arg(a, '--terminal') === `term_startup_${name}`).length, 1);
+    }
+  } finally {
+    fs.rmSync(s.tmp, { recursive: true, force: true });
+  }
+});
+
+// CONTROL, and the safety property: a setup hook still printing must never be
+// killed. The shell was read and left alone; only the fallback closes it.
+test('a setup shell still running its hook is not closed until after grading', () => {
+  const s = scaffold(['u1', 'u2']);
+  try {
+    const { out, calls } = watch(s, { FAKE_ORCA_STARTUP_PREVIEW: 'setup: installing\nnpm install …', VZT_STARTUP_POLL_MS: '0', VZT_START_GRACE_MS: '2500' });
+    for (const name of ['panes-u1', 'panes-u2']) {
+      const read = indexOfCall(calls, (a) => verbOf(a) === 'terminal read' && arg(a, '--terminal') === `term_startup_${name}`);
+      const close = closeOf(calls, name);
+      const graded = gradeOf(calls, name);
+      assert.ok(read >= 0, `${name}: the setup shell was never looked at\n${out}`);
+      assert.ok(read < graded && graded < close, `${name}: read ${read}, graded ${graded}, close ${close}`);
+    }
+  } finally {
+    fs.rmSync(s.tmp, { recursive: true, force: true });
+  }
+});
+
+// The prompt test alone matches `progress 100%`. A preview that keeps changing
+// between reads is a hook still printing, even when every read ends in `%`.
+test('a setup shell whose preview ends in % but keeps changing is not closed early', () => {
+  const s = scaffold(['u1', 'u2']);
+  try {
+    const { out, calls } = watch(s, { FAKE_ORCA_STARTUP_PREVIEW: 'setup: fetching\nprogress {n}0%', VZT_STARTUP_POLL_MS: '0', VZT_START_GRACE_MS: '2500' });
+    for (const name of ['panes-u1', 'panes-u2']) {
+      const reads = calls.filter((a) => verbOf(a) === 'terminal read' && arg(a, '--terminal') === `term_startup_${name}`).length;
+      assert.ok(reads >= 2, `${name}: read only ${reads} time(s), so the guard was never exercised\n${out}`);
+      assert.ok(gradeOf(calls, name) < closeOf(calls, name), `${name}: closed while its preview was still changing`);
+    }
+  } finally {
+    fs.rmSync(s.tmp, { recursive: true, force: true });
   }
 });

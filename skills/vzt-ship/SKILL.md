@@ -107,7 +107,11 @@ status hooks, and the live pane census. Each pairwise-disjoint unit becomes a
 ```bash
 vzt-agent ship-watch .vzt/ship/<slug>/SPEC.md      # dispatch → idle-wait → independent oracle → integration gate
 vzt-agent ship-watch .vzt/ship/<slug>/SPEC.md --max-concurrent 2  # cap units in flight (default 4, 0 = unlimited)
+vzt-agent ship-watch .vzt/ship/<slug>/SPEC.md --resume  # after a partial failure: re-grade existing worktrees in place, dispatch only what did not pass
 ```
+
+A re-run never makes a `-2` worktree: the orca backend reuses a unit's existing
+worktree. Each unit's setup shell is closed as soon as it is back at a prompt.
 
 The built-in default is **orca** — `--mux` beats `VZT_MUX`, which beats orca. Export
 `VZT_MUX=herdr` (or `vscode`) to change it, or pass `--mux herdr|vscode|orca` per run.

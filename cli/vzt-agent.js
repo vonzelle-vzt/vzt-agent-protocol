@@ -97,6 +97,7 @@ function parseArgs(argv) {
     else if (a === '--timeout-ms') args.timeoutMs = argv[++i];
     else if (a === '--max-concurrent') args.maxConcurrent = argv[++i];
     else if (a === '--check') args.check = true;
+    else if (a === '--resume') args.resume = true;
     else if (a === '--only') args.only = argv[++i];
     // This list is a WHITELIST: anything not named here lands in `_` as a
     // positional and is silently ignored. A flag added to the help text but not
@@ -1161,12 +1162,15 @@ function sentinelReset(stateDir, unitKey) {
  *  observed live 2026-07-28, where a swallowed command burned the whole unit
  *  timeout before being graded FAIL against an untouched worktree.
  *  Returns 'idle' | 'no-start' | 'timeout'. Never throws: the oracle is the
- *  authority, so a broken sentinel must degrade to verifying, not to failing. */
-function waitOnSentinels(h, t) {
+ *  authority, so a broken sentinel must degrade to verifying, not to failing.
+ *  `onTick` runs once per poll — the orca backend tidies finished setup shells
+ *  from it, since this loop is where a run spends its time. */
+function waitOnSentinels(h, t, onTick = () => {}) {
   const startGrace = Number(process.env.VZT_START_GRACE_MS || 90_000);
   const startDeadline = Date.now() + Math.min(t, startGrace);
   let started = false;
   while (Date.now() < startDeadline) {
+    onTick();
     if (fs.existsSync(h.startedFile) || fs.existsSync(h.blockedFile)) { started = true; break; }
     if (fs.existsSync(h.idleFile)) return 'idle'; // finished faster than we looked
     sleepSync(500);
@@ -1175,6 +1179,7 @@ function waitOnSentinels(h, t) {
 
   const deadline = Date.now() + t;
   while (Date.now() < deadline) {
+    onTick();
     if (fs.existsSync(h.idleFile)) return 'idle';
     sleepSync(1000);
   }
@@ -1431,6 +1436,34 @@ function paneHandle(res) {
   return null;
 }
 
+// A pane whose preview ends at a bare shell prompt. The same test vzt-orca-flow's
+// pane census uses (SHELL_PROMPT_RE in agents.py), so both repos agree on what
+// "back at the shell" means.
+const SHELL_PROMPT_RE = /(?:^|\n)[^\n]*[%$#]\s*$/;
+
+/** Preview lines out of an `orca terminal read --json` result. Orca returns the
+ *  tail as `result.terminal.tail`; SCAN rather than hard-code it, the way
+ *  vzt-orca-flow's pane_result_lines does — a wrong guess reads as an empty
+ *  preview, and an empty preview is (safely) never treated as a prompt. */
+function previewLines(res) {
+  if (!res || typeof res !== 'object') return [];
+  for (const node of [res, ...Object.values(res).filter((v) => v && typeof v === 'object')]) {
+    for (const k of ['tail', 'lines']) if (Array.isArray(node[k])) return node[k].map(String);
+  }
+  return [];
+}
+
+/** Do two paths belong to the same git repository? Compared through the shared
+ *  object store (`--git-common-dir`), which every linked worktree of a repo
+ *  points at. False whenever either side cannot be asked. */
+function sameGitRepo(a, b) {
+  const common = (p) => {
+    const d = execFileSync('git', ['-C', p, 'rev-parse', '--git-common-dir'], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] }).trim();
+    return fs.realpathSync(path.resolve(p, d));
+  };
+  try { return common(a) === common(b); } catch { return false; }
+}
+
 function orcaBackend(args) {
   const bin = args.orca || process.env.ORCA_CLI || DEFAULT_ORCA;
   const key = (spec, u) => `${spec.slug}-${u.id}`;
@@ -1496,6 +1529,13 @@ function orcaBackend(args) {
   // compares and closes it — so the lifecycle files are looked up here rather
   // than by widening the handle contract for one backend.
   const sentinelsByHandle = new Map();
+  // Setup shells not yet closed, and the ones already closed (so the after-grading
+  // fallback never closes a handle twice). See tidyStartups.
+  const pendingStartups = new Set();
+  const closedStartups = new Set();
+  const lastPromptPreview = new Map(); // handle -> the previous sweep's at-prompt preview
+  const STARTUP_POLL_MS = Number(process.env.VZT_STARTUP_POLL_MS || 5000);
+  let lastStartupPoll = 0;
   let plannedPanes = 0;   // dry-run only (plan()), never touched by a real dispatch
   const tabArgv = (spec, u, wtId, extras) => ['terminal', 'create',
     ...(wtId ? ['--worktree', wtId] : []),
@@ -1537,8 +1577,16 @@ function orcaBackend(args) {
       ];
     },
     dispatch(spec, u) {
-      const res = envJson(bin, createArgv(spec, u));
-      const wt = res.worktree || res;
+      // REUSE a worktree this unit already has. `worktree create` never looked, so
+      // every re-run of a spec made a `-2` worktree beside each unit that already
+      // existed — including ones that had passed. Only a worktree of THIS repo
+      // counts: Orca lists worktrees across every repo, and a same-named one
+      // elsewhere is not this unit's. A reused worktree has no new setup shell.
+      const prior = be.resolve(spec, u);
+      const reuse = prior && prior.path && fs.existsSync(prior.path) && sameGitRepo(prior.path, spec.root) ? prior : null;
+      const res = reuse ? null : envJson(bin, createArgv(spec, u));
+      const wt = reuse ? { id: reuse.id, path: reuse.path } : (res.worktree || res);
+      if (reuse) console.log(`  ${u.id}: reusing existing worktree ${reuse.path}`);
       const wpath = wt.path || (wt.id && String(wt.id).split('::')[1]) || null;
       // The worktree id is a two-part `<repo-id>::<path>` address; a bare repo id
       // is not a worktree id, so prefer the returned id verbatim.
@@ -1554,11 +1602,11 @@ function orcaBackend(args) {
       // The agent handle comes from the pane we open, NEVER from the worktree.
       // A bare `worktree create` (no --agent) leaves a fallback SHELL as the
       // first terminal; waiting on that reports tui-idle immediately and grades
-      // the unit before the agent has done anything. That shell is closed once
-      // this unit has been graded — see shipWatch; closing it earlier would kill
-      // the repo setup hook that runs in it, and `terminal wait --for` offers
-      // only exit|tui-idle, neither of which a plain shell ever reports.
-      const startupHandle = res.startupTerminal?.handle || null;
+      // the unit before the agent has done anything. That shell runs the repo
+      // setup hook, so it is closed only once its preview is back at a prompt
+      // (tidyStartups), or at the latest once this unit has been graded.
+      const startupHandle = (res && res.startupTerminal?.handle) || null;
+      if (startupHandle) pendingStartups.add(startupHandle);
       // Clear a prior run's sentinels BEFORE the pane opens, so the agent's own
       // hooks are the only thing that can create them.
       sentinelReset(stateDir, key(spec, u));
@@ -1605,16 +1653,46 @@ function orcaBackend(args) {
       }
       return { path: wpath, ws: key(spec, u), baseSha, seeded, handle, startupHandle, sentinels };
     },
-    // Best-effort tidy of the fallback shell `worktree create` left behind. Only
-    // safe once the unit has been GRADED: the repo setup hook runs in that shell,
-    // and there is no CLI signal for "setup finished". Never throws — a stray tab
-    // costs one command, a failed run costs the work.
+    // Best-effort tidy of the fallback shell `worktree create` left behind. Called
+    // early by tidyStartups once setup has returned to the shell, and by shipWatch
+    // after grading as the fallback. Never throws — a stray tab costs one
+    // command, a failed run costs the work.
     closeStartup(startupHandle) {
-      if (!startupHandle) return;
+      if (!startupHandle || closedStartups.has(startupHandle)) return;
+      closedStartups.add(startupHandle);
+      pendingStartups.delete(startupHandle);
       try {
         execFileSync(bin, ['terminal', 'close', '--terminal', startupHandle, '--tab', '--json'],
           { stdio: ['ignore', 'ignore', 'ignore'] });
       } catch { /* already gone, or Orca not live */ }
+    },
+    // Close each setup shell as soon as its setup has FINISHED, not after grading.
+    //
+    // Waiting for the grade left one idle shell per unit sitting at `%` for the
+    // whole run, and vzt-orca-flow doctor counts a unit worktree whose only pane
+    // is at a bare prompt as a dead dispatch (9 false alarms in workspace-dx,
+    // 2026-10-29). There is still no "setup finished" signal, so read the shell:
+    // a preview that ends at a prompt means the setup hook has returned. Anything
+    // else — still printing, unreadable, empty — is left alone; a setup hook that
+    // is still running must never be killed. Rate-limited to one sweep per
+    // VZT_STARTUP_POLL_MS (default 5 s); the first call sweeps at once.
+    //
+    // ONE matching read is not enough: the prompt test only asks whether the last
+    // line ends in % $ or #, and a setup hook mid-way through `progress 100%`
+    // passes it. So the shell must read at-prompt on TWO consecutive sweeps with
+    // an identical preview — a hook that is still printing changes its preview
+    // between them; a shell that has returned does not.
+    tidyStartups() {
+      if (!pendingStartups.size || Date.now() - lastStartupPoll < STARTUP_POLL_MS) return;
+      lastStartupPoll = Date.now();
+      for (const h of [...pendingStartups]) {
+        let lines = [];
+        try { lines = previewLines(envJson(bin, ['terminal', 'read', '--terminal', h, '--limit', '5', '--json'])); } catch { continue; }
+        const preview = lines.join('\n');
+        if (!SHELL_PROMPT_RE.test(preview)) { lastPromptPreview.delete(h); continue; }
+        if (lastPromptPreview.get(h) === preview) { lastPromptPreview.delete(h); be.closeStartup(h); continue; }
+        lastPromptPreview.set(h, preview);
+      }
     },
     // TWO-PHASE on the agent's OWN lifecycle hooks — see waitOnSentinels.
     //
@@ -1633,10 +1711,11 @@ function orcaBackend(args) {
       if (!handle) return;
       const h = sentinelsByHandle.get(handle);
       if (!h) {
+        be.tidyStartups();
         try { execFileSync(bin, ['terminal', 'wait', '--terminal', handle, '--for', 'tui-idle', '--timeout-ms', String(t), '--json'], { stdio: ['ignore', 'ignore', 'ignore'] }); } catch { /* timed out/stale — verify anyway */ }
         return;
       }
-      const r = waitOnSentinels(h, t);
+      const r = waitOnSentinels(h, t, () => be.tidyStartups());
       if (r === 'no-start') {
         const s = Math.round(Math.min(t, Number(process.env.VZT_START_GRACE_MS || 90_000)) / 1000);
         console.error(`  ${h.unitKey}: no start signal within ${s}s — the pane never ran its agent; verifying anyway`);
@@ -1654,6 +1733,7 @@ function orcaBackend(args) {
       const deadline = Date.now() + t;
       let startDeadline = Date.now() + Math.min(t, startGrace);
       while (Date.now() < deadline) {
+        be.tidyStartups();
         for (const x of watched) {
           if (fs.existsSync(sentinelsByHandle.get(x).idleFile)) return x;
         }
@@ -1680,7 +1760,7 @@ function orcaBackend(args) {
         const list = Array.isArray(r) ? r : r.worktrees || [];
         const n = key(spec, u);
         const hit = list.find((w) => w.name === n || w.displayName === n);
-        return hit ? { path: hit.path || (hit.id && String(hit.id).split('::')[1]) || null, ws: n } : null;
+        return hit ? { id: hit.id || null, path: hit.path || (hit.id && String(hit.id).split('::')[1]) || null, ws: n } : null;
       } catch { return null; }
     },
     stamp(spec, u, info, status, pass) {
@@ -2630,6 +2710,13 @@ function shipWatch(args) {
   const maxConcurrent = Number(args.maxConcurrent ?? process.env.VZT_MAX_CONCURRENT ?? 4);
   console.log(`ship-watch [${be.name}]: ${spec.slug} — dispatch → wait → verify → integration gate (timeout ${Math.round(timeoutMs / 60000)}m/unit)`);
 
+  // Read BEFORE ship-start appends this run's opening lines: the prior run's
+  // verdicts are what --resume reports against.
+  let priorUnits = {};
+  if (args.resume) {
+    try { priorUnits = reduceLedger(fs.readFileSync(ledgerPathFor(specPath), 'utf8')).units; } catch { /* first run */ }
+  }
+
   // Open the ledger.
   try { execFileSync(process.execPath, [fileURLToPath(import.meta.url), 'ship-start', specPath], { stdio: ['ignore', 'ignore', 'ignore'] }); } catch {}
 
@@ -2675,8 +2762,34 @@ function shipWatch(args) {
     return pass;
   };
 
+  // Phase 0 — --resume: re-grade what a previous run already built.
+  //
+  // Without it a partial failure meant re-running everything — re-dispatching
+  // units that had passed — or dispatching the rest by hand (workspace-dx,
+  // 2026-10-29: u4 and u6 failed only under load). A unit whose worktree already
+  // exists has its oracle re-run IN PLACE, with no agent; one that passes is PASS
+  // for this run and is never dispatched, while still counting as a satisfied
+  // dependency so it seeds its dependents. Everything else dispatches as usual.
+  const resumed = new Set();
+  if (args.resume) {
+    console.log('\n## resume — re-grading units that already have a worktree (no dispatch)');
+    for (const u of [spec.barrier, ...spec.units].filter(Boolean)) {
+      let ref = null;
+      try { ref = be.resolve(spec, u); } catch { /* not live */ }
+      const was = priorUnits[u.id] ? `was ${priorUnits[u.id].status}` : 'no prior result';
+      if (!ref || !ref.path || !fs.existsSync(ref.path)) {
+        console.log(`  ${u.id} … no worktree (${was}) — will dispatch`);
+        continue;
+      }
+      if (verifyAndRecord(be, spec, u, specPath, ref, 'ship-watch-resume')) resumed.add(u.id);
+      else console.log(`  ${u.id}: ${was} — will dispatch`);
+    }
+  }
+
   // Phase 1 — barrier gates everything.
-  if (spec.barrier) {
+  if (spec.barrier && resumed.has(spec.barrier.id)) {
+    console.log('\n## barrier — PASS on resume, not re-dispatched');
+  } else if (spec.barrier) {
     console.log('\n## barrier (runs first; its oracle grades every unit)');
     const b = dispatch(spec.barrier);
     let barrierOk = false;
@@ -2715,6 +2828,13 @@ function shipWatch(args) {
     // would then debug the wrong unit. BLOCKED is the honest verdict.
     const queue = [];
     for (const u of wave) {
+      if (resumed.has(u.id)) {
+        console.log(`  ${u.id} … PASS (resumed — not re-dispatched)`);
+        verdict.set(u.id, 'PASS');
+        passed++;
+        passedUnits.push(u);
+        continue;
+      }
       const unmet = depsOf(u).filter((d) => verdict.get(d) !== 'PASS');
       if (unmet.length) {
         console.log(`  ${u.id} … BLOCKED (dependency ${unmet.join(', ')} did not pass)`);
@@ -2857,13 +2977,16 @@ Long-horizon runs (/vzt-ship):
 
 Supervision layer — parallel /vzt-ship runs in an agent multiplexer [--mux orca|herdr|vscode]:
   vzt-agent ship-watch <SPEC.md> [--mux orca|herdr|vscode] [--timeout-ms <n>]
-                                 [--max-concurrent <n>]
+                                 [--max-concurrent <n>] [--resume]
                                           KICK ONCE, WALK AWAY: dispatch every unit → wait
                                           for each to finish → auto-verify + stamp + ledger →
                                           integration gate. Stops at "ready to review + merge".
                                           Units run in dependency waves (see dependsOn in the
                                           SPEC); at most --max-concurrent at a time (default 4,
                                           0 = unlimited, or set VZT_MAX_CONCURRENT).
+                                          --resume re-grades units whose worktree already
+                                          exists, in place; those that pass are skipped
+                                          (and still seed their dependents).
   vzt-agent ship-dispatch <SPEC.md> [--mux orca|herdr|vscode] [--execute]
                                           one worktree+claude per unit (dry-run prints commands)
   vzt-agent ship-supervise <SPEC.md> [--mux orca|herdr|vscode]
