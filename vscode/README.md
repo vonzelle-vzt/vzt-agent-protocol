@@ -191,6 +191,8 @@ project → git worktree → the bus agents running in it.
   click, so its files show without the Explorer. Click a file to open it;
   right-click to open to the side, reveal in Finder or copy its path.
   `.git` and `files.exclude` entries are hidden.
+  Each worktree row in Projects also holds a **Files** folder (0.13), so a
+  worktree's folders open right under it, without scrolling to the Files view.
 - **One window, one terminal set per project** (0.10). Clicking a project
   makes it the *active* project (its row says `active`): the terminal panel
   swaps to that project's agents and terminals — one terminal per worktree —

@@ -2,7 +2,7 @@
   "name": "vzt-mux",
   "displayName": "VZT Ship Mux",
   "description": "Runs VZT Agent Protocol ship units as native VS Code integrated terminals, with a live Ship Run tree — per-unit status, worktree diffs mid-run, and one-click oracle re-runs.",
-  "version": "0.12.0",
+  "version": "0.13.0",
   "publisher": "vzt",
   "icon": "media/ship-icon.png",
   "engines": {
@@ -468,22 +468,22 @@
         },
         {
           "command": "vzt-mux.files.openToSide",
-          "when": "view == vztFiles && viewItem == vztFile",
+          "when": "view =~ /^vzt(Files|Projects)$/ && viewItem == vztFile",
           "group": "1_open@0"
         },
         {
           "command": "vzt-mux.files.revealInOS",
-          "when": "view == vztFiles && viewItem =~ /^vzt(File|Folder)$/",
+          "when": "view =~ /^vzt(Files|Projects)$/ && viewItem =~ /^vzt(File|Folder)$/",
           "group": "2_reveal@0"
         },
         {
           "command": "vzt-mux.files.copyPath",
-          "when": "view == vztFiles && viewItem =~ /^vzt(File|Folder)$/",
+          "when": "view =~ /^vzt(Files|Projects)$/ && viewItem =~ /^vzt(File|Folder)$/",
           "group": "3_copy@0"
         },
         {
           "command": "vzt-mux.files.copyRelativePath",
-          "when": "view == vztFiles && viewItem =~ /^vzt(File|Folder)$/",
+          "when": "view =~ /^vzt(Files|Projects)$/ && viewItem =~ /^vzt(File|Folder)$/",
           "group": "3_copy@1"
         }
       ],

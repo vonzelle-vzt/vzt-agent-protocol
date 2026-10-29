@@ -78,8 +78,16 @@ test('package contributes workspace commands', () => {
   );
 });
 
+test('each known worktree row in Projects holds a Files folder; file menus work in both views', () => {
+  const tree = fs.readFileSync(path.join(ROOT, 'vscode', 'src', 'projects', 'projectsTree.ts'), 'utf8');
+  assert.match(tree, /node\.known \? \[\{ kind: "files", root: node\.path \}, \.\.\.node\.agents\] : node\.agents/);
+  const fileMenus = PKG.contributes.menus['view/item/context'].filter((m) => m.command.startsWith('vzt-mux.files.'));
+  assert.equal(fileMenus.length, 4);
+  for (const m of fileMenus) assert.match(m.when, /view =~ \/\^vzt\(Files\|Projects\)\$\//, m.command);
+});
+
 test('package version', () => {
-  assert.equal(PKG.version, '0.12.0'); // 0.12.0: Files view — the active project's file tree under Projects
+  assert.equal(PKG.version, '0.13.0'); // 0.13.0: each worktree row holds a Files folder in the Projects view
 });
 
 test('terminal moves are tracked from tab events, and a closed tab only clears a still-live one, later', () => {

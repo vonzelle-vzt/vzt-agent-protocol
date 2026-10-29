@@ -30,6 +30,24 @@ type Node = FileEntry | { kind: "empty"; text: string };
 const isEntry = (n: unknown): n is FileEntry =>
   !!n && typeof n === "object" && typeof (n as FileEntry).path === "string" && typeof (n as FileEntry).dir === "boolean";
 
+/** One file or folder row; the Projects view's per-worktree Files node uses it too. */
+export function fileTreeItem(entry: FileEntry, id: string): vscode.TreeItem {
+  const uri = vscode.Uri.file(entry.path);
+  const item = new vscode.TreeItem(uri, entry.dir ? vscode.TreeItemCollapsibleState.Collapsed : vscode.TreeItemCollapsibleState.None);
+  // A stable id keeps folders expanded across refreshes.
+  item.id = id;
+  item.tooltip = entry.path;
+  item.contextValue = entry.dir ? "vztFolder" : "vztFile";
+  if (!entry.dir) item.command = { command: "vscode.open", title: "Open File", arguments: [uri] };
+  return item;
+}
+
+/** `dir` listed against `root`'s files.exclude; [] when unreadable. */
+export function listFiles(dir: string, root: string): FileEntry[] {
+  const exclude = excludeGlobs(vscode.workspace.getConfiguration("files", vscode.Uri.file(root)).get<Record<string, unknown>>("exclude"));
+  return listDir(dir, root, exclude).entries;
+}
+
 class FilesTreeProvider implements vscode.TreeDataProvider<Node> {
   private readonly emitter = new vscode.EventEmitter<Node | undefined>();
   readonly onDidChangeTreeData = this.emitter.event;
@@ -54,14 +72,7 @@ class FilesTreeProvider implements vscode.TreeDataProvider<Node> {
       item.iconPath = new vscode.ThemeIcon("info");
       return item;
     }
-    const uri = vscode.Uri.file(node.path);
-    const item = new vscode.TreeItem(uri, node.dir ? vscode.TreeItemCollapsibleState.Collapsed : vscode.TreeItemCollapsibleState.None);
-    // A stable id keeps folders expanded across refreshes.
-    item.id = node.path;
-    item.tooltip = node.path;
-    item.contextValue = node.dir ? "vztFolder" : "vztFile";
-    if (!node.dir) item.command = { command: "vscode.open", title: "Open File", arguments: [uri] };
-    return item;
+    return fileTreeItem(node, node.path);
   }
 }
 
@@ -100,7 +111,16 @@ export function registerFiles(context: vscode.ExtensionContext, deps: FilesDeps)
     provider.refresh();
   }
 
-  const target = (arg: unknown): FileEntry | undefined => (isEntry(arg) ? arg : undefined);
+  // A row of this view is a FileEntry; a row under a Projects worktree wraps one with its root.
+  const target = (arg: unknown): FileEntry | undefined => {
+    const wrapped = arg as { kind?: string; entry?: unknown } | undefined;
+    if (wrapped?.kind === "file" && isEntry(wrapped.entry)) return wrapped.entry;
+    return isEntry(arg) ? arg : undefined;
+  };
+  const rootOf = (arg: unknown): string | undefined => {
+    const wrapped = arg as { kind?: string; root?: unknown } | undefined;
+    return wrapped?.kind === "file" && typeof wrapped.root === "string" ? wrapped.root : provider.root;
+  };
 
   context.subscriptions.push(
     vscode.commands.registerCommand("vzt-mux.files.refresh", () => provider.refresh()),
@@ -118,7 +138,8 @@ export function registerFiles(context: vscode.ExtensionContext, deps: FilesDeps)
     }),
     vscode.commands.registerCommand("vzt-mux.files.copyRelativePath", (arg?: unknown) => {
       const e = target(arg);
-      if (e && provider.root) void vscode.env.clipboard.writeText(path.relative(provider.root, e.path));
+      const root = rootOf(arg);
+      if (e && root) void vscode.env.clipboard.writeText(path.relative(root, e.path));
     }),
     // Without an active project the root is the first workspace folder; follow it.
     vscode.workspace.onDidChangeWorkspaceFolders(() => setRoot(deps.activeProject())),

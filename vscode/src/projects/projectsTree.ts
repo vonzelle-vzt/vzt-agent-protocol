@@ -21,6 +21,8 @@ import * as vscode from "vscode";
 import { BusAgentRow, GLYPH_ICON, Glyph } from "./status";
 import { AgentNode, buildProjectTree, ProjectEntry, ProjectNode, TreeNode, WorktreeNode } from "./model";
 import { claimFocus, requestFocus } from "./focus";
+import { FileEntry } from "./files";
+import { fileTreeItem, listFiles } from "./filesTree";
 
 type Run = <T>(args: string[], cwd?: string) => Promise<T>;
 
@@ -44,7 +46,10 @@ export interface ProjectsApi {
 const POLL_MS = 3_000;
 const CLAIM_MS = 1_000;
 
-type Node = TreeNode | { kind: "error"; text: string } | { kind: "import" };
+/** A worktree's Files folder, and the file and folder rows under it. */
+type FilesNode = { kind: "files"; root: string };
+type FileNode = { kind: "file"; entry: FileEntry; root: string };
+type Node = TreeNode | FilesNode | FileNode | { kind: "error"; text: string } | { kind: "import" };
 
 function glyphIcon(g: Glyph | null): vscode.ThemeIcon | undefined {
   if (!g) return undefined;
@@ -115,7 +120,11 @@ class ProjectsTreeProvider implements vscode.TreeDataProvider<Node> {
       case "project":
         return node.worktrees;
       case "worktree":
-        return node.agents;
+        return node.known ? [{ kind: "files", root: node.path }, ...node.agents] : node.agents;
+      case "files":
+        return listFiles(node.root, node.root).map((entry) => ({ kind: "file", entry, root: node.root }));
+      case "file":
+        return node.entry.dir ? listFiles(node.entry.path, node.root).map((entry) => ({ kind: "file", entry, root: node.root })) : [];
       default:
         return [];
     }
@@ -157,7 +166,8 @@ class ProjectsTreeProvider implements vscode.TreeDataProvider<Node> {
       }
       case "worktree": {
         const row = node.row;
-        const item = new vscode.TreeItem(row.label, node.agents.length ? Expanded : vscode.TreeItemCollapsibleState.None);
+        // Collapsible even without agents: it holds the worktree's Files folder.
+        const item = new vscode.TreeItem(row.label, node.agents.length ? Expanded : node.known ? Collapsed : vscode.TreeItemCollapsibleState.None);
         item.description = [row.primary ? "primary" : "", row.activity].filter(Boolean).join(" · ");
         item.iconPath = glyphIcon(row.glyph) ?? new vscode.ThemeIcon("git-branch");
         item.tooltip = node.path;
@@ -170,6 +180,15 @@ class ProjectsTreeProvider implements vscode.TreeDataProvider<Node> {
       }
       case "agent":
         return agentItem(node);
+      case "files": {
+        const item = new vscode.TreeItem("Files", Collapsed);
+        item.id = `files:${node.root}`;
+        item.iconPath = new vscode.ThemeIcon("files");
+        item.tooltip = node.root;
+        return item;
+      }
+      case "file":
+        return fileTreeItem(node.entry, `file:${node.entry.path}`);
     }
   }
 }
