@@ -304,6 +304,43 @@ export function registerAgentBus(
   const notOurs = new Map<number, number>();
   let joinTick = 0;
 
+  // --- agent-spawned workers (Orca worker-start): `bus spawn` queues a request
+  // for the requester's window; this window claims it, starts the worker beside
+  // the requester (its peer), and settles it — which queues the task from the
+  // requester. The worker's `bus complete` wakes the requester with the report.
+  interface SpawnReq {
+    id: string;
+    requester: string;
+    requester_alias: string;
+    kind: Kind;
+    cwd: string;
+    subject: string;
+  }
+  const serveSpawns = async (cwd: string) => {
+    const claimed = await bus.run<SpawnReq[]>(["spawn-claim", "--window", window], cwd);
+    for (const req of claimed) {
+      let worker: string | undefined;
+      let error: string | undefined;
+      try {
+        if (!fs.existsSync(req.cwd)) throw new Error(`folder ${req.cwd} is gone`);
+        const started = await spawnAgent(spawnDeps, {
+          kind: req.kind,
+          alias: `${req.kind}-worker`,
+          cwd: req.cwd,
+          peer: req.requester_alias,
+          autoSuffix: true,
+        });
+        worker = started.agent_id;
+        log(`${req.requester_alias} started worker ${started.alias} (${req.kind}) for "${req.subject}"`);
+      } catch (err) {
+        error = errorText(err);
+        log(`${req.requester_alias}: worker not started — ${error}`);
+      }
+      await bus.run(["spawn-done", "--request", req.id, ...(worker ? ["--worker", worker] : ["--error", error ?? "unknown"])], cwd);
+      void tree.reload();
+    }
+  };
+
   const syncJoined = async (cwd: string, panes: Map<string, number> | undefined) => {
     const rows = (await bus.run<{ agents: BusAgentRow[] }>(["agents", "--all"], cwd)).agents || [];
     const live = candidates(rows, (id) => !!registry.get(id), processAlive);
@@ -389,6 +426,11 @@ export function registerAgentBus(
             await syncJoined(cwd, panes);
           } catch (err) {
             log(`looking for self-joined agents failed: ${errorText(err)}`);
+          }
+          try {
+            await serveSpawns(cwd);
+          } catch (err) {
+            log(`serving worker requests failed: ${errorText(err)}`);
           }
         }
         for (const [id, j] of joined) if (processAlive(j.agentPid)) pairs.push(`${id}:${j.pid}`);

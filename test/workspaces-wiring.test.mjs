@@ -97,7 +97,7 @@ test('each known worktree row in Projects holds a Files folder with its file men
 });
 
 test('package version', () => {
-  assert.equal(PKG.version, '0.14.2'); // 0.14.2: tidy panel — active project first, one +, no Files view (0.14.1 resume; 0.14.0 auto-join, Shift+Enter)
+  assert.equal(PKG.version, '0.14.3'); // 0.14.3: agents start workers beside them (bus spawn) + Tasks view; 0.14.2: tidy panel — active project first, one +, no Files view (0.14.1 resume; 0.14.0 auto-join, Shift+Enter)
 });
 
 test('a closed agent is never lost: its row resumes its saved session in this window', () => {

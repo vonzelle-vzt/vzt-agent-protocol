@@ -8,6 +8,7 @@
 
 import * as vscode from "vscode";
 import { BusCli } from "./busCli";
+import { TaskRow, taskRows, TaskStatus } from "./tasks";
 
 export interface BusAgent {
   agent_id: string;
@@ -39,7 +40,8 @@ export interface BusThread {
 }
 
 type Node =
-  | { kind: "group"; group: "agents" | "threads" }
+  | { kind: "group"; group: "tasks" | "agents" | "threads" }
+  | { kind: "task"; task: TaskRow }
   | { kind: "agent"; agent: BusAgent }
   | { kind: "thread"; thread: BusThread }
   | { kind: "message"; message: BusThreadMessage }
@@ -83,10 +85,14 @@ export class BusTreeProvider implements vscode.TreeDataProvider<Node> {
       if (!this.loaded) return [];
       const roots: Node[] = [];
       if (this.error) roots.push({ kind: "error", text: this.error });
+      if (taskRows(this.threads).length) roots.push({ kind: "group", group: "tasks" });
       if (this.agents.length || this.threads.length) {
         roots.push({ kind: "group", group: "agents" }, { kind: "group", group: "threads" });
       }
       return roots;
+    }
+    if (node.kind === "group" && node.group === "tasks") {
+      return taskRows(this.threads).map((task) => ({ kind: "task" as const, task }));
     }
     if (node.kind === "group") {
       return node.group === "agents"
@@ -108,8 +114,29 @@ export class BusTreeProvider implements vscode.TreeDataProvider<Node> {
         return item;
       }
       case "group": {
+        if (node.group === "tasks") {
+          const rows = taskRows(this.threads);
+          const open = rows.filter((t) => t.status === "waiting" || t.status === "working").length;
+          const item = new vscode.TreeItem(`Tasks (${open} open)`, vscode.TreeItemCollapsibleState.Expanded);
+          item.tooltip = "Work agents handed to each other (bus send --type task, bus spawn). Click one to see its worker.";
+          return item;
+        }
         const label = node.group === "agents" ? `Agents (${this.agents.length})` : `Threads (${this.threads.length})`;
         return new vscode.TreeItem(label, vscode.TreeItemCollapsibleState.Expanded);
+      }
+      case "task": {
+        const t = node.task;
+        const item = new vscode.TreeItem(t.subject);
+        item.description = `${t.from} → ${t.to} · ${t.status}`;
+        item.iconPath = TASK_ICON[t.status];
+        item.tooltip = new vscode.MarkdownString(
+          [`**${t.subject}**`, "", `- asked by: ${t.from}`, `- worker: ${t.to}`, `- status: ${t.status}`, t.report ? `- report: ${t.report}` : ""]
+            .filter(Boolean)
+            .join("\n")
+        );
+        const worker = this.agents.find((a) => a.alias === t.to);
+        if (worker) item.command = { command: "vzt-mux.projects.focusAgent", title: "Show Worker", arguments: [worker] };
+        return item;
       }
       case "agent":
         return agentItem(node.agent);
@@ -131,6 +158,13 @@ export class BusTreeProvider implements vscode.TreeDataProvider<Node> {
     }
   }
 }
+
+const TASK_ICON: Record<TaskStatus, vscode.ThemeIcon> = {
+  waiting: new vscode.ThemeIcon("clock"),
+  working: new vscode.ThemeIcon("sync~spin"),
+  done: new vscode.ThemeIcon("pass", new vscode.ThemeColor("testing.iconPassed")),
+  failed: new vscode.ThemeIcon("error", new vscode.ThemeColor("testing.iconFailed")),
+};
 
 function agentItem(a: BusAgent): vscode.TreeItem {
   const item = new vscode.TreeItem(a.alias);

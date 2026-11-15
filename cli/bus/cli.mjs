@@ -56,6 +56,11 @@ const OPTIONS = {
   resume: { type: 'string' },
   agent: { type: 'string' },
   'from-window': { type: 'string' },
+  task: { type: 'string' },
+  request: { type: 'string' },
+  worker: { type: 'string' },
+  error: { type: 'string' },
+  'no-wait': { type: 'boolean' },
 };
 
 class CliError extends Error {
@@ -359,7 +364,7 @@ async function runHook(event, io) {
 export async function main(argv, io = { out: process.stdout, err: process.stderr }) {
   const [verb, ...rest] = argv;
   if (!verb || verb === 'help' || verb === '--help') {
-    io.err.write('usage: vzt-agent bus <register|adopt|argv|bootstrap-prompt|trust-claude|send|check|ack|reply|ask|complete|gate-resolve|agents|inbox|lease|wake-plan|wake-sent|hook|doctor> [--json]\n');
+    io.err.write('usage: vzt-agent bus <register|adopt|argv|bootstrap-prompt|trust-claude|send|check|ack|reply|ask|complete|gate-resolve|agents|inbox|lease|wake-plan|wake-sent|spawn|spawn-claim|spawn-done|spawn-status|hook|doctor> [--json]\n');
     return verb ? 0 : 2;
   }
   if (verb === 'hook') return runHook(rest[0], io);
@@ -516,6 +521,49 @@ async function runVerb(verb, values, store, me, sleepMs) {
     }
     case 'wake-plan':
       return store.wakePlan(req(values, 'window'));
+    case 'spawn': {
+      // Orca worker-start: a worker pane beside the caller, its task queued from the caller.
+      const { requestSpawn, spawnStatus } = await import('./spawnq.mjs');
+      const caller = me ? store.agent(me) : undefined;
+      if (me && !caller) throw new CliError(2, `unknown agent ${me}`);
+      let task = values.task;
+      if (task === undefined && values['body-file'] !== undefined) {
+        try { task = fs.readFileSync(values['body-file'], 'utf8'); } catch (err) { throw new CliError(2, `--body-file: ${err.message}`); }
+      }
+      const r = requestSpawn(store, caller, {
+        kind: req(values, 'kind'), task, subject: values.subject,
+        workspace: values.workspace ? resolveWorkspace(values.workspace) : undefined,
+      });
+      if (values['no-wait']) return { request_id: r.id, status: r.status };
+      // Wait for the window to start it (it polls every 3 s), so the caller learns the worker's alias now.
+      const deadline = Date.now() + timeoutMs(values, 60_000);
+      for (;;) {
+        const s = spawnStatus(r.id) || r;
+        if (s.status === 'started') {
+          return { request_id: r.id, status: 'started', worker: s.worker_alias, task_message: s.message,
+            next: `end your turn; you are woken when ${s.worker_alias} reports (bus complete)` };
+        }
+        if (s.status === 'failed') return { exitCode: 1, message: `vzt-agent bus spawn: worker not started — ${s.error}` };
+        if (Date.now() >= deadline) {
+          return { request_id: r.id, status: s.status, next: `still ${s.status}; check with: vzt-agent bus spawn-status --request ${r.id}` };
+        }
+        sleepMs(250);
+      }
+    }
+    case 'spawn-claim': {
+      const { claimSpawns } = await import('./spawnq.mjs');
+      return claimSpawns(req(values, 'window'));
+    }
+    case 'spawn-done': {
+      const { settleSpawn } = await import('./spawnq.mjs');
+      return settleSpawn(store, req(values, 'request'), { worker: values.worker, error: values.error });
+    }
+    case 'spawn-status': {
+      const { spawnStatus } = await import('./spawnq.mjs');
+      const s = spawnStatus(req(values, 'request'));
+      if (!s) throw new CliError(2, `no spawn request ${values.request}`);
+      return s;
+    }
     case 'wake-sent':
       return store.wakeSent(req(values, 'attempt'));
     default:

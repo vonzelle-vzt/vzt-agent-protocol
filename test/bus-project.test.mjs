@@ -298,6 +298,7 @@ test('multi-agent prompt names agents --project', () => {
     'Talk to another agent ONLY via: vzt-agent bus send --to <alias> --type message|task|question --subject ... --body ... ; ' +
     'read your inbox with: vzt-agent bus check --json ; ' +
     'answer questions with: vzt-agent bus reply --id <id> --body ... . ' +
+    'Start a worker agent in a pane beside you with: vzt-agent bus spawn --kind claude|codex --task "<brief>" , then end your turn; you are woken with its report. ' +
     'A line starting "vzt: new bus message" means run that check.';
   assert.equal(BOOTSTRAP_PROMPT('feat-claude'), expected);
   const r = cli(['bootstrap-prompt', '--alias', 'feat-claude']);
