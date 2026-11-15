@@ -59,16 +59,31 @@ function ownsWorkspace(record: QueueRecord): boolean {
   if (!record.workspaceRoot) {
     return true;
   }
-  const folders = vscode.workspace.workspaceFolders || [];
-  if (folders.length === 0) {
-    return false; // an empty window owns nothing
+  // The open folders, and the project the Projects view has active: the
+  // one-window project swap usually runs with no folder open at all.
+  const dirs = (vscode.workspace.workspaceFolders || []).map((f) => f.uri.fsPath);
+  const active = shipHooks.activeProject?.();
+  if (active) dirs.push(active);
+  if (dirs.length === 0) {
+    return false; // an empty window with no active project owns nothing
   }
   const root = path.resolve(record.workspaceRoot);
-  return folders.some((f) => {
-    const dir = path.resolve(f.uri.fsPath);
+  return dirs.some((d) => {
+    const dir = path.resolve(d);
     return dir === root || root.startsWith(dir + path.sep) || dir.startsWith(root + path.sep);
   });
 }
+
+/**
+ * Set once the agent bus is up: the active project (ownership) and the tmux
+ * runner that gives each unit a session of its own (units survive a reload and
+ * show under their project). Unset, or tmux unusable: a plain terminal.
+ */
+const shipHooks: {
+  activeProject?: () => string | undefined;
+  runUnit?: (record: QueueRecord) => Promise<string | undefined>;
+  focusUnit?: (unitKey: string) => boolean;
+} = {};
 
 const POLL_INTERVAL_MS = 1000;
 const SETUP_PROMPT_KEY = "vzt.setupPromptedRoots";
@@ -330,38 +345,62 @@ function processQueue(): void {
       // ignore
     }
 
-    let terminal: vscode.Terminal;
-    try {
-      terminal = vscode.window.createTerminal({
-        name: record.unitKey,
-        cwd: record.cwd,
-        env: record.env,
-      });
-    } catch (err) {
-      // The queue record is already deleted at this point, so a throw here used
-      // to lose the unit ENTIRELY and silently: no terminal, no sentinel, and
-      // ship-watch waiting out the full timeout on a unit that was never
-      // launched. Say so loudly instead.
-      outputChannel.appendLine(`[ERROR] createTerminal failed for ${record.unitKey}: ${err}`);
-      outputChannel.appendLine(`[ERROR] run it by hand:  cd ${record.cwd} && ${record.cmd}`);
-      outputChannel.show(true);
+    if (shipHooks.runUnit) {
+      launchUnit(record);
       continue;
     }
-    terminals.set(record.unitKey, terminal);
+    openUnitTerminal(record);
+  }
+}
 
-    terminal.show(true); // preserveFocus: true — don't steal focus aggressively
-
-    // The queue record is already deleted by now, so ANY throw past this point
-    // loses the unit permanently and silently — ship-watch then waits out its
-    // whole start-grace on a sentinel that will never arrive. A TDZ bug in
-    // sendWhenReady did exactly that. Never let a launch failure be quiet.
-    try {
-      sendWhenReady(terminal, record);
-    } catch (err) {
-      outputChannel.appendLine(`[ERROR] failed to send command for ${record.unitKey}: ${err}`);
+/** A unit on tmux; a plain terminal when tmux is unavailable. Never quiet on failure. */
+function launchUnit(record: QueueRecord): void {
+  shipHooks.runUnit!(record).then(
+    (session) => {
+      if (session) outputChannel.appendLine(`[LAUNCH] ${record.unitKey} (${record.cwd}) [tmux ${session}]`);
+      else openUnitTerminal(record);
+    },
+    (err) => {
+      // The session may exist half-started; do not launch a second copy.
+      outputChannel.appendLine(`[ERROR] tmux launch failed for ${record.unitKey}: ${err}`);
       outputChannel.appendLine(`[ERROR] run it by hand:  cd ${record.cwd} && ${record.cmd}`);
       outputChannel.show(true);
     }
+  );
+}
+
+function openUnitTerminal(record: QueueRecord): void {
+  let terminal: vscode.Terminal;
+  try {
+    terminal = vscode.window.createTerminal({
+      name: record.unitKey,
+      cwd: record.cwd,
+      env: record.env,
+    });
+  } catch (err) {
+    // The queue record is already deleted at this point, so a throw here used
+    // to lose the unit ENTIRELY and silently: no terminal, no sentinel, and
+    // ship-watch waiting out the full timeout on a unit that was never
+    // launched. Say so loudly instead.
+    outputChannel.appendLine(`[ERROR] createTerminal failed for ${record.unitKey}: ${err}`);
+    outputChannel.appendLine(`[ERROR] run it by hand:  cd ${record.cwd} && ${record.cmd}`);
+    outputChannel.show(true);
+    return;
+  }
+  terminals.set(record.unitKey, terminal);
+
+  terminal.show(true); // preserveFocus: true — don't steal focus aggressively
+
+  // The queue record is already deleted by now, so ANY throw past this point
+  // loses the unit permanently and silently — ship-watch then waits out its
+  // whole start-grace on a sentinel that will never arrive. A TDZ bug in
+  // sendWhenReady did exactly that. Never let a launch failure be quiet.
+  try {
+    sendWhenReady(terminal, record);
+  } catch (err) {
+    outputChannel.appendLine(`[ERROR] failed to send command for ${record.unitKey}: ${err}`);
+    outputChannel.appendLine(`[ERROR] run it by hand:  cd ${record.cwd} && ${record.cmd}`);
+    outputChannel.show(true);
   }
 }
 
@@ -623,6 +662,7 @@ function activateTrusted(context: vscode.ExtensionContext): void {
     vscode.commands.registerCommand("vzt-mux.focusTerminal", (item: UnitItem) => {
       const t = terminals.get(item.record.unitKey);
       if (t) t.show(false);
+      else if (shipHooks.focusUnit?.(item.record.unitKey)) return;
       else vscode.window.showInformationMessage(`VZT: no live terminal for ${item.record.unitKey} (it may have been closed).`);
     }),
 
@@ -735,6 +775,13 @@ function activateTrusted(context: vscode.ExtensionContext): void {
   registerFileCommands(context);
   // Ship Run shows the active project's runs only, like the terminal panel.
   tree.activeProject = () => bus.registry.active;
+  shipHooks.activeProject = () => bus.registry.active;
+  shipHooks.runUnit = (record) => bus.runUnit(record);
+  // A unit's session is a registry shell named after its unit key; after a reload it is still there.
+  shipHooks.focusUnit = (unitKey) => {
+    for (const [id, e] of bus.registry.entries()) if (e.kind === "shell" && e.alias === unitKey) return bus.registry.focus(id);
+    return false;
+  };
   tree.refresh();
   bus.onActiveProject(() => {
     projects.refresh();

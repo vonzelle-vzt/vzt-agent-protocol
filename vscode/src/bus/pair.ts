@@ -176,6 +176,7 @@ export function registerAgentBus(
 ): {
   registry: AgentRegistry;
   runTop: Run;
+  runUnit(unit: { unitKey: string; cwd: string; env?: Record<string, string>; cmd: string }): Promise<string | undefined>;
   resumeAgent(agent: ResumableAgent): Promise<void>;
   focusAgent(id: string): boolean;
   refreshBus(): Promise<void>;
@@ -906,9 +907,22 @@ export function registerAgentBus(
     return true;
   };
 
+  // --- ship units (`ship-watch --mux vscode`): each unit runs in its own tmux
+  // session under its project, like an Orca unit pane — it survives a window
+  // reload, shows in the project's layout, and its claude joins the bus by
+  // itself (VZT_BUS_AGENT=auto). False: no tmux or not trusted, so the caller
+  // falls back to a plain integrated terminal.
+  const runUnit = async (unit: { unitKey: string; cwd: string; env?: Record<string, string>; cmd: string }): Promise<string | undefined> => {
+    if (!spawnDeps.tmux || !spawnDeps.isTrusted()) return undefined;
+    const session = await startShell(spawnDeps, unit.cwd, { alias: unit.unitKey, env: unit.env, cmd: unit.cmd });
+    log(`ship unit ${unit.unitKey} running in tmux session ${session}`);
+    return session;
+  };
+
   return {
     registry,
     runTop,
+    runUnit,
     resumeAgent,
     focusAgent: (id) => registry.focus(id) || focusJoined(id),
     refreshBus: () => tree.reload(),

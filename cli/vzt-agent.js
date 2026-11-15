@@ -2131,7 +2131,8 @@ function vscodeBackend(/* args */) {
         path.join(unitDir, `${k}.json`),
         JSON.stringify(
           {
-            unitKey: k, slug: spec.slug, id: u.id, title: u.title || u.id, cwd: wtPath,
+            // `root`: the project the run belongs to — Ship Run shows the active project's runs.
+            unitKey: k, slug: spec.slug, id: u.id, title: u.title || u.id, cwd: wtPath, root: spec.root,
             machineCheck: u.machineCheck || '', expect: u.expect || '',
             // The DAG, as the tree view needs it: what this unit waited for, which
             // wave it ran in, and the commit its own work is measured against.

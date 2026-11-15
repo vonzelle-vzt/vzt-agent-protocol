@@ -254,19 +254,27 @@ async function projectFor(deps: SpawnDeps, cwd: string): Promise<string> {
  * deps.tmux). Not a bus agent: no registration, no lease, never woken. Keyed
  * in the registry by its session name. Returns that key.
  */
-export async function startShell(deps: SpawnDeps, cwd: string): Promise<string> {
+export async function startShell(
+  deps: SpawnDeps,
+  cwd: string,
+  opts: { alias?: string; env?: Record<string, string>; cmd?: string } = {}
+): Promise<string> {
   if (!deps.isTrusted()) throw new Error(UNTRUSTED_MESSAGE);
   const tmux = deps.tmux;
   if (!tmux) throw new Error("plain terminals in a project need tmux");
   const project = await projectFor(deps, cwd);
+  const base = opts.alias ?? "shell";
   const taken = new Set([...deps.registry.entries()].filter(([, e]) => e.kind === "shell" && e.cwd === cwd).map(([, e]) => e.alias));
-  let alias = "shell";
-  for (let n = 2; taken.has(alias); n++) alias = `shell-${n}`;
+  let alias = base;
+  for (let n = 2; taken.has(alias); n++) alias = `${base}-${n}`;
   const session = shellSession();
   // A claude typed here reaches the IDE too, and joins the bus by itself
   // (VZT_BUS_AGENT=auto), like one typed into any other terminal of the window.
-  await tmux.newSession(session, cwd, { ...ideEnv(deps, cwd), VZT_BUS_AGENT: "auto", VZT_BUS_WINDOW: deps.windowId });
+  await tmux.newSession(session, cwd, { ...(opts.env ?? {}), ...ideEnv(deps, cwd), VZT_BUS_AGENT: "auto", VZT_BUS_WINDOW: deps.windowId });
   deps.registry.set(session, { alias, kind: "shell", cwd, session, project });
+  // A ship unit: its command typed into the shell, so the pane outlives a
+  // reload and the shell stays when the agent exits (the unit's transcript).
+  if (opts.cmd) await tmux.launch(session, opts.cmd);
   return session;
 }
 

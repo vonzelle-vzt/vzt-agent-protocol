@@ -398,6 +398,20 @@ test('startShell: a plain login shell in its own session; no bus, numbered per f
   assert.deepEqual(u.tmuxCalls, []);
 });
 
+test('startShell for a ship unit: named after the unit, its env, and its command typed into the shell', async () => {
+  const { startShell } = await load('spawn');
+  const h = await tmuxHarness();
+  const id = await startShell(h.deps, '/wt/run-u1', { alias: 'run-u1', env: { VZT_VSCODE_UNIT: 'run-u1' }, cmd: 'claude --x' });
+  assert.equal(h.registry.get(id).alias, 'run-u1');
+  const created = h.tmuxCalls.find((x) => x.includes('new-session'));
+  assert.ok(created.includes('VZT_VSCODE_UNIT=run-u1'), 'the unit sentinel env reaches the shell');
+  assert.ok(created.includes('VZT_BUS_AGENT=auto'), 'the unit agent joins the bus by itself');
+  const typed = h.tmuxCalls.filter((x) => x.includes('send-keys')).map((x) => x.join(' ')).join('\n');
+  assert.match(typed, /claude --x/, 'the unit command is typed into its shell');
+  const again = await startShell(h.deps, '/wt/run-u1', { alias: 'run-u1', cmd: 'claude --x' });
+  assert.equal(h.registry.get(again).alias, 'run-u1-2', 'a re-dispatch beside a live session gets its own name');
+});
+
 test("projectOf: the bus's rule — the git common dir's main checkout, realpath'd", async () => {
   const { projectOf } = await load('spawn');
   const root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'vzt-projof-')));

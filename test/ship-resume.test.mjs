@@ -85,6 +85,8 @@ test('--resume re-grades an existing worktree in place and dispatches only what 
     assert.match(out1, /u1 … FAIL/, out1);
     assert.match(out1, /u2 … BLOCKED/, out1);
     const u1Dispatch = unitRecord(s.muxDir, 'u1').dispatchedAt;
+    assert.equal(unitRecord(s.muxDir, 'u1').root, s.repo,
+      'the unit record names its project (Ship Run shows the active project\'s runs)');
 
     // Stand in for the agent's work and for whatever made the oracle pass.
     fs.writeFileSync(path.join(s.muxDir, 'worktrees', 'res-u1', 'u1.txt'), 'u1\n');

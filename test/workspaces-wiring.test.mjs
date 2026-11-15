@@ -14,6 +14,7 @@ const ROOT = path.join(__dirname, '..');
 const CLI = path.join(ROOT, 'cli', 'vzt-agent.js');
 const PKG = JSON.parse(fs.readFileSync(path.join(ROOT, 'vscode', 'package.json'), 'utf8'));
 const EXTENSION = fs.readFileSync(path.join(ROOT, 'vscode', 'src', 'extension.ts'), 'utf8');
+const PAIR = fs.readFileSync(path.join(ROOT, 'vscode', 'src', 'bus', 'pair.ts'), 'utf8');
 
 const BASE_ENV = { ...process.env };
 for (const k of ['ORCA_TERMINAL_HANDLE', 'VZT_PROJECTS_FILE', 'VZT_BUS_DIR']) delete BASE_ENV[k];
@@ -97,7 +98,7 @@ test('each known worktree row in Projects holds a Files folder with its file men
 });
 
 test('package version', () => {
-  assert.equal(PKG.version, '0.14.3'); // 0.14.3: agents start workers beside them (bus spawn) + Tasks view; 0.14.2: tidy panel — active project first, one +, no Files view (0.14.1 resume; 0.14.0 auto-join, Shift+Enter)
+  assert.equal(PKG.version, '0.14.4'); // 0.14.4: ship units on tmux under their project; 0.14.3: agents start workers beside them (bus spawn) + Tasks view; 0.14.2: tidy panel — active project first, one +, no Files view (0.14.1 resume; 0.14.0 auto-join, Shift+Enter)
 });
 
 test('a closed agent is never lost: its row resumes its saved session in this window', () => {
@@ -245,4 +246,16 @@ test('extension wires all four features', () => {
   // Every contributed workspace command is registered by some module.
   const src = execFileSync('grep', ['-rhoE', 'registerCommand\\("[^"]+"', path.join(ROOT, 'vscode', 'src')], { encoding: 'utf8' });
   for (const id of WORKSPACE_COMMANDS) assert.ok(src.includes(`"${id}"`), `${id} is never registered`);
+});
+
+test('ship units: owned via the active project, run on tmux under it, focusable after a reload', () => {
+  // A window with no folder open still owns its active project's units.
+  assert.match(EXTENSION, /const active = shipHooks\.activeProject\?\.\(\);\n  if \(active\) dirs\.push\(active\);/);
+  assert.match(EXTENSION, /shipHooks\.activeProject = \(\) => bus\.registry\.active;/);
+  assert.match(EXTENSION, /shipHooks\.runUnit = \(record\) => bus\.runUnit\(record\);/);
+  // tmux unavailable -> a plain terminal; a tmux error is loud and never double-launches.
+  assert.match(EXTENSION, /if \(session\) outputChannel\.appendLine\(`\[LAUNCH\][^`]*`\);\n      else openUnitTerminal\(record\);/);
+  assert.match(EXTENSION, /do not launch a second copy/);
+  assert.match(EXTENSION, /else if \(shipHooks\.focusUnit\?\.\(item\.record\.unitKey\)\) return;/);
+  assert.match(PAIR, /startShell\(spawnDeps, unit\.cwd, \{ alias: unit\.unitKey, env: unit\.env, cmd: unit\.cmd \}\)/);
 });
