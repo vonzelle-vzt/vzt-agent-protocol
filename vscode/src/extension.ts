@@ -714,12 +714,13 @@ function activateTrusted(context: vscode.ExtensionContext): void {
   // Order matters: projects needs the bus's runner and registry; attention
   // needs projects' badge setter; the dashboard needs projects' focusAgent.
   // The registry owns the one-window project swap; projects only asks for it.
-  const focusLocal = (id: string) => bus.registry.focus(id);
+  const focusLocal = (id: string) => bus.focusAgent(id);
   const projects = registerProjects(context, {
     run: bus.runTop,
     windowId: vscode.env.sessionId,
     baseDir: baseDir(),
     focusLocal,
+    resume: (agent) => bus.resumeAgent(agent),
     showProject: (root) => void bus.registry.showProject(root, { reveal: true }),
     activeProject: () => bus.registry.active,
   });

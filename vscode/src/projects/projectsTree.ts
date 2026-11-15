@@ -31,6 +31,8 @@ export interface ProjectsDeps {
   windowId: string;
   baseDir: string;
   focusLocal(agentId: string): boolean;
+  /** Start a closed agent again in this window, continuing its saved session. */
+  resume(agent: BusAgentRow): Promise<void>;
   /** Swap this window's terminal panel to the project's agents and shells. */
   showProject(root: string): void;
   /** The project whose terminals the panel holds, if any. */
@@ -196,7 +198,7 @@ class ProjectsTreeProvider implements vscode.TreeDataProvider<Node> {
 function agentItem(node: AgentNode): vscode.TreeItem {
   const a = node.agent;
   const item = new vscode.TreeItem(a.alias);
-  const parts: string[] = [a.kind, node.glyph];
+  const parts: string[] = [a.kind, node.glyph === "stale" ? "closed · click to resume" : node.glyph];
   if (a.unread) parts.push(`${a.unread} unread`);
   if (a.wake_unconfirmed) parts.push("wake unconfirmed");
   item.description = parts.join(" · ");
@@ -204,7 +206,7 @@ function agentItem(node: AgentNode): vscode.TreeItem {
   item.tooltip = new vscode.MarkdownString(
     [`**${a.alias}** (${a.kind})`, "", `- status: ${node.glyph}`, `- state: ${a.state}`, `- liveness: ${a.liveness}`, `- worktree: ${a.workspace}`].join("\n")
   );
-  item.contextValue = "vztProjectAgent";
+  item.contextValue = node.glyph === "stale" ? "vztProjectAgentClosed" : "vztProjectAgent";
   item.command = { command: "vzt-mux.projects.focusAgent", title: "Focus Agent", arguments: [node] };
   return item;
 }
@@ -253,8 +255,15 @@ export function registerProjects(context: vscode.ExtensionContext, deps: Project
   }
 
   async function focusAgent(agent: BusAgentRow): Promise<void> {
+    if (agent.window_id === deps.windowId && deps.focusLocal(agent.agent_id)) return;
+    // Running nowhere (its terminal was closed, its window is gone): open it
+    // again here, on its saved conversation — Orca's "come back to it".
+    if (agent.liveness !== "live") {
+      await deps.resume(agent);
+      refresh();
+      return;
+    }
     if (agent.window_id === deps.windowId) {
-      if (deps.focusLocal(agent.agent_id)) return;
       // This window's agent, but no terminal here to show (stale, or already
       // forgotten): its project is the closest thing — never a new window.
       if (agent.project) showProject(agent.project);

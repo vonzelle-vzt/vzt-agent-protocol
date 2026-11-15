@@ -87,7 +87,22 @@ test('each known worktree row in Projects holds a Files folder; file menus work 
 });
 
 test('package version', () => {
-  assert.equal(PKG.version, '0.14.0'); // 0.14.0: hand-started agents join the bus; Shift+Enter is a newline in agents
+  assert.equal(PKG.version, '0.14.1'); // 0.14.1: a closed agent's row resumes its conversation (0.14.0: hand-started agents join the bus; Shift+Enter)
+});
+
+test('a closed agent is never lost: its row resumes its saved session in this window', () => {
+  const tree = fs.readFileSync(path.join(ROOT, 'vscode', 'src', 'projects', 'projectsTree.ts'), 'utf8');
+  // Running nowhere -> resume; live in this window -> focus; live elsewhere -> that window.
+  assert.match(tree, /if \(agent\.liveness !== "live"\) \{\n      await deps\.resume\(agent\);/);
+  assert.match(tree, /"closed · click to resume"/);
+  const pair = fs.readFileSync(path.join(ROOT, 'vscode', 'src', 'bus', 'pair.ts'), 'utf8');
+  // adopt first (refuses while another window holds it), then the same startAgent restore uses, on the saved session.
+  assert.match(pair, /\["adopt", "--agent", agent\.agent_id, "--window", window, "--from-window", agent\.window_id \?\? window\]/);
+  assert.match(pair, /resume: agent\.session_id \?\? null,/);
+  assert.ok(pair.indexOf('"adopt", "--agent", agent.agent_id') < pair.indexOf('resume: agent.session_id ?? null'));
+  const ext = fs.readFileSync(path.join(ROOT, 'vscode', 'src', 'extension.ts'), 'utf8');
+  assert.match(ext, /resume: \(agent\) => bus\.resumeAgent\(agent\)/);
+  assert.match(ext, /const focusLocal = \(id: string\) => bus\.focusAgent\(id\);/);
 });
 
 test('Shift+Enter in a terminal sends ESC CR (Alt+Enter), a newline in Claude and Codex, also through tmux', () => {
@@ -210,7 +225,7 @@ test('extension wires all four features', () => {
   assert.match(projectsCall, /run: bus\.runTop/);
   assert.match(projectsCall, /windowId: vscode\.env\.sessionId/);
   assert.match(projectsCall, /baseDir: baseDir\(\)/, 'baseDir is the ship-queue resolution');
-  assert.match(EXTENSION, /bus\.registry\.focus\(id\)/);
+  assert.match(EXTENSION, /bus\.focusAgent\(id\)/); // registry, then self-joined agents
 
   const attentionCall = EXTENSION.slice(attention, dashboard);
   assert.match(attentionCall, /executeCommand\("vzt-mux\.dashboard\.open"\)/);

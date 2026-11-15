@@ -36,6 +36,7 @@ import {
   projectOf,
   spawnAgent,
   SpawnDeps,
+  startAgent,
   startShell,
   terminalName,
   UNTRUSTED_MESSAGE,
@@ -91,6 +92,17 @@ const execTool: Exec = (file, args) =>
 
 /** The CLI's `worktree create` slug rule, capped at 57 so the alias `<slug>-claude` fits the bus's 64. */
 const SLUG_RE = /^[a-z0-9][a-z0-9._-]{0,56}$/;
+
+/** A bus agent row, as much of it as resuming needs. */
+export interface ResumableAgent {
+  agent_id: string;
+  alias: string;
+  kind: Kind;
+  workspace: string;
+  project?: string;
+  session_id?: string | null;
+  window_id: string | null;
+}
 
 /** Args WITHOUT the leading "vzt-agent". */
 export type Run = <T>(args: string[], cwd?: string) => Promise<T>;
@@ -161,7 +173,14 @@ export function registerAgentBus(
   outputChannel: vscode.OutputChannel,
   launch: Launch,
   cliPath: () => string | null
-): { registry: AgentRegistry; runTop: Run; refreshBus(): Promise<void>; onActiveProject(listener: () => void): void } {
+): {
+  registry: AgentRegistry;
+  runTop: Run;
+  resumeAgent(agent: ResumableAgent): Promise<void>;
+  focusAgent(id: string): boolean;
+  refreshBus(): Promise<void>;
+  onActiveProject(listener: () => void): void;
+} {
   const bus = new BusCli(cliPath);
   // The bus works from the open folder, else the project the Projects view has
   // active: the one-window project swap usually runs with no folder open.
@@ -803,9 +822,53 @@ export function registerAgentBus(
     })
   );
 
+  /**
+   * Bring back an agent that is not running anywhere (its terminal was closed,
+   * its window is gone): moved to this window and started again in its own
+   * session, resumed on its saved session (argv from `bus argv --resume`), so the
+   * conversation, alias and bus inbox carry on, as reopening a session in Orca
+   * does. Without a saved session it starts fresh under the same alias. A
+   * window that still holds it refuses (adopt), and nothing starts.
+   */
+  const resumeAgent = async (agent: ResumableAgent): Promise<void> => {
+    try {
+      if (!fs.existsSync(agent.workspace)) {
+        vscode.window.showErrorMessage(`VZT: cannot resume ${agent.alias} — its folder ${agent.workspace} is gone.`);
+        return;
+      }
+      if (!(await preflightOk(agent.workspace, "resume an agent"))) return;
+      await bus.run(["adopt", "--agent", agent.agent_id, "--window", window, "--from-window", agent.window_id ?? window], agent.workspace);
+      await startAgent(spawnDeps, {
+        kind: agent.kind,
+        alias: agent.alias,
+        cwd: agent.workspace,
+        agent_id: agent.agent_id,
+        resume: agent.session_id ?? null,
+        project: agent.project || undefined,
+      });
+      registry.focus(agent.agent_id);
+      log(`resumed ${agent.alias} (${agent.agent_id})${agent.session_id ? ` from session ${agent.session_id}` : " fresh — no saved session"}`);
+      await tree.reload();
+    } catch (err) {
+      const msg = errorText(err);
+      log(`resume ${agent.alias} failed: ${msg}`);
+      vscode.window.showErrorMessage(`VZT: could not resume ${agent.alias} — ${msg}`);
+    }
+  };
+
+  /** Show the terminal of a self-joined agent, when it runs in one of this window's terminals. */
+  const focusJoined = (id: string): boolean => {
+    const j = joined.get(id);
+    if (!j?.terminal || j.terminal.exitStatus !== undefined || !processAlive(j.agentPid)) return false;
+    j.terminal.show(false);
+    return true;
+  };
+
   return {
     registry,
     runTop,
+    resumeAgent,
+    focusAgent: (id) => registry.focus(id) || focusJoined(id),
     refreshBus: () => tree.reload(),
     onActiveProject: (listener) => {
       activeListeners.push(listener);

@@ -19,6 +19,8 @@ export interface BusAgentRow {
   wake_unconfirmed: boolean;
   unread: number;
   window_id: string | null;
+  /** The agent's claude/codex session: what a resume continues. */
+  session_id?: string | null;
 }
 
 export type Glyph = "working" | "needs-you" | "done" | "idle" | "stale" | "launching";

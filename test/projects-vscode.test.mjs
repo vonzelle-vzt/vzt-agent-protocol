@@ -325,6 +325,7 @@ async function projectsHarness({ active = '/r/app', agents = [], focusLocal = ()
   const t = await loadProjectsTree();
   const shown = [];
   const focused = [];
+  const resumed = [];
   const context = { subscriptions: [] };
   const base = tmpBase();
   const api = t.mod.registerProjects(context, {
@@ -343,13 +344,14 @@ async function projectsHarness({ active = '/r/app', agents = [], focusLocal = ()
     windowId: 'w1',
     baseDir: base,
     focusLocal: (id) => { focused.push(id); return focusLocal(id); },
+    resume: async (a) => { resumed.push(a.agent_id); },
     showProject: (root) => shown.push(root),
     activeProject: () => active,
   });
   const provider = t.views[0].provider;
   await provider.reload();
   const dispose = () => { for (const s of context.subscriptions) s.dispose(); fs.rmSync(base, { recursive: true, force: true }); };
-  return { ...t, api, provider, shown, focused, base, dispose };
+  return { ...t, api, provider, shown, focused, resumed, base, dispose };
 }
 
 test('a project row click shows that project; the active one says so', async () => {
@@ -387,6 +389,30 @@ test("a worktree row click focuses its agent, else shows its project; this windo
     assert.deepEqual(h.shown, ['/r/app', '/r/app']);
     assert.deepEqual(h.executed, []);
     assert.ok(!fs.existsSync(path.join(h.base, 'focus')), 'no cross-window focus request for our own agent');
+  } finally {
+    h.dispose();
+  }
+});
+
+test('a closed agent (running nowhere) says so, and its row resumes it here; a live one never resumes', async () => {
+  const closed = agent({ agent_id: 'gone', workspace: '/r/app', project: '/r/app', liveness: 'stale', window_id: 'old-window', session_id: 's-1' });
+  const live = agent({ agent_id: 'here', workspace: '/r/app', project: '/r/app', state: 'working', window_id: 'w1' });
+  const h = await projectsHarness({ agents: [closed, live], focusLocal: (id) => id === 'here' });
+  try {
+    const [app] = h.provider.getChildren();
+    const [main] = h.provider.getChildren(app);
+    const rows = h.provider.getChildren(main).filter((n) => n.kind === 'agent');
+    const byId = Object.fromEntries(rows.map((n) => [n.agent.agent_id, h.provider.getTreeItem(n)]));
+    assert.match(byId.gone.description, /closed · click to resume/);
+    assert.doesNotMatch(byId.here.description, /resume/);
+
+    await h.commands.get('vzt-mux.projects.focusAgent')(rows.find((n) => n.agent.agent_id === 'gone'));
+    assert.deepEqual(h.resumed, ['gone'], 'a closed agent is brought back, not a window opened');
+    assert.ok(!fs.existsSync(path.join(h.base, 'focus')), 'no cross-window focus request for a closed agent');
+
+    await h.commands.get('vzt-mux.projects.focusAgent')(rows.find((n) => n.agent.agent_id === 'here'));
+    assert.deepEqual(h.resumed, ['gone'], 'a live agent is focused, never resumed');
+    assert.ok(h.focused.includes('here'));
   } finally {
     h.dispose();
   }
