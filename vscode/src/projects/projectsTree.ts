@@ -19,7 +19,7 @@
 
 import * as vscode from "vscode";
 import { BusAgentRow, GLYPH_ICON, Glyph } from "./status";
-import { AgentNode, buildProjectTree, ProjectEntry, ProjectNode, TreeNode, WorktreeNode } from "./model";
+import { AgentNode, arrangeRoots, buildProjectTree, liveAgents, ProjectEntry, ProjectNode, TreeNode, UnregisteredNode, WorktreeNode } from "./model";
 import { claimFocus, requestFocus } from "./focus";
 import { FileEntry } from "./files";
 import { fileTreeItem, listFiles } from "./filesTree";
@@ -114,10 +114,11 @@ class ProjectsTreeProvider implements vscode.TreeDataProvider<Node> {
     if (!node) {
       if (!this.loaded) return [];
       if (!this.projects.length && !this.roots.length) return [{ kind: "import" }];
-      return this.roots;
+      return this.roots.some((r) => r.kind === "error") ? this.roots : arrangeRoots(this.roots as (ProjectNode | UnregisteredNode)[], this.active());
     }
     switch (node.kind) {
       case "unregistered":
+      case "others":
         return node.projects;
       case "project":
         return node.worktrees;
@@ -153,13 +154,25 @@ class ProjectsTreeProvider implements vscode.TreeDataProvider<Node> {
         item.tooltip = "Agents whose project is not in ~/.vzt/projects.json — add it with VZT: Add Project.";
         return item;
       }
+      case "others": {
+        const item = new vscode.TreeItem(`Other projects (${node.projects.length})`, Collapsed);
+        item.id = "others";
+        item.iconPath = glyphIcon(node.rollup) ?? new vscode.ThemeIcon("folder-library");
+        item.tooltip = "Projects with no running agent. Click one to make it active; it moves to the top.";
+        return item;
+      }
       case "project": {
         const item = new vscode.TreeItem(node.name, node.worktrees.length ? Collapsed : vscode.TreeItemCollapsibleState.None);
-        const count = node.worktrees.reduce((n, w) => n + w.agents.length, 0);
-        const parts = [this.active() === node.root ? "active" : "", count > 0 ? `${count} agents` : ""].filter(Boolean);
-        item.description = parts.length ? parts.join(" · ") : undefined;
-        item.iconPath = new vscode.ThemeIcon(node.exists ? "repo" : "warning");
-        item.tooltip = node.root;
+        const active = this.active() === node.root;
+        const live = liveAgents(node);
+        // Short, so it survives a narrow sidebar: the star marks the active one.
+        item.description = live > 0 ? `${live} running` : undefined;
+        item.iconPath = !node.exists
+          ? new vscode.ThemeIcon("warning")
+          : active
+            ? new vscode.ThemeIcon("star-full", new vscode.ThemeColor("charts.yellow"))
+            : new vscode.ThemeIcon("repo");
+        item.tooltip = active ? `${node.root} (active)` : node.root;
         item.contextValue = node.registered ? "vztProject" : "vztProjectUnregistered";
         if (node.registered) {
           item.command = { command: "vzt-mux.projects.show", title: "Show Project", arguments: [node] };
@@ -284,6 +297,17 @@ export function registerProjects(context: vscode.ExtensionContext, deps: Project
 
   context.subscriptions.push(
     vscode.commands.registerCommand("vzt-mux.projects.refresh", refresh),
+    // The view's one +: every way to start something, in one picker.
+    vscode.commands.registerCommand("vzt-mux.projects.new", async () => {
+      const items: (vscode.QuickPickItem & { command: string })[] = [
+        { label: "$(sparkle) Agent or terminal in a project", description: "Claude, Codex or a shell", command: "vzt-mux.agents.startInProject" },
+        { label: "$(git-branch) New agent workspace", description: "a worktree for a task, with an agent in it", command: "vzt-mux.agents.newWorkspace" },
+        { label: "$(repo) Add project…", description: "a folder on disk", command: "vzt-mux.projects.add" },
+        { label: "$(cloud-download) Import projects from Orca", command: "vzt-mux.projects.importOrca" },
+      ];
+      const pick = await vscode.window.showQuickPick(items, { placeHolder: "New" });
+      if (pick) await vscode.commands.executeCommand(pick.command);
+    }),
     vscode.commands.registerCommand("vzt-mux.projects.add", async () => {
       const picked = await vscode.window.showOpenDialog({
         canSelectFolders: true,

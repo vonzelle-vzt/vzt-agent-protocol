@@ -50,15 +50,19 @@ test('package contributes projects view first', () => {
   const views = PKG.contributes.views.vztShip;
   assert.equal(views[0].id, 'vztProjects');
   assert.equal(views[0].name, 'Projects');
-  // The Files view (0.12) right under it, then the existing views.
-  assert.deepEqual(views.slice(1).map((v) => v.id), ['vztFiles', 'vztShipRun', 'vztBus']);
+  // 0.14.2: the standalone Files view is gone (Files live under each worktree row).
+  assert.deepEqual(views.slice(1).map((v) => v.id), ['vztShipRun', 'vztBus']);
 });
 
-test('the Files view re-roots at the active project on every swap', () => {
-  assert.match(EXTENSION, /registerFiles\(context, \{ activeProject: \(\) => bus\.registry\.active \}\)/);
-  assert.match(EXTENSION, /bus\.onActiveProject\(\(\) => \{[^}]*files\.setRoot\(bus\.registry\.active\)/);
+test('file rows under each worktree keep their context menu; no standalone Files view', () => {
+  assert.match(EXTENSION, /registerFileCommands\(context\);/);
+  // A project swap redraws Projects and Ship Run (which shows the active project's runs).
+  assert.match(EXTENSION, /bus\.onActiveProject\(\(\) => \{\n    projects\.refresh\(\);\n    tree\.refresh\(\);\n  \}\);/);
+  assert.match(EXTENSION, /tree\.activeProject = \(\) => bus\.registry\.active;/);
+  assert.doesNotMatch(JSON.stringify(PKG.contributes), /vztFiles/);
   const cmds = PKG.contributes.commands.map((c) => c.command);
-  for (const c of ['refresh', 'openToSide', 'revealInOS', 'copyPath', 'copyRelativePath']) assert.ok(cmds.includes(`vzt-mux.files.${c}`), c);
+  for (const c of ['openToSide', 'revealInOS', 'copyPath', 'copyRelativePath']) assert.ok(cmds.includes(`vzt-mux.files.${c}`), c);
+  assert.ok(!cmds.includes('vzt-mux.files.refresh'));
 });
 
 test('package contributes workspace commands', () => {
@@ -74,20 +78,26 @@ test('package contributes workspace commands', () => {
   const titleMenu = PKG.contributes.menus['view/title'].filter((m) => m.when === 'view == vztProjects' && m.group.startsWith('navigation'));
   assert.deepEqual(
     titleMenu.map((m) => m.command).sort(),
-    ['vzt-mux.agents.newWorkspace', 'vzt-mux.dashboard.open', 'vzt-mux.projects.add', 'vzt-mux.projects.importOrca', 'vzt-mux.projects.refresh']
+    ['vzt-mux.dashboard.open', 'vzt-mux.projects.new', 'vzt-mux.projects.refresh'],
+    'one + (a picker), the dashboard and refresh; the rest is in the … menu'
   );
+  const overflow = PKG.contributes.menus['view/title'].filter((m) => m.when.startsWith('view == vztProjects') && !m.group.startsWith('navigation'));
+  assert.deepEqual(overflow.map((m) => m.command).sort(), [
+    'vzt-mux.agents.newWorkspace', 'vzt-mux.agents.startInProject', 'vzt-mux.projects.add', 'vzt-mux.projects.importOrca',
+    'vzt-mux.workspace.create', 'vzt-mux.workspace.editProjects',
+  ]);
 });
 
-test('each known worktree row in Projects holds a Files folder; file menus work in both views', () => {
+test('each known worktree row in Projects holds a Files folder with its file menus', () => {
   const tree = fs.readFileSync(path.join(ROOT, 'vscode', 'src', 'projects', 'projectsTree.ts'), 'utf8');
   assert.match(tree, /node\.known \? \[\{ kind: "files", root: node\.path \}, \.\.\.node\.agents\] : node\.agents/);
   const fileMenus = PKG.contributes.menus['view/item/context'].filter((m) => m.command.startsWith('vzt-mux.files.'));
   assert.equal(fileMenus.length, 4);
-  for (const m of fileMenus) assert.match(m.when, /view =~ \/\^vzt\(Files\|Projects\)\$\//, m.command);
+  for (const m of fileMenus) assert.match(m.when, /^view == vztProjects && /, m.command);
 });
 
 test('package version', () => {
-  assert.equal(PKG.version, '0.14.1'); // 0.14.1: a closed agent's row resumes its conversation (0.14.0: hand-started agents join the bus; Shift+Enter)
+  assert.equal(PKG.version, '0.14.2'); // 0.14.2: tidy panel — active project first, one +, no Files view (0.14.1 resume; 0.14.0 auto-join, Shift+Enter)
 });
 
 test('a closed agent is never lost: its row resumes its saved session in this window', () => {

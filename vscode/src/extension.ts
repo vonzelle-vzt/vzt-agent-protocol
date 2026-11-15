@@ -17,11 +17,11 @@ import * as vscode from "vscode";
 import * as fs from "fs";
 import * as os from "os";
 import * as path from "path";
-import { ShipTreeProvider, UnitItem } from "./shipTree";
+import { archiveSettledRuns, ShipTreeProvider, UnitItem } from "./shipTree";
 import { registerHerdrFleet } from "./herdr/fleet";
 import { registerAgentBus } from "./bus/pair";
 import { registerProjects } from "./projects/projectsTree";
-import { registerFiles } from "./projects/filesTree";
+import { registerFileCommands } from "./projects/filesTree";
 import { registerWorkspaceCommands } from "./projects/workspaceCommands";
 import { registerAttention } from "./attention/statusBar";
 import { openDashboard } from "./dashboard/panel";
@@ -575,6 +575,13 @@ function activateTrusted(context: vscode.ExtensionContext): void {
 
   context.subscriptions.push(
     vscode.commands.registerCommand("vzt-mux.refresh", () => tree.refresh()),
+    vscode.commands.registerCommand("vzt-mux.ship.clearFinished", () => {
+      const moved = archiveSettledRuns();
+      tree.refresh();
+      vscode.window.showInformationMessage(
+        moved ? `VZT: archived ${moved} unit record(s) of finished runs (units/archive).` : "VZT: no finished runs to clear."
+      );
+    }),
 
     vscode.commands.registerCommand("vzt-mux.doctor", () => {
       const r = appendDoctor(context);
@@ -724,11 +731,14 @@ function activateTrusted(context: vscode.ExtensionContext): void {
     showProject: (root) => void bus.registry.showProject(root, { reveal: true }),
     activeProject: () => bus.registry.active,
   });
-  // The Files view follows the active project, like the terminal panel.
-  const files = registerFiles(context, { activeProject: () => bus.registry.active });
+  // File rows live under each worktree in Projects; their context menu:
+  registerFileCommands(context);
+  // Ship Run shows the active project's runs only, like the terminal panel.
+  tree.activeProject = () => bus.registry.active;
+  tree.refresh();
   bus.onActiveProject(() => {
     projects.refresh();
-    files.setRoot(bus.registry.active);
+    tree.refresh();
   });
   // ~/.vzt/workspaces/<name>.code-workspace: next to the projects registry, easy to find.
   registerWorkspaceCommands(context, { run: bus.runTop, baseDir: path.join(os.homedir(), ".vzt") });

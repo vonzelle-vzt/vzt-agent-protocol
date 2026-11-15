@@ -357,11 +357,17 @@ async function projectsHarness({ active = '/r/app', agents = [], focusLocal = ()
 test('a project row click shows that project; the active one says so', async () => {
   const h = await projectsHarness({ agents: [agent({ agent_id: 'a1', workspace: '/r/app', project: '/r/app' })] });
   try {
-    const [app, zeta] = h.provider.getChildren();
+    // Active first; a project with nothing running folds under "Other projects".
+    const [app, others] = h.provider.getChildren();
+    assert.equal(others.kind, 'others');
+    assert.equal(h.provider.getTreeItem(others).label, 'Other projects (1)');
+    const [zeta] = h.provider.getChildren(others);
     const appItem = h.provider.getTreeItem(app);
-    assert.equal(appItem.description, 'active · 1 agents');
+    assert.equal(appItem.description, '1 running');
+    assert.equal(appItem.iconPath.id, 'star-full', 'the active project wears the star');
     assert.deepEqual(appItem.command, { command: 'vzt-mux.projects.show', title: 'Show Project', arguments: [app] });
-    assert.equal(h.provider.getTreeItem(zeta).description, undefined, 'only the active project is tagged');
+    assert.equal(h.provider.getTreeItem(zeta).description, undefined, 'nothing running, no description');
+    assert.equal(h.provider.getTreeItem(zeta).iconPath.id, 'repo');
 
     await h.commands.get('vzt-mux.projects.show')(zeta);
     assert.deepEqual(h.shown, ['/r/zeta']);
@@ -376,7 +382,7 @@ test("a worktree row click focuses its agent, else shows its project; this windo
   const lead = agent({ agent_id: 'a1', workspace: '/r/app-wt/feat', project: '/r/app', state: 'working' });
   const h = await projectsHarness({ active: '/r/zeta', agents: [lead] });
   try {
-    const [app] = h.provider.getChildren();
+    const app = h.provider.getChildren().find((n) => n.name === 'app');
     const [main, feat] = h.provider.getChildren(app);
     assert.equal(h.provider.getTreeItem(main).command.command, 'vzt-mux.projects.openWorktree', 'a row without agents is clickable too');
 
@@ -416,4 +422,16 @@ test('a closed agent (running nowhere) says so, and its row resumes it here; a l
   } finally {
     h.dispose();
   }
+});
+
+test('arrangeRoots: active, then running, then "Other projects"; a closed agent does not count as running', async () => {
+  const t = await loadProjectsTree();
+  const model = await import(pathToFileURL(path.join(REPO_ROOT, 'vscode', 'out', 'projects', 'model.js')).href);
+  const proj = (name, glyphs) => ({ kind: 'project', name, root: `/r/${name}`, worktrees: [{ agents: glyphs.map((g) => ({ glyph: g })) }], rollup: glyphs[0] ?? null });
+  const roots = [proj('a', []), proj('b', ['working']), proj('c', ['stale']), proj('d', ['needs-you']), { kind: 'unregistered', projects: [] }];
+  const out = model.arrangeRoots(roots, '/r/c');
+  assert.deepEqual(out.map((n) => n.name ?? n.kind), ['c', 'b', 'd', 'others', 'unregistered']);
+  assert.deepEqual(out[3].projects.map((p) => p.name), ['a']);
+  assert.equal(model.liveAgents(proj('x', ['stale', 'idle', 'working'])), 2);
+  void t;
 });

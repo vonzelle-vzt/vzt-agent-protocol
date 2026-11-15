@@ -53,6 +53,41 @@ export interface UnitRecord {
   /** The seed commit this unit's own work is measured against. */
   baseSha?: string;
   filesInScope?: string[];
+  /** The ship spec's project root (CLI 1.14+); scopes the run to that project. */
+  root?: string;
+}
+
+/** A run whose every unit is settled for this long drops out of the view. */
+export const STALE_RUN_MS = 7 * 24 * 60 * 60_000;
+
+const SETTLED: UnitState[] = ["PASS", "FAIL", "SCOPE_BREACH", "interrupted", "finished"];
+
+/** True when every unit of the run has stopped (passed, failed, finished or was interrupted). */
+export function runSettled(states: UnitState[]): boolean {
+  return states.length > 0 && states.every((s) => SETTLED.includes(s));
+}
+
+/**
+ * Which runs the view shows. A run (slug) recorded for another project is
+ * hidden while a project is active; a run with no recorded root (older CLI)
+ * stays visible. A settled run is hidden once its newest dispatch is older than
+ * STALE_RUN_MS — the 2026-08 "flow" fixture sat there as "interrupted" for months.
+ */
+export function visibleRuns(
+  units: { record: UnitRecord; state: UnitState }[],
+  opts: { active?: string; nowMs: number }
+): Set<string> {
+  const bySlug = new Map<string, { record: UnitRecord; state: UnitState }[]>();
+  for (const u of units) bySlug.set(u.record.slug, [...(bySlug.get(u.record.slug) || []), u]);
+  const out = new Set<string>();
+  for (const [slug, members] of bySlug) {
+    const root = members.find((m) => m.record.root)?.record.root;
+    if (opts.active && root && path.resolve(root) !== path.resolve(opts.active)) continue;
+    const newest = Math.max(...members.map((m) => Date.parse(m.record.dispatchedAt) || 0));
+    if (runSettled(members.map((m) => m.state)) && opts.nowMs - newest > STALE_RUN_MS) continue;
+    out.add(slug);
+  }
+  return out;
 }
 
 export function baseDir(): string {
@@ -101,9 +136,9 @@ export function deriveState(stateDir: string, key: string): UnitState {
  * dead since yesterday. "Still working" and "killed when you closed the lid"
  * looked identical, and only one of them is worth waiting for.
  */
-function hostStartedAt(): number {
+function hostStartedAt(dir: string = baseDir()): number {
   try {
-    const raw = fs.readFileSync(path.join(baseDir(), "host.json"), "utf8");
+    const raw = fs.readFileSync(path.join(dir, "host.json"), "utf8");
     const t = Date.parse(JSON.parse(raw).activatedAt);
     return Number.isFinite(t) ? t : 0;
   } catch {
@@ -232,6 +267,8 @@ export type ShipNode = WaveItem | UnitItem;
 export class ShipTreeProvider implements vscode.TreeDataProvider<ShipNode> {
   private readonly _onDidChange = new vscode.EventEmitter<ShipNode | undefined | void>();
   readonly onDidChangeTreeData = this._onDidChange.event;
+  /** The project the window has active (Projects view); its runs only. */
+  activeProject: () => string | undefined = () => undefined;
 
   refresh(): void {
     this._onDidChange.fire();
@@ -283,9 +320,11 @@ export class ShipTreeProvider implements vscode.TreeDataProvider<ShipNode> {
     };
 
     const hostAt = hostStartedAt();
-    const items = records.map(
+    const all = records.map(
       (rec) => new UnitItem(rec, stateWithDeps(stateDir, rec, verdictOf(rec.slug), hostAt))
     );
+    const shown = visibleRuns(all, { active: this.activeProject(), nowMs: Date.now() });
+    const items = all.filter((i) => shown.has(i.record.slug));
     items.sort((a, b) => {
       const t = (b.record.dispatchedAt || "").localeCompare(a.record.dispatchedAt || "");
       return t !== 0 ? t : a.record.id.localeCompare(b.record.id);
@@ -312,6 +351,50 @@ export class ShipTreeProvider implements vscode.TreeDataProvider<ShipNode> {
     }
     return grouped;
   }
+}
+
+/**
+ * Move the unit records of every settled run out of `units/` into
+ * `units/archive/` (kept, not deleted). Returns how many records moved.
+ */
+export function archiveSettledRuns(dir: string = baseDir()): number {
+  const unitDir = path.join(dir, "units");
+  const stateDir = path.join(dir, "state");
+  const archive = path.join(unitDir, "archive");
+  let files: string[];
+  try {
+    files = fs.readdirSync(unitDir).filter((f) => f.endsWith(".json"));
+  } catch {
+    return 0;
+  }
+  const records: { file: string; rec: UnitRecord }[] = [];
+  for (const file of files) {
+    try {
+      records.push({ file, rec: JSON.parse(fs.readFileSync(path.join(unitDir, file), "utf8")) as UnitRecord });
+    } catch {
+      continue;
+    }
+  }
+  const hostAt = hostStartedAt(dir);
+  const bySlug = new Map<string, { file: string; state: UnitState }[]>();
+  for (const { file, rec } of records) {
+    const verdictOf = (id: string) => {
+      const dep = records.find((r) => r.rec.slug === rec.slug && r.rec.id === id);
+      return dep ? deriveState(stateDir, dep.rec.unitKey) : undefined;
+    };
+    const state = stateWithDeps(stateDir, rec, verdictOf, hostAt);
+    bySlug.set(rec.slug, [...(bySlug.get(rec.slug) || []), { file, state }]);
+  }
+  let moved = 0;
+  for (const members of bySlug.values()) {
+    if (!runSettled(members.map((m) => m.state))) continue;
+    fs.mkdirSync(archive, { recursive: true });
+    for (const m of members) {
+      fs.renameSync(path.join(unitDir, m.file), path.join(archive, m.file));
+      moved++;
+    }
+  }
+  return moved;
 }
 
 /** The worst state among a wave's units — bad news must not hide behind a green sibling. */

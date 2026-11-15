@@ -98,7 +98,14 @@ export interface UnregisteredNode {
   rollup: Glyph | null;
 }
 
-export type TreeNode = ProjectNode | WorktreeNode | AgentNode | UnregisteredNode;
+/** Projects with nothing running and not active, folded away under one row. */
+export interface OthersNode {
+  kind: "others";
+  projects: ProjectNode[];
+  rollup: Glyph | null;
+}
+
+export type TreeNode = ProjectNode | WorktreeNode | AgentNode | UnregisteredNode | OthersNode;
 
 const byText = (a: string, b: string) => (a < b ? -1 : a > b ? 1 : 0);
 
@@ -200,4 +207,31 @@ export function buildProjectTree(
     });
   }
   return nodes;
+}
+
+/** Agents in the project that are running now (closed ones do not count). */
+export function liveAgents(p: ProjectNode): number {
+  return p.worktrees.reduce((n, w) => n + w.agents.filter((a) => a.glyph !== "stale").length, 0);
+}
+
+/**
+ * The order the Projects view shows: the active project first, then every
+ * project with a running agent (A–Z), then the rest folded under "Other
+ * projects" — with ~60 projects an A–Z list buried the one in use.
+ * Unregistered projects (stray agents) stay last.
+ */
+export function arrangeRoots(
+  roots: (ProjectNode | UnregisteredNode)[],
+  active: string | undefined
+): (ProjectNode | UnregisteredNode | OthersNode)[] {
+  const projects = roots.filter((r): r is ProjectNode => r.kind === "project");
+  const rest = roots.filter((r) => r.kind !== "project");
+  const first = projects.filter((p) => p.root === active);
+  const running = projects.filter((p) => p.root !== active && liveAgents(p) > 0);
+  const others = projects.filter((p) => p.root !== active && liveAgents(p) === 0);
+  const out: (ProjectNode | UnregisteredNode | OthersNode)[] = [...first, ...running];
+  if (others.length) {
+    out.push({ kind: "others", projects: others, rollup: rollup(others.map((p) => p.rollup).filter((g): g is Glyph => g !== null && g !== "stale")) });
+  }
+  return [...out, ...rest];
 }

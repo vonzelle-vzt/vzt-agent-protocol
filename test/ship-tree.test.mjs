@@ -73,6 +73,10 @@ function loadTree() {
 }
 
 /** Build a real ~/.vzt/vscode-mux fixture and point the provider at it. */
+// "Now" for fixtures, fixed per process so records written together sort together.
+const NOW_MS = Date.now();
+const ago = (minutes) => new Date(NOW_MS - minutes * 60_000).toISOString();
+
 function fixture(units, sentinels = {}) {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'vzt-tree-'));
   fs.mkdirSync(path.join(dir, 'units'), { recursive: true });
@@ -86,7 +90,8 @@ function fixture(units, sentinels = {}) {
       cwd: `/tmp/wt/${u.id}`,
       machineCheck: 'true',
       expect: 'exit 0',
-      dispatchedAt: u.dispatchedAt || '2026-08-01T00:00:00.000Z',
+      // Recent by default: a settled run older than 7 days is hidden (visibleRuns).
+      dispatchedAt: u.dispatchedAt || ago(60),
       ...u,
     };
     fs.writeFileSync(path.join(dir, 'units', `${rec.unitKey}.json`), JSON.stringify(rec));
@@ -100,12 +105,13 @@ function fixture(units, sentinels = {}) {
 }
 
 /** Run the provider against a fixture dir; returns the top-level nodes. */
-function render(dir) {
+function render(dir, active) {
   const prev = process.env.VZT_VSCODE_DIR;
   process.env.VZT_VSCODE_DIR = dir;
   try {
     const { ShipTreeProvider } = loadTree();
     const p = new ShipTreeProvider();
+    if (active) p.activeProject = () => active;
     const roots = p.getChildren();
     return { provider: p, roots };
   } finally {
@@ -287,11 +293,11 @@ function withHost(dir, activatedAt) {
 
 test('a unit dispatched by a DEAD host renders interrupted, not a forever-spinner', () => {
   const dir = fixture(
-    [{ id: 'u1', wave: 1, dispatchedAt: '2026-08-01T10:00:00.000Z' }],
+    [{ id: 'u1', wave: 1, dispatchedAt: ago(180) }],
     { 'run-u1': { started: true } } // started, never idled — the window was closed
   );
   try {
-    withHost(dir, '2026-08-01T12:00:00.000Z'); // this host booted two hours LATER
+    withHost(dir, ago(60)); // this host booted two hours LATER
     const { provider, roots } = render(dir);
     const u1 = provider.getChildren(roots[0])[0];
     assert.equal(u1.state, 'interrupted');
@@ -308,11 +314,11 @@ test('a unit dispatched by a DEAD host renders interrupted, not a forever-spinne
 // "any working unit is dead" and would make the tree useless during a real run.
 test('a unit dispatched by the LIVE host keeps working — no false interrupt', () => {
   const dir = fixture(
-    [{ id: 'u1', wave: 1, dispatchedAt: '2026-08-01T12:30:00.000Z' }],
+    [{ id: 'u1', wave: 1, dispatchedAt: ago(30) }],
     { 'run-u1': { started: true } }
   );
   try {
-    withHost(dir, '2026-08-01T12:00:00.000Z'); // host booted BEFORE the dispatch
+    withHost(dir, ago(60)); // host booted BEFORE the dispatch
     const { provider, roots } = render(dir);
     assert.equal(provider.getChildren(roots[0])[0].state, 'working');
   } finally {
@@ -322,12 +328,12 @@ test('a unit dispatched by the LIVE host keeps working — no false interrupt', 
 
 test('a finished verdict survives a host restart — only liveness is interrupted', () => {
   const dir = fixture(
-    [{ id: 'u1', wave: 1, dispatchedAt: '2026-08-01T10:00:00.000Z' },
-     { id: 'u2', wave: 1, dispatchedAt: '2026-08-01T10:00:00.000Z' }],
+    [{ id: 'u1', wave: 1, dispatchedAt: ago(180) },
+     { id: 'u2', wave: 1, dispatchedAt: ago(180) }],
     { 'run-u1': { status: 'PASS' }, 'run-u2': { status: 'SCOPE_BREACH' } }
   );
   try {
-    withHost(dir, '2026-08-01T12:00:00.000Z');
+    withHost(dir, ago(60));
     const { provider, roots } = render(dir);
     const byId = Object.fromEntries(provider.getChildren(roots[0]).map((k) => [k.record.id, k.state]));
     // A verdict is durable — it outlived the host that produced it. Overwriting
@@ -349,6 +355,40 @@ test('with no host heartbeat at all, nothing is marked interrupted', () => {
   try {
     const { provider, roots } = render(dir);
     assert.equal(provider.getChildren(roots[0])[0].state, 'working');
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('Ship Run shows the active project\'s runs; runs of other projects and long-settled runs are hidden', () => {
+  const old = ago(30 * 24 * 60);
+  const dir = fixture([
+    { slug: 'mine', id: 'u1', root: '/p/mine' },
+    { slug: 'theirs', id: 'u1', root: '/p/theirs' },
+    { slug: 'legacy', id: 'u1' }, // no root: an older CLI; still shown
+    { slug: 'stale', id: 'u1', dispatchedAt: old }, // settled long ago
+    { slug: 'oldbusy', id: 'u1', dispatchedAt: old }, // old but not settled: still shown
+  ], { 'stale-u1': { status: 'PASS' }, 'mine-u1': { status: 'PASS' } });
+  const slugs = (roots) => roots.map((r) => r.record?.slug ?? r.slug).sort();
+  try {
+    assert.deepEqual(slugs(render(dir, '/p/mine').roots), ['legacy', 'mine', 'oldbusy']);
+    assert.deepEqual(slugs(render(dir).roots), ['legacy', 'mine', 'oldbusy', 'theirs'], 'no active project: every project');
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('Clear Finished Runs archives only fully settled runs, keeping the records', () => {
+  const dir = fixture([
+    { slug: 'done', id: 'u1' }, { slug: 'done', id: 'u2' },
+    { slug: 'busy', id: 'u1' }, { slug: 'busy', id: 'u2' },
+  ], { 'done-u1': { status: 'PASS' }, 'done-u2': { status: 'FAIL' }, 'busy-u1': { status: 'PASS' } });
+  try {
+    const { archiveSettledRuns } = loadTree();
+    assert.equal(archiveSettledRuns(dir), 2);
+    assert.deepEqual(fs.readdirSync(path.join(dir, 'units')).filter((f) => f.endsWith('.json')).sort(), ['busy-u1.json', 'busy-u2.json']);
+    assert.deepEqual(fs.readdirSync(path.join(dir, 'units', 'archive')).sort(), ['done-u1.json', 'done-u2.json']);
+    assert.equal(archiveSettledRuns(dir), 0, 'nothing left to clear');
   } finally {
     fs.rmSync(dir, { recursive: true, force: true });
   }
