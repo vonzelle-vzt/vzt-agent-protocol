@@ -122,9 +122,9 @@ test('spawn env carries bus identity', async () => {
   await h.spawn({ kind: 'claude', alias: 'claude', cwd: '/p/app' });
   await h.spawn({ kind: 'codex', alias: 'codex', cwd: '/p/app' });
   assert.deepEqual(h.terminals[0].opts.env, {
-    VZT_BUS_AGENT: 'ag-1', VZT_BUS_KIND: 'claude', VZT_BUS_WINDOW: 'win-1', CLAUDE_CODE_DISABLE_FEEDBACK_SURVEY: '1',
+    VZT_BUS_AGENT: 'ag-1', VZT_BUS_AGENT_ID: 'ag-1', VZT_BUS_KIND: 'claude', VZT_BUS_WINDOW: 'win-1', CLAUDE_CODE_DISABLE_FEEDBACK_SURVEY: '1',
   });
-  assert.deepEqual(h.terminals[1].opts.env, { VZT_BUS_AGENT: 'ag-2', VZT_BUS_KIND: 'codex', VZT_BUS_WINDOW: 'win-1' });
+  assert.deepEqual(h.terminals[1].opts.env, { VZT_BUS_AGENT: 'ag-2', VZT_BUS_AGENT_ID: 'ag-2', VZT_BUS_KIND: 'codex', VZT_BUS_WINDOW: 'win-1' });
 });
 
 test('task is appended to prompt', async () => {
@@ -285,7 +285,7 @@ test('tmux: an agent starts in a detached session vzt-<agent_id>; no terminal un
 
   const created = h.tmuxCalls.find((a) => a.includes('new-session'));
   assert.deepEqual(created, ['-L', 'vzt-mux', '-f', CONF, 'new-session', '-d', '-s', `vzt-${r.agent_id}`, '-c', '/p/app',
-    '-e', `VZT_BUS_AGENT=${r.agent_id}`, '-e', 'VZT_BUS_KIND=claude', '-e', 'VZT_BUS_WINDOW=win-1', '-e', 'CLAUDE_CODE_DISABLE_FEEDBACK_SURVEY=1'],
+    '-e', `VZT_BUS_AGENT=${r.agent_id}`, '-e', `VZT_BUS_AGENT_ID=${r.agent_id}`, '-e', 'VZT_BUS_KIND=claude', '-e', 'VZT_BUS_WINDOW=win-1', '-e', 'CLAUDE_CODE_DISABLE_FEEDBACK_SURVEY=1'],
   'the same env a direct terminal gets');
 
   // The command — the same quoted words as a direct terminal — is typed into the shell, then Enter.
@@ -388,7 +388,8 @@ test('startShell: a plain login shell in its own session; no bus, numbered per f
   assert.deepEqual({ ...h.registry.get(a) }, { alias: 'shell', kind: 'shell', cwd: '/p/app', session: a, project: 'PROJECT(/p/app)' });
   assert.equal(h.registry.get(b).alias, 'shell-2');
   assert.deepEqual(h.calls, [], 'a shell never touches the bus');
-  assert.deepEqual(h.tmuxCalls.filter((x) => x.includes('new-session'))[0], ['-L', 'vzt-mux', '-f', CONF, 'new-session', '-d', '-s', a, '-c', '/p/app']);
+  assert.deepEqual(h.tmuxCalls.filter((x) => x.includes('new-session'))[0], ['-L', 'vzt-mux', '-f', CONF, 'new-session', '-d', '-s', a, '-c', '/p/app',
+    '-e', 'VZT_BUS_AGENT=auto', '-e', 'VZT_BUS_WINDOW=win-1'], 'an agent typed into the shell joins the bus by itself');
   assert.ok(!h.tmuxCalls.some((x) => x.includes('send-keys')), 'nothing is typed into a shell');
   assert.deepEqual(h.registry.saved().agents, [], 'not a bus agent');
 

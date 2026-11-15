@@ -231,11 +231,82 @@ export function doctor({ sqlite }) {
   };
 }
 
+// ---------- self-joined agents (VZT_BUS_AGENT=auto) ----------
+
+// A VS Code window exports VZT_BUS_AGENT=auto (and VZT_BUS_WINDOW) to every
+// terminal, so claude/codex started there by hand joins the bus the way an
+// Orca pane's agent joins Orca. Agents the extension starts itself carry their
+// id in VZT_BUS_AGENT_ID, which wins.
+export const AUTO = 'auto';
+
+/** [{pid, ppid, comm}] of every process; [] when ps fails. */
+export function psTable() {
+  try {
+    const out = execFileSync('ps', ['-A', '-o', 'pid=,ppid=,comm='], { encoding: 'utf8', maxBuffer: 16 * 1024 * 1024 });
+    return out.split('\n').map((l) => /^\s*(\d+)\s+(\d+)\s+(.+?)\s*$/.exec(l)).filter(Boolean)
+      .map((m) => ({ pid: Number(m[1]), ppid: Number(m[2]), comm: m[3] }));
+  } catch {
+    return [];
+  }
+}
+
+/** `start` and its ancestors, nearest first, each with its command name. */
+export function ancestry(start, rows) {
+  const byPid = new Map(rows.map((r) => [r.pid, r]));
+  const chain = [];
+  for (let pid = start, n = 0; pid > 1 && n < 64; n += 1) {
+    const r = byPid.get(pid);
+    if (!r) break;
+    chain.push(r);
+    pid = r.ppid;
+  }
+  return chain;
+}
+
+/** The nearest claude/codex process above the caller: {pid, kind} or undefined. */
+export function agentProcess(chain) {
+  for (const r of chain) {
+    const name = path.basename(r.comm).replace(/^-/, '');
+    if (name === 'claude' || name === 'codex') return { pid: r.pid, kind: name };
+  }
+  return undefined;
+}
+
+/** The caller's agent_id: VZT_BUS_AGENT_ID, an explicit VZT_BUS_AGENT, or (auto) its process tree. */
+export function callerAgent(store, env = process.env, chain = () => ancestry(process.pid, psTable())) {
+  if (env.VZT_BUS_AGENT_ID) return env.VZT_BUS_AGENT_ID;
+  const v = env.VZT_BUS_AGENT;
+  if (v !== AUTO) return v;
+  const a = store.agentByPids(chain().map((r) => r.pid));
+  return a ? a.agent_id : undefined;
+}
+
 // ---------- hook ----------
+
+// Register (or find) the self-joined agent behind this hook. Undefined when
+// the hook does not run under claude/codex or the window is unknown.
+function autoJoin(store, input) {
+  const window = process.env.VZT_BUS_WINDOW;
+  if (!window) return undefined;
+  const proc = agentProcess(ancestry(process.ppid, psTable()));
+  if (!proc) return undefined;
+  const cwd = typeof input.cwd === 'string' && fs.existsSync(input.cwd) ? input.cwd : process.cwd();
+  const workspace = resolveWorkspace(cwd);
+  const r = store.autoRegister({
+    workspace,
+    project: resolveProject(cwd),
+    base: path.basename(workspace),
+    kind: proc.kind,
+    window,
+    sessionId: typeof input.session_id === 'string' ? input.session_id : undefined,
+    agentPid: proc.pid,
+  });
+  return { agent_id: r.agent_id, alias: r.alias, kind: proc.kind, fresh: !r.reused };
+}
 
 async function runHook(event, io) {
   // Exits 0 ALWAYS: a broken bus must never wedge an agent.
-  const agentId = process.env.VZT_BUS_AGENT;
+  let agentId = process.env.VZT_BUS_AGENT_ID || process.env.VZT_BUS_AGENT;
   if (!agentId) return 0;
   try {
     if (process.env.ORCA_TERMINAL_HANDLE) {
@@ -253,8 +324,21 @@ async function runHook(event, io) {
     const { openStore } = await loadStore();
     const store = openStore();
     try {
-      const kind = process.env.VZT_BUS_KIND || undefined;
-      const { block, unread } = store.beat(agentId, event, input, kind);
+      let kind = process.env.VZT_BUS_KIND || undefined;
+      let joined;
+      if (agentId === AUTO) {
+        joined = autoJoin(store, input);
+        if (!joined) return 0;
+        agentId = joined.agent_id;
+        kind = joined.kind;
+      }
+      const { block, unread } = store.beat(agentId, event, input, kind, { startIdle: !!joined });
+      if (joined && event === 'SessionStart') {
+        // Tell the agent it is on the bus, as a spawned agent's first prompt does.
+        io.out.write(JSON.stringify({
+          hookSpecificOutput: { hookEventName: 'SessionStart', additionalContext: BOOTSTRAP_PROMPT(joined.alias) },
+        }) + '\n');
+      }
       if (block) {
         io.out.write(JSON.stringify({
           decision: 'block',
@@ -331,7 +415,7 @@ export async function main(argv, io = { out: process.stdout, err: process.stderr
     let store;
     try {
       store = openStore();
-      const me = process.env.VZT_BUS_AGENT;
+      const me = callerAgent(store);
       const result = await runVerb(verb, values, store, me, sleepMs);
       if (result && result.exitCode) {
         io.err.write(result.message + '\n');

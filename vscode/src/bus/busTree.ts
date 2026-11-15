@@ -60,12 +60,12 @@ export class BusTreeProvider implements vscode.TreeDataProvider<Node> {
   async reload(): Promise<void> {
     const cwd = this.cwd();
     if (!cwd) {
-      this.error = "Open a folder to use the agent bus.";
+      this.error = "Click a project in Projects to see its agents.";
     } else {
       try {
         const [a, i] = await Promise.all([
-          this.bus.run<{ agents: BusAgent[] }>(["agents"], cwd),
-          this.bus.run<{ threads: BusThread[] }>(["inbox"], cwd),
+          this.bus.run<{ agents: BusAgent[] }>(["agents", "--project"], cwd),
+          this.bus.run<{ threads: BusThread[] }>(["inbox", "--project"], cwd),
         ]);
         this.agents = a.agents || [];
         this.threads = i.threads || [];

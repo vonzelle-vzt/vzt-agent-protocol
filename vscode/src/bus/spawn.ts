@@ -208,6 +208,8 @@ export async function startAgent(
 
   const env: Record<string, string> = {
     VZT_BUS_AGENT: agent_id,
+    // Wins over VZT_BUS_AGENT=auto, which the window exports to every terminal.
+    VZT_BUS_AGENT_ID: agent_id,
     VZT_BUS_KIND: kind,
     VZT_BUS_WINDOW: windowId,
     ...(kind === "claude" ? { CLAUDE_CODE_DISABLE_FEEDBACK_SURVEY: "1" } : {}),
@@ -261,7 +263,9 @@ export async function startShell(deps: SpawnDeps, cwd: string): Promise<string> 
   let alias = "shell";
   for (let n = 2; taken.has(alias); n++) alias = `shell-${n}`;
   const session = shellSession();
-  await tmux.newSession(session, cwd, ideEnv(deps, cwd)); // a claude typed here reaches the IDE too
+  // A claude typed here reaches the IDE too, and joins the bus by itself
+  // (VZT_BUS_AGENT=auto), like one typed into any other terminal of the window.
+  await tmux.newSession(session, cwd, { ...ideEnv(deps, cwd), VZT_BUS_AGENT: "auto", VZT_BUS_WINDOW: deps.windowId });
   deps.registry.set(session, { alias, kind: "shell", cwd, session, project });
   return session;
 }

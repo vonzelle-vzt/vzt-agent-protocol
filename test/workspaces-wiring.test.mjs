@@ -87,7 +87,26 @@ test('each known worktree row in Projects holds a Files folder; file menus work 
 });
 
 test('package version', () => {
-  assert.equal(PKG.version, '0.13.0'); // 0.13.0: each worktree row holds a Files folder in the Projects view
+  assert.equal(PKG.version, '0.14.0'); // 0.14.0: hand-started agents join the bus; Shift+Enter is a newline in agents
+});
+
+test('Shift+Enter in a terminal sends ESC CR (Alt+Enter), a newline in Claude and Codex, also through tmux', () => {
+  const kb = (PKG.contributes.keybindings || []).find((k) => k.key === 'shift+enter');
+  assert.ok(kb, 'shift+enter keybinding contributed');
+  assert.equal(kb.command, 'workbench.action.terminal.sendSequence');
+  assert.deepEqual(kb.args, { text: '\u001b\r' });
+  assert.equal(kb.when, 'terminalFocus');
+});
+
+test('every terminal of the window carries VZT_BUS_AGENT=auto and the window id; the bus works with no folder open', () => {
+  const pair = fs.readFileSync(path.join(ROOT, 'vscode', 'src', 'bus', 'pair.ts'), 'utf8');
+  assert.match(pair, /environmentVariableCollection\.replace\("VZT_BUS_AGENT", "auto"\)/);
+  assert.match(pair, /environmentVariableCollection\.replace\("VZT_BUS_WINDOW", window\)/);
+  assert.match(pair, /const busCwd = \(\) => workspaceCwd\(\) \?\? activeRoot\(\);/);
+  assert.match(pair, /new BusTreeProvider\(bus, busCwd\)/);
+  assert.match(pair, /const pair = async \(\) => \{\n    const cwd = busCwd\(\);/);
+  const tree = fs.readFileSync(path.join(ROOT, 'vscode', 'src', 'bus', 'busTree.ts'), 'utf8');
+  assert.match(tree, /\["agents", "--project"\]/);
 });
 
 test('terminal moves are tracked from tab events, and a closed tab only clears a still-live one, later', () => {

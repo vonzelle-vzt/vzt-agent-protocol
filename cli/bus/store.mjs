@@ -10,7 +10,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { WAKE_LINE } from '../agent-argv.mjs';
 
-export const SCHEMA_VERSION = 2;
+export const SCHEMA_VERSION = 3;
 export const LEASE_TTL_MS = 30_000;
 export const NEVER_STARTED_MS = 90_000;
 export const VISIBILITY_TIMEOUT_MS = 300_000;
@@ -69,6 +69,7 @@ CREATE TABLE agents (
   registered_ms INTEGER NOT NULL,
   session_started_ms INTEGER,
   wake_unconfirmed INTEGER NOT NULL DEFAULT 0,
+  agent_pid INTEGER,
   UNIQUE (workspace, alias)
 );
 CREATE TABLE messages (
@@ -128,6 +129,13 @@ UPDATE agents SET project = workspace WHERE project = '';
 CREATE INDEX agents_project ON agents (project, alias);
 `;
 
+// v2 -> v3: agents gain agent_pid, the claude/codex process of an agent that
+// joined by itself (started by hand in a VS Code terminal, VZT_BUS_AGENT=auto).
+// Its verbs find their agent by walking up their own process tree to it.
+const MIGRATE_V2_V3 = `
+ALTER TABLE agents ADD COLUMN agent_pid INTEGER;
+`;
+
 function sleepMs(ms) {
   Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms);
 }
@@ -185,7 +193,8 @@ export class Store {
       const v = this.get('PRAGMA user_version').user_version;
       if (v === SCHEMA_VERSION) return;
       if (v === 0) this.db.exec(SCHEMA);
-      else if (v === 1) this.db.exec(MIGRATE_V1_V2);
+      else if (v === 1) { this.db.exec(MIGRATE_V1_V2); this.db.exec(MIGRATE_V2_V3); }
+      else if (v === 2) this.db.exec(MIGRATE_V2_V3);
       else throw new BusError(2, `bus.db schema version ${v} is newer than this vzt-agent (${SCHEMA_VERSION})`);
       this.db.exec(`PRAGMA user_version = ${SCHEMA_VERSION}`);
     });
@@ -292,6 +301,66 @@ export class Store {
       this.event('agent_registered', { agent_id: id, to: 'launching', detail: { window, reused: false } });
       return { agent_id: id, alias, workspace, project, reused: false };
     });
+  }
+
+  // An agent that joined by itself: claude/codex started by hand in a VS Code
+  // terminal whose window exported VZT_BUS_AGENT=auto. The same session keeps
+  // its agent (every hook of the session lands here); a new session takes the
+  // first alias `<base>`, `<base>-2`, ... that no live agent of the project
+  // holds and that is not already this workspace's row for another kind.
+  autoRegister({ workspace, project = workspace, base, kind, window, sessionId, agentPid }) {
+    if (!KINDS.includes(kind)) throw usage(`--kind must be one of ${KINDS.join('|')}`);
+    if (!window) throw usage('--window is required');
+    const clean = (base || 'agent').replace(/[^A-Za-z0-9._-]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 48) || 'agent';
+    return this.tx(() => {
+      const now = this.nowMs();
+      const mine = sessionId ? this.get('SELECT * FROM agents WHERE session_id = ? AND kind = ? ORDER BY registered_ms DESC LIMIT 1', sessionId, kind) : undefined;
+      if (mine) {
+        // The hook's VZT_BUS_WINDOW is the window the terminal started in; after
+        // a reload the new window adopts the agent and leases it, and a later
+        // hook must not pull it back. Only an unleased agent follows the hook.
+        if (mine.agent_pid !== (agentPid ?? null)) this.run('UPDATE agents SET agent_pid = ? WHERE agent_id = ?', opt(agentPid), mine.agent_id);
+        if (mine.window_id !== window && mine.lease_expires_ms <= now) {
+          this.run('UPDATE agents SET window_id = ?, lease_expires_ms = ? WHERE agent_id = ?', window, now + LEASE_TTL_MS, mine.agent_id);
+        }
+        return { agent_id: mine.agent_id, alias: mine.alias, reused: true };
+      }
+      for (let n = 1; n < 100; n += 1) {
+        const alias = n === 1 ? `${clean}-${kind}` : `${clean}-${kind}-${n}`;
+        const live = this.get('SELECT 1 FROM agents WHERE project = ? AND alias = ? AND lease_expires_ms > ? LIMIT 1', project, alias, now);
+        if (live) continue;
+        const row = this.agentByAlias(workspace, alias);
+        if (row && row.kind !== kind) continue;
+        if (row) {
+          this.run(
+            `UPDATE agents SET project = ?, window_id = ?, terminal_pid = NULL, agent_pid = ?, session_id = ?, lease_expires_ms = ?,
+               state = 'launching', state_ts_ms = ?, registered_ms = ?, session_started_ms = NULL, wake_unconfirmed = 0 WHERE agent_id = ?`,
+            project, window, opt(agentPid), opt(sessionId), now + LEASE_TTL_MS, now, now, row.agent_id,
+          );
+          this.event('agent_registered', { agent_id: row.agent_id, from: row.state, to: 'launching', detail: { window, reused: true, auto: true } });
+          return { agent_id: row.agent_id, alias, reused: true };
+        }
+        const id = randomUUID();
+        this.run(
+          `INSERT INTO agents (agent_id, workspace, project, alias, kind, session_id, window_id, agent_pid, lease_expires_ms,
+             state, state_ts_ms, created_ms, registered_ms) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'launching', ?, ?, ?)`,
+          id, workspace, project, alias, kind, opt(sessionId), window, opt(agentPid), now + LEASE_TTL_MS, now, now, now,
+        );
+        this.event('agent_registered', { agent_id: id, to: 'launching', detail: { window, reused: false, auto: true } });
+        return { agent_id: id, alias, reused: false };
+      }
+      throw new BusError(4, `no free alias for ${clean}-${kind}`);
+    });
+  }
+
+  // The self-joined agent whose claude/codex process is one of `pids` (the
+  // caller's ancestors, nearest first): the nearest match wins.
+  agentByPids(pids) {
+    for (const pid of pids) {
+      const a = this.get('SELECT * FROM agents WHERE agent_pid = ? ORDER BY registered_ms DESC LIMIT 1', pid);
+      if (a) return a;
+    }
+    return undefined;
   }
 
   // Hand an agent to a new window (the same VS Code window after a reload or a
@@ -566,7 +635,11 @@ export class Store {
 
   // Lifecycle beat from an agent hook. Returns {block, unread}; block is only
   // ever true for a Claude Stop with stop_hook_active=false and unread mail.
-  beat(agentId, event, input = {}, kind) {
+  // startIdle: a self-joined agent (started by hand) waits at its prompt after
+  // SessionStart, so it is idle and wakeable at once; a spawned one always
+  // starts on its bootstrap prompt and is working. A prompt that does follow
+  // (claude started with one) makes it working again via UserPromptSubmit.
+  beat(agentId, event, input = {}, kind, { startIdle = false } = {}) {
     if (!HOOK_EVENTS.includes(event)) throw usage(`unknown hook event ${event}`);
     return this.tx(() => {
       const a = this.requireAgent(agentId);
@@ -574,7 +647,8 @@ export class Store {
       const effectiveKind = kind || a.kind;
       const sessionId = typeof input.session_id === 'string' ? input.session_id : a.session_id;
       if (event === 'SessionStart') {
-        this.setAgentState(a, 'working', { session_started_ms: now, session_id: opt(sessionId) });
+        if (startIdle) this.setAgentState(a, 'idle', { session_started_ms: now, session_id: opt(sessionId), last_stop_ts_ms: now });
+        else this.setAgentState(a, 'working', { session_started_ms: now, session_id: opt(sessionId) });
         return { block: false, unread: 0 };
       }
       if (event === 'PermissionRequest') {

@@ -21,6 +21,7 @@ import * as fs from "fs";
 import * as os from "os";
 import * as path from "path";
 import * as vscode from "vscode";
+import { BusAgentRow, candidates, hostOf, processAlive } from "./autojoin";
 import { BusCli, BusCliError } from "./busCli";
 import { BusTreeProvider } from "./busTree";
 import { claudeIdePort } from "./ide";
@@ -72,7 +73,7 @@ interface SavedState {
 function tmuxEnv(): NodeJS.ProcessEnv {
   const env: NodeJS.ProcessEnv = {};
   for (const [k, v] of Object.entries(process.env)) {
-    if (/^(ELECTRON_|VSCODE_)/.test(k) || /^(VZT_BUS_AGENT|VZT_BUS_KIND|VZT_BUS_WINDOW|TMUX|TMUX_PANE)$/.test(k)) continue;
+    if (/^(ELECTRON_|VSCODE_)/.test(k) || /^(VZT_BUS_AGENT|VZT_BUS_AGENT_ID|VZT_BUS_KIND|VZT_BUS_WINDOW|TMUX|TMUX_PANE)$/.test(k)) continue;
     env[k] = v;
   }
   return env;
@@ -162,9 +163,19 @@ export function registerAgentBus(
   cliPath: () => string | null
 ): { registry: AgentRegistry; runTop: Run; refreshBus(): Promise<void>; onActiveProject(listener: () => void): void } {
   const bus = new BusCli(cliPath);
-  const tree = new BusTreeProvider(bus, workspaceCwd);
+  // The bus works from the open folder, else the project the Projects view has
+  // active: the one-window project swap usually runs with no folder open.
+  let activeRoot: () => string | undefined = () => undefined;
+  const busCwd = () => workspaceCwd() ?? activeRoot();
+  const tree = new BusTreeProvider(bus, busCwd);
   const view = vscode.window.createTreeView("vztBus", { treeDataProvider: tree });
   const window = vscode.env.sessionId;
+  // Every terminal of this window: a claude/codex started there by hand joins
+  // the bus from its own hooks (autojoin.ts), as an Orca pane's agent joins Orca.
+  // A spawned agent carries its id in VZT_BUS_AGENT_ID, which wins.
+  context.environmentVariableCollection.description = "VZT: agents started here join the agent bus";
+  context.environmentVariableCollection.replace("VZT_BUS_AGENT", "auto");
+  context.environmentVariableCollection.replace("VZT_BUS_WINDOW", window);
   const runTop: Run = (args, cwd) => bus.runTop(args, cwd);
   const log = (line: string) => outputChannel.appendLine(`[bus] ${line}`);
 
@@ -230,6 +241,7 @@ export function registerAgentBus(
     }
   );
   registry.active = context.workspaceState.get<string>(ACTIVE_KEY);
+  activeRoot = () => (registry.active && fs.existsSync(registry.active) ? registry.active : undefined);
   // The agent_ids of the last pair, so a second pair focuses it instead of
   // registering duplicates.
   let paired: { claude: string; codex: string } | undefined;
@@ -257,6 +269,70 @@ export function registerAgentBus(
   let lastPollError = "";
   let lastTmuxError = "";
 
+  // --- self-joined agents: started by hand in this window's terminals. Kept
+  // apart from the registry (the project swap never disposes or kills them);
+  // leased and woken like spawned agents while their process lives.
+  interface Joined {
+    alias: string;
+    agentPid: number;
+    /** The terminal shell or tmux pane pid above the agent: its lease pid. */
+    pid: number;
+    terminal?: vscode.Terminal;
+    session?: string;
+  }
+  const joined = new Map<string, Joined>();
+  /** Agent pids found in no terminal of this window, and when to look again. */
+  const notOurs = new Map<number, number>();
+  let joinTick = 0;
+
+  const syncJoined = async (cwd: string, panes: Map<string, number> | undefined) => {
+    const rows = (await bus.run<{ agents: BusAgentRow[] }>(["agents", "--all"], cwd)).agents || [];
+    const live = candidates(rows, (id) => !!registry.get(id), processAlive);
+    const byId = new Map(live.map((r) => [r.agent_id, r]));
+    for (const [id, j] of joined) {
+      const row = byId.get(id);
+      const gone =
+        !row ||
+        row.agent_pid !== j.agentPid ||
+        (j.terminal && j.terminal.exitStatus !== undefined) ||
+        (j.session !== undefined && panes !== undefined && !panes.has(j.session));
+      if (gone) {
+        joined.delete(id);
+        log(`${j.alias}: self-joined agent ended — forgotten`);
+      }
+    }
+    const now = Date.now();
+    for (const [pid, until] of notOurs) if (until <= now) notOurs.delete(pid);
+    const fresh = live.filter((r) => !joined.has(r.agent_id) && !notOurs.has(r.agent_pid as number));
+    if (!fresh.length) return;
+    const [terminals, ps] = await Promise.all([pidTerminals(), psRows()]);
+    for (const r of fresh) {
+      const agentPid = r.agent_pid as number;
+      const host = hostOf(agentPid, terminals.map((t) => t.pid), panes, ps);
+      if (!host) {
+        notOurs.set(agentPid, now + 30_000);
+        continue;
+      }
+      if (r.window_id !== window) {
+        try {
+          await bus.run(["adopt", "--agent", r.agent_id, "--window", window, "--from-window", r.window_id ?? window], cwd);
+        } catch (err) {
+          notOurs.set(agentPid, now + 10_000);
+          log(`${r.alias}: runs here but another window holds it — ${errorText(err)}`);
+          continue;
+        }
+      }
+      joined.set(r.agent_id, {
+        alias: r.alias,
+        agentPid,
+        pid: host.pid,
+        ...("terminal" in host ? { terminal: terminals[host.terminal].terminal } : { session: host.session }),
+      });
+      log(`${r.alias}: joined the bus by itself (pid ${agentPid}) — this window leases and wakes it`);
+      void tree.reload();
+    }
+  };
+
   // --- poller: never more than one tick in flight (setTimeout chain, not setInterval)
   let stopped = false;
   let timer: ReturnType<typeof setTimeout> | undefined;
@@ -264,14 +340,16 @@ export function registerAgentBus(
   const tick = async () => {
     // lease and wake-plan are keyed by window, not workspace: any folder works
     // as the CLI's cwd, including a worktree the window opened after start.
-    const cwd = workspaceCwd() ?? registry.entries().next().value?.[1].cwd;
+    const cwd = workspaceCwd() ?? registry.entries().next().value?.[1].cwd ?? activeRoot() ?? os.homedir();
     try {
-      if (cwd && registry.size) {
+      // Self-joined agents are looked for every other tick (3 s, far inside the 30 s lease).
+      const lookForJoined = joinTick++ % 2 === 0;
+      if (registry.size || joined.size || lookForJoined) {
         // Snapshot BEFORE listing panes: an entry added after the listing must
         // not look like one whose session ended.
         const snapshot = [...registry.entries()];
         let panes: Map<string, number> | undefined;
-        if (tmux && snapshot.some(([, e]) => e.session)) {
+        if (tmux && (lookForJoined || joined.size || snapshot.some(([, e]) => e.session))) {
           try {
             panes = await tmux.panePids();
             lastTmuxError = "";
@@ -287,15 +365,31 @@ export function registerAgentBus(
           registry.delete(id);
           log(`${entry.alias}: its tmux session ${entry.session} ended — forgotten`);
         }
+        if (lookForJoined) {
+          try {
+            await syncJoined(cwd, panes);
+          } catch (err) {
+            log(`looking for self-joined agents failed: ${errorText(err)}`);
+          }
+        }
+        for (const [id, j] of joined) if (processAlive(j.agentPid)) pairs.push(`${id}:${j.pid}`);
         if (pairs.length) await bus.run(["lease", "--window", window, "--agents", pairs.join(",")], cwd);
+        if (!registry.size && !joined.size) {
+          if (view.visible) await tree.reload();
+          lastPollError = "";
+          return;
+        }
 
         const plan = await bus.run<WakeAction[]>(["wake-plan", "--window", window], cwd);
         for (const action of plan) {
           const owned = registry.get(action.agent_id);
-          if (!owned || owned.kind === "shell") continue; // not launched by this extension host — never type blind
+          const self = owned ? undefined : joined.get(action.agent_id);
+          // Neither launched nor hosted by this window, or its process is gone — never type blind.
+          if (owned?.kind === "shell" || (!owned && !(self && processAlive(self.agentPid)))) continue;
           // A detached agent is woken through its session; an attached one too
           // (the client is only a view). A legacy agent through its terminal.
-          const sink = owned.session ? tmux?.sink(owned.session) : owned.terminal;
+          const host = owned ?? self;
+          const sink = host?.session ? tmux?.sink(host.session) : host?.terminal;
           if (!sink) continue;
           const typed = await executeWakeAction(action, sink, sleep);
           if (!typed) {
@@ -340,7 +434,7 @@ export function registerAgentBus(
 
   // --- pair
   const pair = async () => {
-    const cwd = workspaceCwd();
+    const cwd = busCwd();
     if (!cwd) {
       vscode.window.showErrorMessage("VZT: open the project folder first — the bus is scoped to its git workspace.");
       return;
@@ -547,16 +641,21 @@ export function registerAgentBus(
       if (!cwd) {
         const folders = vscode.workspace.workspaceFolders || [];
         if (!folders.length) {
-          vscode.window.showErrorMessage("VZT: open the project folder first — the bus is scoped to its git workspace.");
-          return;
+          // No folder open: the active project (the one-window project swap).
+          cwd = activeRoot();
+          if (!cwd) {
+            vscode.window.showErrorMessage("VZT: click a project in Projects first (or open its folder) — the bus is scoped to its git workspace.");
+            return;
+          }
+        } else {
+          cwd = (
+            await vscode.window.showQuickPick(
+              folders.map((f) => ({ label: f.name, description: f.uri.fsPath, cwd: f.uri.fsPath })),
+              { placeHolder: "Folder for the new agent" }
+            )
+          )?.cwd;
+          if (!cwd) return;
         }
-        cwd = (
-          await vscode.window.showQuickPick(
-            folders.map((f) => ({ label: f.name, description: f.uri.fsPath, cwd: f.uri.fsPath })),
-            { placeHolder: "Folder for the new agent" }
-          )
-        )?.cwd;
-        if (!cwd) return;
       }
       const start = await pickStart(path.basename(cwd), false);
       if (!start || start === "worktree") return;

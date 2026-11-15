@@ -129,7 +129,7 @@ function send(f, fromId, to, extra = [], cwd) {
     { env: { VZT_BUS_DIR: f.bus, VZT_BUS_AGENT: fromId }, cwd });
 }
 
-test('migrates v1 db to v2', () => {
+test('migrates v1 db to v3', () => {
   const dir = tmp('vzt-bus-v1-');
   const ws = repo('vzt-proj-v1-');
   const db = new DatabaseSync(path.join(dir, 'bus.db'));
@@ -141,20 +141,21 @@ test('migrates v1 db to v2', () => {
 
   const s = openStore({ dir });
   try {
-    assert.equal(s.get('PRAGMA user_version').user_version, 2);
+    assert.equal(s.get('PRAGMA user_version').user_version, 3);
     const row = s.agent('a1');
+    assert.equal(row.agent_pid, null);
     assert.equal(row.project, ws);
     assert.equal(row.project, row.workspace);
     assert.ok(s.get("SELECT 1 AS x FROM sqlite_master WHERE type = 'index' AND name = 'agents_project'"));
   } finally {
     s.close();
   }
-  // Re-opening a v2 DB is a no-op; a newer version is refused.
+  // Re-opening a v3 DB is a no-op; a newer version is refused.
   openStore({ dir }).close();
   const db2 = new DatabaseSync(path.join(dir, 'bus.db'));
-  db2.exec('PRAGMA user_version = 3');
+  db2.exec('PRAGMA user_version = 4');
   db2.close();
-  assert.throws(() => openStore({ dir }), /schema version 3 is newer/);
+  assert.throws(() => openStore({ dir }), /schema version 4 is newer/);
 });
 
 test('project is the main checkout', () => {
