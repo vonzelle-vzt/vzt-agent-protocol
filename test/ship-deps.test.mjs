@@ -94,6 +94,29 @@ test('a unit worktree contains the BARRIER\'s work (the bug: it used to be empty
   }
 });
 
+test('a dependency that COMMITS its work still seeds its dependents (the bug: diffing against the unit\'s own HEAD saw nothing)', () => {
+  const { tmp, muxDir, specPath } = scaffold();
+  try {
+    dispatch(specPath, muxDir);
+    // The barrier's agent does what a brief often says: write AND commit.
+    fs.writeFileSync(path.join(wt(muxDir, 'u0'), 'types.txt'), 'export type T = 1\n');
+    git(wt(muxDir, 'u0'), 'add', '-A');
+    git(wt(muxDir, 'u0'), 'commit', '-qm', 'contract');
+    // u1 commits its own work too, on top of its seed.
+    dispatch(specPath, muxDir);
+    fs.writeFileSync(path.join(wt(muxDir, 'u1'), 'a.txt'), 'A\n');
+    git(wt(muxDir, 'u1'), 'add', '-A');
+    git(wt(muxDir, 'u1'), 'commit', '-qm', 'a');
+    dispatch(specPath, muxDir);
+
+    assert.equal(fs.readFileSync(path.join(wt(muxDir, 'u1'), 'types.txt'), 'utf8'), 'export type T = 1\n', 'u1 lost the barrier\'s committed contract');
+    assert.ok(fs.existsSync(path.join(wt(muxDir, 'u2'), 'a.txt')), 'u2 lost u1\'s committed work');
+    assert.ok(fs.existsSync(path.join(wt(muxDir, 'u2'), 'types.txt')), 'u2 lost the barrier\'s committed work');
+  } finally {
+    fs.rmSync(tmp, { recursive: true, force: true });
+  }
+});
+
 test('dependencies are seeded TRANSITIVELY (u2 gets u1\'s work AND the barrier\'s)', () => {
   const { tmp, muxDir, specPath } = scaffold();
   try {
@@ -189,6 +212,35 @@ test('the prompt tells a dependent which files are its dependencies\' and off-li
     assert.match(p, /ALREADY IN THIS WORKTREE/);
     assert.match(p, /u0/);
     assert.match(p, /scope breach/i);
+  } finally {
+    fs.rmSync(tmp, { recursive: true, force: true });
+  }
+});
+
+test('the integration gate merges COMMITTED unit work and tests it together (the bug: "0 unit(s) merged … PASS" on bare HEAD)', () => {
+  const { tmp, muxDir, specPath } = scaffold();
+  try {
+    // The gate passes only when all three units' files are in the merged tree.
+    const text = fs.readFileSync(specPath, 'utf8').replace('"machineCheck": "true",\n    "expect": "exit 0"\n  }\n}',
+      '"machineCheck": "test -f types.txt && test -f a.txt && test -f b.txt",\n    "expect": "exit 0"\n  }\n}');
+    assert.notEqual(text, fs.readFileSync(specPath, 'utf8'), 'fixture: integration check rewritten');
+    fs.writeFileSync(specPath, text);
+    const watch = (extra = []) => {
+      try {
+        return execFileSync(process.execPath, [CLI, 'ship-watch', specPath, '--mux', 'vscode', '--timeout-ms', '2000', ...extra], {
+          encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'],
+          env: { ...process.env, VZT_VSCODE_DIR: muxDir, VZT_VSCODE_DRAIN_GRACE_MS: '50', VZT_START_GRACE_MS: '100' },
+        });
+      } catch (e) { return `${e.stdout || ''}${e.stderr || ''}`; }
+    };
+    dispatch(specPath, muxDir); // all three worktrees exist
+    for (const [id, file] of [['u0', 'types.txt'], ['u1', 'a.txt'], ['u2', 'b.txt']]) {
+      fs.writeFileSync(path.join(wt(muxDir, id), file), `${file}\n`);
+      git(wt(muxDir, id), 'add', '-A');
+      git(wt(muxDir, id), 'commit', '-qm', `work ${id}`);
+    }
+    const out = watch(['--resume']);
+    assert.match(out, /integration gate … PASS ✅ — 3 unit\(s\) merged/, out);
   } finally {
     fs.rmSync(tmp, { recursive: true, force: true });
   }

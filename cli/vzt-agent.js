@@ -1322,7 +1322,7 @@ function seedFromDeps(be, spec, u, wtPath) {
     try { ref = be.resolve(spec, dep); } catch { /* not dispatched yet */ }
     if (!ref || !ref.path || !fs.existsSync(ref.path) || path.resolve(ref.path) === path.resolve(wtPath)) continue;
     let patch = '';
-    try { patch = captureWorktreePatch(ref.path); } catch { /* unreadable worktree */ }
+    try { patch = captureWorktreePatch(ref.path, auditBase(ref.path, spec, ref)); } catch { /* unreadable worktree */ }
     if (!patch.trim()) continue;
     // Seeding must be IDEMPOTENT. ensureWorktree deliberately reuses a worktree
     // across re-dispatches, so a unit corrected and re-run would meet its own
@@ -2525,8 +2525,14 @@ function verifyAndRecord(be, spec, u, specPath, info, via) {
 }
 
 /**
- * Capture a unit worktree's ENTIRE divergence from HEAD as a patch — committed,
- * uncommitted, and untracked alike.
+ * Capture a unit worktree's ENTIRE divergence from `base` as a patch —
+ * committed, uncommitted, and untracked alike.
+ *
+ * `base` must be the unit's base (auditBase: its seed commit or fork point),
+ * NOT its HEAD. Diffing against HEAD saw only UNCOMMITTED work, so a unit that
+ * committed — as briefs often tell it to — contributed an empty patch: its
+ * dependents were seeded with nothing and the integration gate verified bare
+ * HEAD while printing "0 unit(s) merged … PASS" (2-unit smoke, 2026-11-15).
  *
  * `git diff HEAD` alone is not enough: a unit that creates a new file leaves it
  * UNTRACKED, and the smoke run proved that is the common case (agents write the
@@ -2536,14 +2542,15 @@ function verifyAndRecord(be, spec, u, specPath, info, via) {
  * Uses a THROWAWAY index (GIT_INDEX_FILE) so staging everything here never
  * touches the unit's own index. Returns '' when the unit changed nothing.
  */
-function captureWorktreePatch(wt) {
+function captureWorktreePatch(wt, base) {
+  if (!base) throw new Error('captureWorktreePatch needs the unit\'s base commit (auditBase)');
   const idx = path.join(os.tmpdir(), `vzt-idx-${process.pid}-${Math.abs(hashString(wt))}`);
   const env = { ...process.env, GIT_INDEX_FILE: idx };
   try {
     execFileSync('git', ['-C', wt, 'read-tree', 'HEAD'], { env, stdio: 'ignore' });
     execFileSync('git', ['-C', wt, 'add', '-A'], { env, stdio: 'ignore' });
     const tree = execFileSync('git', ['-C', wt, 'write-tree'], { env, encoding: 'utf8' }).trim();
-    return execFileSync('git', ['-C', wt, 'diff', 'HEAD', tree, '--binary'], {
+    return execFileSync('git', ['-C', wt, 'diff', base, tree, '--binary'], {
       env, encoding: 'utf8', maxBuffer: 64 * 1024 * 1024,
     });
   } finally {
@@ -2650,7 +2657,7 @@ function runIntegrationGate(spec, be, units) {
       const ref = be.resolve(spec, u);
       if (!ref || !ref.path || !fs.existsSync(ref.path)) continue;
       let patch = '';
-      try { patch = captureWorktreePatch(ref.path); } catch { /* unreadable worktree */ }
+      try { patch = captureWorktreePatch(ref.path, auditBase(ref.path, spec, ref)); } catch { /* unreadable worktree */ }
       if (!patch.trim()) continue;
       try {
         execFileSync('git', ['-C', tmp, 'apply', '--index', '--whitespace=nowarn'], { input: patch, stdio: ['pipe', 'ignore', 'pipe'] });
